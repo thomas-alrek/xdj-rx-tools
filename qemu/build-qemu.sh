@@ -40,7 +40,11 @@
 # Then:   ./qemu_run.sh           # auto-detects the patched binary
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# The patches are diffs against this EXACT QEMU release; a different version's
+# files would not apply. The version is pinned and the tarball checksum verified
+# so the build is reproducible without vendoring the (huge) QEMU source tree.
 VER=11.1.0
+VER_SHA256=6ee1d1a61f68212476b27108c26da5f449dc09b626d42f8279ba0dc2e08fa858
 SRC=build/qemu-src
 PATCHES="$PWD/qemu/patches"
 export PATH="/opt/homebrew/bin:$PATH"
@@ -50,6 +54,18 @@ command -v meson ninja pkg-config >/dev/null 2>&1 || {
 
 mkdir -p "$SRC"; cd "$SRC"
 [ -f "qemu-$VER.tar.xz" ] || curl -fSL -o "qemu-$VER.tar.xz" "https://download.qemu.org/qemu-$VER.tar.xz"
+# Verify the pinned tarball (shasum on macOS, sha256sum on Linux).
+if command -v shasum >/dev/null 2>&1; then
+  got=$(shasum -a 256 "qemu-$VER.tar.xz" | awk '{print $1}')
+else
+  got=$(sha256sum "qemu-$VER.tar.xz" | awk '{print $1}')
+fi
+[ "$got" = "$VER_SHA256" ] || {
+  echo "ERROR: qemu-$VER.tar.xz sha256 mismatch" >&2
+  echo "  expected $VER_SHA256" >&2
+  echo "  got      $got" >&2
+  echo "  The patches target QEMU $VER only; refusing to build a different source." >&2
+  exit 1; }
 [ -d "qemu-$VER" ] || tar xf "qemu-$VER.tar.xz"
 cd "qemu-$VER"
 

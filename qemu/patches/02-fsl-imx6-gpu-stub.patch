@@ -1,5 +1,5 @@
 --- a/hw/arm/fsl-imx6.c	2026-08-11 18:40:25
-+++ b/hw/arm/fsl-imx6.c	2026-11-04 17:05:06
++++ b/hw/arm/fsl-imx6.c	2026-11-04 17:56:33
 @@ -21,6 +21,8 @@
  
  #include "qemu/osdep.h"
@@ -18,7 +18,7 @@
  
  #define IMX6_ESDHC_CAPABILITIES     0x057834b4
  
-@@ -107,9 +111,297 @@
+@@ -107,9 +111,303 @@
                              TYPE_OR_IRQ);
  }
  
@@ -249,9 +249,15 @@
 +    return 0xff;
 +}
 +
++static void xdj_subucom_realize(SSIPeripheral *dev, Error **errp)
++{
++    /* nothing to set up; state is zero-initialized */
++}
++
 +static void xdj_subucom_class_init(ObjectClass *klass, const void *data)
 +{
 +    SSIPeripheralClass *k = SSI_PERIPHERAL_CLASS(klass);
++    k->realize  = xdj_subucom_realize;
 +    k->transfer = xdj_subucom_transfer;
 +}
 +
@@ -316,10 +322,11 @@
      FslIMX6State *s = FSL_IMX6(dev);
      uint16_t i;
      qemu_irq irq;
-@@ -473,6 +765,33 @@
+@@ -472,7 +770,34 @@
+      */
      create_unimplemented_device("pcie-phy", FSL_IMX6_PCIe_ADDR,
                                  FSL_IMX6_PCIe_SIZE);
- 
++
 +    /* Vivante GPU register stubs (3D + 2D) so galcore init completes.
 +     * The 3D region gets the GPU IRQ line so the stub can fake completion. */
 +    memory_region_init_io(&gpu3d_stub, OBJECT(dev), &imx6_gpu_stub_ops,
@@ -331,7 +338,7 @@
 +                          "imx6.gpu2d-stub", FSL_IMX6_GPU_2D_SIZE);
 +    memory_region_add_subregion(get_system_memory(), FSL_IMX6_GPU_2D_ADDR,
 +                                &gpu2d_stub);
-+
+ 
 +    /* i.MX6 IPU1 interrupt stub: synthesize 60Hz vsync/EOF interrupts so the
 +     * mxc_sdc_fb display path's waits complete (fast boot, paced page-flips). */
 +    {
@@ -350,7 +357,7 @@
      /* ROM memory */
      if (!memory_region_init_rom(&s->rom, OBJECT(dev), "imx6.rom",
                                  FSL_IMX6_ROM_SIZE, errp)) {
-@@ -502,6 +821,10 @@
+@@ -502,6 +827,10 @@
                               &s->ocram, 0, FSL_IMX6_OCRAM_ALIAS_SIZE);
      memory_region_add_subregion(get_system_memory(), FSL_IMX6_OCRAM_ALIAS_ADDR,
                                  &s->ocram_alias);
