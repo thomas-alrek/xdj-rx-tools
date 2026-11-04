@@ -34,6 +34,9 @@ KERNEL_ENTRY = 0x10008000          # uImage load/entry (i.MX6 DRAM base 0x100000
 ATAGS_ADDR   = 0x10000100
 TRAMP_ADDR   = 0x10000000
 MACH_TYPE_SABRELITE = 3769         # 0x0EB9, present in the firmware kernel's machine table
+MACH_TYPE_SABRESD   = 3980         # 0x0F8C, the board the XDJ-RX firmware actually is
+BOARD_REV_SABRESD   = 0x00000500   # system_rev; rev field (bits 8-11) gates the XDJ
+                                   # spi_board_info (subucom + AK4387), see ATAG_REVISION
 RAM_BASE = 0x10000000
 RAM_SIZE = 0x40000000              # 1 GiB
 # ttymxc1 = UART2 = the port QEMU exposes; keep_bootcon keeps the working polled
@@ -43,6 +46,11 @@ RAM_SIZE = 0x40000000              # 1 GiB
 # patch's IPU vsync-interrupt stub makes display-enable and DirectFB page-flips
 # (DSFLIP_WAITFORSYNC) complete on a real 60Hz interrupt instead of timing out, so
 # boot is fast and the UI renders smoothly (no tearing).
+# The SABRE-SD board (the XDJ's real board) brings its early console up on UART1
+# (ttymxc0), so the sabresd cmdline uses console=ttymxc0.
+CMDLINE_SABRESD = ("console=ttymxc0,115200 earlyprintk keep_bootcon "
+                   "video=mxcfb0:dev=lcd,800x480M@60,if=RGB24,bpp=32 "
+                   "video=mxcfb1:off video=mxcfb2:off video=mxcfb3:off")
 CMDLINE = ("console=ttymxc1,115200 earlyprintk keep_bootcon "
            "video=mxcfb0:dev=lcd,800x480M@60,if=RGB24,bpp=32 "
            "video=mxcfb1:off video=mxcfb2:off video=mxcfb3:off")
@@ -74,22 +82,43 @@ def decompress_kernel(uimage_path):
 
 
 def build_trampoline():
+    open(os.path.join(OUT, "tramp.bin"), "wb").write(
+        _trampoline(MACH_TYPE_SABRELITE))
+
+
+def _trampoline(mach_type):
     # ARM: mov r0,#0 ; ldr r1,[pc,#8] ; ldr r2,[pc,#8] ; ldr pc,[pc,#8] ; pad ; id ; atags ; entry
     words = [0xe3a00000, 0xe59f1008, 0xe59f2008, 0xe59ff008,
-             0x00000000, MACH_TYPE_SABRELITE, ATAGS_ADDR, KERNEL_ENTRY]
-    open(os.path.join(OUT, "tramp.bin"), "wb").write(
-        b"".join(struct.pack("<I", w) for w in words))
+             0x00000000, mach_type, ATAGS_ADDR, KERNEL_ENTRY]
+    return b"".join(struct.pack("<I", w) for w in words)
 
 
-def build_atags():
+def _atags(cmdline, revision=None):
     def w(*v): return b"".join(struct.pack("<I", x) for x in v)
-    cmd = CMDLINE.encode() + b"\x00"
+    cmd = cmdline.encode() + b"\x00"
     cmd += b"\x00" * ((-len(cmd)) % 4)
     atags  = w(5, 0x54410001, 0, 0x1000, 0)                 # ATAG_CORE
     atags += w(4, 0x54410002, RAM_SIZE, RAM_BASE)           # ATAG_MEM
+    if revision is not None:
+        atags += w(3, 0x54410007, revision)                # ATAG_REVISION (system_rev)
     atags += w(2 + len(cmd) // 4, 0x54410009) + cmd         # ATAG_CMDLINE
     atags += w(0, 0)                                        # ATAG_NONE
-    open(os.path.join(OUT, "atags.bin"), "wb").write(atags)
+    return atags
+
+
+def build_atags():
+    open(os.path.join(OUT, "atags.bin"), "wb").write(_atags(CMDLINE))
+
+
+def build_sabresd():
+    # SABRE-SD boot blobs: the XDJ-RX firmware's real board. Registers ECSPI2
+    # (bus 1) -> /dev/subucom_spi1.0 (front-panel MCU) and the AK4387 codecs.
+    # Needs ATAG_REVISION=0x500 and MACH_TYPE 3980, plus the QEMU machine's SD on
+    # uSDHC3 (-drive if=none,id=xdjsd). See qemu/watch-sabresd.sh.
+    open(os.path.join(OUT, "tramp-sabresd.bin"), "wb").write(
+        _trampoline(MACH_TYPE_SABRESD))
+    open(os.path.join(OUT, "atags-sabresd.bin"), "wb").write(
+        _atags(CMDLINE_SABRESD, revision=BOARD_REV_SABRESD))
 
 
 def main():
@@ -101,9 +130,10 @@ def main():
     uimg = extract_uimage(iso)
     n = decompress_kernel(uimg)
     print(f"  decompressed kernel: {n} bytes -> build/qemu/vmlinux.bin")
-    build_trampoline(); build_atags()
-    print(f"  trampoline (r1={MACH_TYPE_SABRELITE}) + ATAGs ('{CMDLINE}') written")
-    print("ready -> ./qemu_run.sh")
+    build_trampoline(); build_atags(); build_sabresd()
+    print(f"  sabrelite trampoline (r1={MACH_TYPE_SABRELITE}) + ATAGs written -> tramp.bin, atags.bin")
+    print(f"  sabresd   trampoline (r1={MACH_TYPE_SABRESD}) + ATAGs (rev 0x500) -> tramp-sabresd.bin, atags-sabresd.bin")
+    print("ready -> qemu/watch.sh (splash)  |  qemu/watch-sabresd.sh (board + subucom)")
 
 
 if __name__ == "__main__":

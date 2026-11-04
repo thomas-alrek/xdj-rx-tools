@@ -1,0 +1,70 @@
+--- a/hw/arm/sabrelite.c	2026-08-11 18:40:25
++++ b/hw/arm/sabrelite.c	2026-11-04 17:09:54
+@@ -17,6 +17,8 @@
+ #include "hw/arm/machines-qom.h"
+ #include "hw/core/boards.h"
+ #include "hw/core/qdev-properties.h"
++#include "hw/sd/sd.h"
++#include "system/block-backend.h"
+ #include "qemu/error-report.h"
+ #include "system/qtest.h"
+ 
+@@ -110,6 +112,47 @@
+         }
+     }
+ 
++    /*
++     * XDJ-RX front-panel microcontroller ("Subucom"): an SSI slave on ECSPI2
++     * (the SoC's "spi2"), where the SABRE-SD board init puts the subucom_spi1.0
++     * device. Attached after the SoC is realized (like the NOR flash above).
++     */
++    if (getenv("XDJ_SUBUCOM")) {
++        Object *spi2 = object_resolve_path_component(OBJECT(&s->soc), "spi2");
++
++        if (spi2) {
++            SSIBus *bus = (SSIBus *)qdev_get_child_bus(DEVICE(spi2), "spi");
++
++            if (bus) {
++                qdev_realize_and_unref(qdev_new("xdj-subucom"), BUS(bus),
++                                       &error_fatal);
++            }
++        }
++    }
++
++    /*
++     * Attach the SD card named "xdjsd" (from -drive if=none,id=xdjsd,...) to
++     * uSDHC3. The XDJ-RX firmware uses the SABRE-SD board init, whose rootfs
++     * eMMC/SD is on uSDHC3 (Linux mmc0 = sdhci-esdhc-imx.2). An if=none drive
++     * is exempt from the orphan check, so no auto-create machinery is needed.
++     * This matches the real board; the firmware is unmodified.
++     */
++    {
++        BlockBackend *blk = blk_by_name("xdjsd");
++
++        if (blk) {
++            Object *usdhc = object_resolve_path_component(OBJECT(&s->soc),
++                                                          "sdhc3");
++            if (usdhc) {
++                BusState *sdbus = qdev_get_child_bus(DEVICE(usdhc), "sd-bus");
++                DeviceState *card = qdev_new(TYPE_SD_CARD);
++
++                qdev_prop_set_drive_err(card, "drive", blk, &error_fatal);
++                qdev_realize_and_unref(card, sdbus, &error_fatal);
++            }
++        }
++    }
++
+     sabrelite_binfo.ram_size = machine->ram_size;
+     sabrelite_binfo.secure_boot = true;
+     sabrelite_binfo.write_secondary_boot = sabrelite_write_secondary;
+@@ -144,7 +187,9 @@
+     mc->max_cpus = FSL_IMX6_NUM_CPUS;
+     mc->ignore_memory_transaction_failures = true;
+     mc->default_ram_id = "sabrelite.ram";
+-    mc->auto_create_sdcard = true;
++    /* The XDJ SD card is attached explicitly (if=none,id=xdjsd) in
++     * sabrelite_init(); no automatic SD creation. */
++    mc->auto_create_sdcard = false;
+ }
+ 
+ static const TypeInfo sabrelite_machine_init_typeinfo = {

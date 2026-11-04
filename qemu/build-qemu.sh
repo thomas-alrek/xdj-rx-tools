@@ -21,9 +21,20 @@
 #           interrupt (ch 23) so the fb display-enable and DirectFB page-flips
 #           complete on a real 60Hz IRQ instead of timing out. Fast boot, no
 #           tearing. (IPU_TRACE=1 logs the driver's INT_CTRL writes.)
+#       (d) XDJ Subucom SSI device type (front-panel MCU), attached by the
+#           machine when booting as SABRE-SD (see patch 03).
 #
-# Result: the kernel boots to userspace in ~8s and the app renders the real
-# Pioneer DJ / rekordbox boot splash (see QEMU.md).
+#   patches/03-sabrelite-sabresd-sd.patch
+#       The XDJ-RX firmware's real board is SABRE-SD (MACH_TYPE 3980), which
+#       registers ECSPI2 (bus 1) for the panel MCU + audio codecs, on a
+#       different uSDHC for the rootfs. This teaches the QEMU sabrelite machine
+#       to attach the SD image to uSDHC3 (-drive if=none,id=xdjsd) and the
+#       Subucom SSI slave to ECSPI2, so the unmodified firmware boots under its
+#       own SABRE-SD init and /dev/subucom_spi1.0 appears.
+#
+# Result: the kernel boots to userspace in ~8s. As sabrelite (qemu/watch.sh) the
+# app renders the real Pioneer DJ / rekordbox boot splash; as SABRE-SD
+# (qemu/watch-sabresd.sh) the panel-MCU device binds (see QEMU.md).
 #
 # Usage:  qemu/build-qemu.sh      # -> build/qemu-src/qemu-<ver>/build/qemu-system-arm
 # Then:   ./qemu_run.sh           # auto-detects the patched binary
