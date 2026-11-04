@@ -63,42 +63,54 @@ unchanged across firmware versions, so the 1.50-era key decrypts 2.21.
 
 **The key is never stored in this repo.** [`fetch_key.py`](fetch_key.py)
 resolves it on demand and writes it to `.env` (git-ignored) as
-`XDJRX_AES_KEY=<64 hex>`. It uses a local `aes256.key` if present, otherwise
-downloads the GPL parts, unwraps the deflate64 ZIPs, streams the two nested
-tars, extracts `aes256.key`, and derives the 32-byte key. Both `.env` and
-`aes256.key` are listed in `.gitignore`.
+`XDJRX_AES_KEY=<64 hex>`. It uses a cached `build/aes256.key` if present,
+otherwise downloads the GPL parts, unwraps the deflate64 ZIPs, streams the two
+nested tars, extracts `aes256.key`, and derives the 32-byte key. Everything the
+scripts pull or generate lands under `build/`; both `.env` and `build/` are
+git-ignored.
 
 ---
 
 ## 2. Reusable tool — `xdjrx_upd.py`
 
-Pure-Python, one dependency (`pip install pycryptodome`, or `cryptography`).
+**Setup** — install dependencies once:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate   # optional but recommended
+pip install -r requirements.txt
+```
+
+Or skip manual setup entirely with [uv](https://docs.astral.sh/uv/) — the scripts
+carry [PEP 723](https://peps.python.org/pep-0723/) inline metadata, so
+`uv run xdjrx_upd.py …` / `uv run fetch_key.py` resolve and install deps in an
+ephemeral environment automatically.
 
 ```bash
 # First time only: resolve the AES key into .env (see §1)
-python3 fetch_key.py
-#   fast if ./aes256.key exists; otherwise downloads ~280 MB of GPL source
-#   (that download path also needs: pip install inflate64)
+python3 fetch_key.py          # or: uv run fetch_key.py
+#   fast if build/aes256.key exists; otherwise downloads ~280 MB of GPL source
+#   (that download path needs inflate64 — covered by requirements.txt / uv)
 
 # The .UPD argument may also be the Pioneer-shipped .zip that contains it —
 # the tool finds and unwraps the .UPD member automatically:
 #   python3 xdjrx_upd.py info  XDJ-RX_v2.21.zip
-#   python3 xdjrx_upd.py decrypt XDJ-RX_v2.21.zip -o firmware/XDJRX_2.21.iso
+#   python3 xdjrx_upd.py decrypt XDJ-RX_v2.21.zip -o build/XDJRX_2.21.iso
 
 # Inspect (verifies key + footer CRC, finds the ISO9660 magic)
 python3 xdjrx_upd.py info XDJRX.UPD
 
 # Decrypt to an ISO you can mount/inspect
-python3 xdjrx_upd.py decrypt XDJRX.UPD -o firmware/XDJRX_2.21.iso
+python3 xdjrx_upd.py decrypt XDJRX.UPD -o build/XDJRX_2.21.iso
 
-# Decrypt AND unpack the ISO tree (uses 7z / bsdtar, or hdiutil on macOS)
-python3 xdjrx_upd.py extract XDJRX.UPD -d firmware/contents
+# Decrypt AND unpack the ISO tree — pure-Python (pycdlib), cross-platform,
+# no mounting; falls back to 7z / bsdtar / hdiutil only if pycdlib is absent
+python3 xdjrx_upd.py extract XDJRX.UPD -d build/contents
 
 # Re-pack a modified ISO into a flashable .UPD (re-encrypt + fix footer CRC)
 python3 xdjrx_upd.py pack modified.iso -o XDJRX_custom.UPD --model XDJAERO2.21
 
 # Use your own key file instead of the built-in key
-python3 xdjrx_upd.py --key-file aes256.key decrypt XDJRX.UPD
+python3 xdjrx_upd.py --key-file build/aes256.key decrypt XDJRX.UPD
 ```
 
 `pack` is byte-exact: re-packing the untouched ISO reproduces the original
@@ -110,7 +122,7 @@ python3 xdjrx_upd.py --key-file aes256.key decrypt XDJRX.UPD
 
 ---
 
-## 3. What's inside the firmware (`firmware/contents/`)
+## 3. What's inside the firmware (`build/contents/`)
 
 Decrypted ISO (volume `UsbAuto`) — the updater and everything it flashes:
 
@@ -182,35 +194,34 @@ kernel rebuild. Start with FUSE.
 
 ---
 
-## 5. QEMU boot — feasibility
+## 5. QEMU boot — **interactive shell working** (see [QEMU.md](QEMU.md))
 
-**Promising.** The 2.21 kernel is built with `CONFIG_SOC_IMX6Q=y` and
-**`CONFIG_MACH_MX6Q_SABRELITE=y`** (among other i.MX6Q boards), and QEMU ships a
-matching **`-M sabrelite`** machine. The `uImage` is an uncompressed ARM kernel.
-
-First-milestone attempt (serial console to userspace):
+The **unmodified firmware boots in QEMU all the way to an interactive root
+shell.** The kernel runs full device init, hands off to the firmware's own
+embedded `/init`, which boots the real rootfs from an **SD card** (the firmware's
+own SD-boot mode) and reaches a login shell.
 
 ```bash
-# extract the raw kernel from the uImage (strip 64-byte U-Boot header)
-dd if=firmware/contents/images/uImage of=zImage.raw bs=64 skip=1
-
-qemu-system-arm -M sabrelite -m 1024 -nographic \
-  -kernel firmware/contents/images/uImage \
-  -append "console=ttymxc0,115200 rootwait" -serial mon:stdio
+qemu/build-qemu.sh                                         # patched QEMU (once, ~15 min)
+python3 xdjrx_upd.py decrypt XDJRX.UPD -o build/XDJRX_2.21.iso
+python3 qemu_prepare.py                                    # kernel boot blobs
+qemu/build-sd.sh                                           # SD rootfs (needs Docker)
+./qemu_run.sh                                              # login: root (no password)
 ```
 
-Realistic expectations / caveats:
-- Kernel 3.0.35 is **pre-device-tree** for i.MX (board files + ATAGs/machine
-  id). The real board is a **custom Pioneer board**, not SABRE Lite, so expect
-  to boot the generic SABRE Lite path and hit missing/placeholder peripherals.
-- Getting to a **serial console + shell** is a reasonable target. A *full* boot
-  (GUI/GPU, panel MCU, audio codecs, jog wheels, deck hardware) is **not**
-  achievable in stock QEMU — those peripherals don't exist there.
-- For userspace work (e.g. testing the exFAT mount logic) the pragmatic path is
-  often **`qemu-arm` user-mode + the extracted rootfs** (chroot-style), rather
-  than full-system boot.
-- Building a **matching kernel from the GPL source** (we have `linux-3.0.35` +
-  `.config`) lets you enable QEMU-friendly options and debug output.
+What it took (all **emulator-side, firmware untouched**):
+- **Machine-id trampoline** — QEMU's `-M sabrelite` passes board-id `-1`; this
+  ATAG kernel rejects it (silent spin in `dump_machine_table`). A tiny trampoline
+  supplies machine id **3769** + hand-built ATAGs via `-device loader`.
+- **Two i.MX6 QEMU patches** (`qemu/patches/`) — make the SRC GPU-reset bits
+  self-clearing and add a Vivante GPU register stub, so the kernel gets past the
+  `galcore` GPU driver (which then fails its probe gracefully).
+- **SD rootfs** (`qemu/build-sd.sh`) — assembled from the firmware's own payloads
+  (`rootfs.cramfs` + `pioneer.tar.gz`), as ext4 with kernel-3.0.35-compatible
+  features, booted via the firmware's SD mode.
+
+Full diagnosis and the **GUI-bringup** next steps (IPU display model, GUI asset
+delivery, running the app with software rendering) are in **[QEMU.md](QEMU.md)**.
 
 ---
 
@@ -239,22 +250,25 @@ Source tree of note:
 XDJRX.UPD              original encrypted firmware (2.21)
 xdjrx_upd.py           decrypt / info / extract / pack tool (reads key from .env)
 fetch_key.py           resolve the AES key from Pioneer's GPL source -> .env
-README.md              this document
-.gitignore             excludes .env, aes256.key, firmware/ (Pioneer-owned / large)
+qemu_prepare.py        build the QEMU kernel boot blobs (kernel, trampoline, ATAGs)
+qemu_run.sh            boot the firmware in QEMU (attaches the SD if built)
+qemu/build-qemu.sh     build the patched QEMU  (qemu/patches/*.patch)
+qemu/build-sd.sh       assemble the SD rootfs image  (qemu/cramfs_extract.py)
+requirements.txt       Python deps (pip install -r), also PEP 723 in each script
+README.md / QEMU.md    this document / the QEMU bring-up writeup
+.gitignore             excludes .env and build/
 .env                   XDJRX_AES_KEY=<hex>   (git-ignored; created by fetch_key.py)
-aes256.key             passphrase file from the GPL source (git-ignored; cache)
-firmware/
+build/                 all script output (git-ignored):
+  aes256.key           passphrase file cached from the GPL source
   XDJRX_2.21.iso       decrypted ISO9660 image (mountable)
-  contents/            unpacked ISO tree (update, images/uImage, rootfs.cramfs, …)
+  qemu/                kernel, boot blobs, sd.img, reference logs
+  qemu-src/            the patched QEMU source + build
 ```
 
 ## Status / next steps
 
 - [x] `.UPD` format fully specified; decrypt + byte-exact re-pack working
 - [x] Update mechanism, boot flow, NAND layout, component inventory mapped
-- [x] exFAT & QEMU feasibility assessed (both viable, caveats above)
-- [ ] Unpack `rootfs.cramfs` + `pioneer.tar.gz`; find the app's USB mount path
-- [ ] QEMU `sabrelite` boot attempt → serial console
-- [ ] Cross-compile `fuse-exfat`; patch mount logic; rebuild cramfs; re-pack
-```
-```
+- [x] **Firmware boots in QEMU (unmodified) to an interactive shell** — [QEMU.md](QEMU.md)
+- [ ] **GUI bringup**: IPU display model + GUI asset delivery + run the app (software render)
+- [ ] exFAT mod: patch `12-usb-memory-auto-mount.rules`; cross-compile `fuse-exfat`

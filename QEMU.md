@@ -1,0 +1,182 @@
+# Booting the XDJ-RX firmware in QEMU
+
+**Status: the firmware boots to an interactive userspace shell in QEMU —
+unmodified.** The kernel runs through full device init, hands off to the
+firmware's own embedded-initramfs `/init`, which boots the real rootfs from an
+**SD card** (the firmware's own SD-boot mode) and reaches a login shell. The
+firmware image is loaded byte-for-byte; everything that makes it work lives on
+the QEMU side (two tiny i.MX6 patches) and in an SD image assembled from the
+firmware's own payloads. GUI bringup is the next step (see "Next steps").
+
+## TL;DR
+
+```bash
+# 1. Build the patched QEMU (once; ~15 min). Two i.MX6 patches, firmware untouched.
+qemu/build-qemu.sh
+
+# 2. Decrypt the firmware and prepare the kernel boot blobs.
+python3 xdjrx_upd.py decrypt XDJRX.UPD -o build/XDJRX_2.21.iso
+python3 qemu_prepare.py
+
+# 3. Build the SD rootfs image (needs Docker) and boot to a shell.
+qemu/build-sd.sh
+./qemu_run.sh            # login: root (no password)
+```
+
+Reference logs under `build/qemu/`: `boot-2.21.log` (device init),
+`boot-userspace-2.21.log` (kernel → `/init`, no SD), `boot-shell-2.21.log`
+(full SD boot to the shell).
+
+## Target & tools
+
+- QEMU machine: **`-M sabrelite`** (Freescale i.MX6 Quad SABRE Lite, Cortex-A9) —
+  matches the SoC; the firmware kernel has `CONFIG_MACH_MX6Q_SABRELITE=y`.
+- Kernel: `uImage` → a **zImage** (self-decompressing) wrapping `Linux 3.0.35`.
+- QEMU 8+; `qemu-system-arm` with the `loader` device.
+
+## The problem and the fix (why the trampoline exists)
+
+Booting the stock `uImage` with `-M sabrelite -kernel` gives a **silent hang**.
+Diagnosis (via `-d in_asm`, the QEMU monitor `info registers`, and symbolizing
+the kernel with `vmlinux-to-elf`):
+
+1. The kernel loads, runs `head.S`, enables the MMU, enters `start_kernel`.
+2. It hangs at **`dump_machine_table+0x38`** — an infinite loop entered when
+   `__lookup_machine_type` fails. The CPU type matched (`__v7_ca9mp_proc_info`),
+   but the **machine ID did not**.
+3. QEMU's `sabrelite` is a *device-tree* machine and passes board-id **-1**;
+   this Freescale 3.0.35 kernel is **ATAG-based** and rejects it. (`earlyprintk`
+   is compiled out, so the failure prints nothing — hence "silent".)
+4. The kernel's machine table *does* contain id **3769** (`0x0EB9`,
+   "Freescale i.MX 6Quad Sabre-Lite Board").
+
+**Fix:** boot the already-decompressed kernel through a tiny trampoline that
+sets the registers the kernel expects, with hand-built ATAGs — no firmware edit:
+
+```
+r0 = 0
+r1 = 3769            ; MACH_TYPE for Sabre-Lite  (the whole fix)
+r2 = 0x10000100      ; -> ATAG list (CORE + MEM 1GB@0x10000000 + CMDLINE + NONE)
+pc = 0x10008000      ; kernel entry
+```
+
+Everything is placed with `-device loader` (see `qemu_run.sh`). Using the
+decompressed `vmlinux.bin` (extracted from the zImage's gzip payload) avoids any
+dependence on how the decompressor forwards registers.
+
+## Console
+
+- `earlyprintk`/`DEBUG_LL` is **off** in the firmware kernel, so nothing prints
+  until a console registers. We read early progress two ways while debugging:
+  the QEMU monitor (`info registers`, `pmemsave`) and `vmlinux-to-elf` symbols.
+- The board's early console is the **polled MXC console on UART2 (`0x21e8000`)**,
+  which QEMU exposes as serial index **1**. The full `imx-uart` driver's TX does
+  **not** reach QEMU's chardev (QEMU logs `imx_serial_write: Unimplemented reg
+  0xb4` = the UART `UTS` register), so once the driver console takes over, output
+  is lost.
+- Workaround (no firmware change): cmdline **`console=ttymxc1,115200
+  earlyprintk keep_bootcon`** — keep the working polled console alive. In
+  `qemu_run.sh` serial index 1 is wired to your terminal (`-serial null -serial
+  mon:stdio`).
+
+## The GPU patches (why the firmware now boots to userspace)
+
+With stock QEMU the kernel reaches device init and then **hangs at the Vivante
+GPU driver (`galcore`)**, because QEMU models neither the GPU nor its SRC reset.
+I traced the two distinct hang points (QEMU monitor `info registers`, a GPU
+access trace, and the galcore source) and fixed them in the emulator:
+
+1. **SRC GPU reset never clears** (`patches/01-imx6_src-gpu-reset.patch`).
+   `gckOS_ResetGPU()` sets SW_GPU3D_RST (bit 1) / SW_GPU2D_RST (bit 4) in
+   `SRC_SCR` and polls until they self-clear. QEMU's `imx6_src` cleared the CPU
+   and IPU reset bits but not the GPU ones → infinite spin. The patch makes them
+   self-clearing (QEMU models no GPU, so "reset done" immediately is correct).
+
+2. **GPU registers unmapped** (`patches/02-fsl-imx6-gpu-stub.patch`). After the
+   SRC reset, galcore's `_ResetGPU()` polls the GPU: it waits for the idle
+   register (`0x004`) and for **bits 16 & 17 of the clock-control register
+   (`0x000`)** to read back set. QEMU maps nothing there (reads returned 0) → it
+   looped forever. The patch adds a minimal register stub at the 3D/2D GPU bases
+   that reports idle, echoes the clock-control status bits, reports a GC2000, and
+   pulses the GPU IRQ on command/interrupt writes.
+
+With both, galcore's reset completes, its probe then **fails gracefully**
+(`galcore: probe of galcore.0 failed with error -22` — there is no real GPU, as
+intended) and the kernel boots on. The GPU is not needed for the USB/exFAT work.
+
+Build the patched QEMU with `qemu/build-qemu.sh`.
+
+## Where it ends (full boot — `build/qemu/boot-userspace-2.21.log`)
+
+```
+Machine: Freescale i.MX 6Quad Sabre-Lite Board   ·  Memory: 768MB
+L310 cache · GPMI NAND · FEC Ethernet · USB + usb-storage · SDHCI/MMC · VPU
+Galcore version 4.6.9.6622
+galcore: probe of galcore.0 failed with error -22        ← graceful, no real GPU
+Anatop Thermal · usbhid · snd-usb-audio · VFP support v0.3
+snvs_rtc: setting system clock to 2026-11-04 ...
+Freeing init memory: 3844K                               ← kernel done, runs /init
+Kernel panic - not syncing: Attempted to kill init!      ← /init exited (no rootfs)
+```
+
+The kernel runs the firmware's **embedded-initramfs `/init`** (the kernel is
+built with `CONFIG_INITRAMFS_SOURCE`). That `/init` sources `mount_usb.sh` /
+`decrypt_update.sh` and tries to mount the NAND UBIFS rootfs; with no NAND
+content in QEMU it exits, which the kernel reports as the panic. This is the real
+device userland — **including the USB-mount code the exFAT change targets** —
+now running under emulation.
+
+Non-fatal emulation gaps (harmless): `mxs-dma` apbh reset timeout, one
+`mxc_sdc_fb` probe conflict, `imx-sdma` CH0 timeout (recovers).
+
+## Boot to a shell via SD (`qemu/build-sd.sh`)
+
+Without a rootfs, `/init` exits (above). The firmware's `/init` supports three
+rootfs modes (`nand`/`sd`/`nfs`) chosen from the u-boot env. QEMU models no NAND
+but **does** model the uSDHC/SD controller, so we use the firmware's own **SD**
+mode. `qemu/build-sd.sh` assembles an SD image from the firmware's own payloads:
+
+- **Env** blob at byte `0xC0000` (`rootfs=sd`, `mmcdev=/dev/mmcblk0p1`). The
+  SD/NAND DIP switch defaults to SD in QEMU, so `fw_printenv` reads this env.
+- **MBR partition 1 = ext4** holding the rootfs: `rootfs.cramfs` (extracted with
+  `qemu/cramfs_extract.py`) + `pioneer.tar.gz` (the app). Built with **only ext4
+  features kernel 3.0.35 can mount** (no `metadata_csum`/`64bit`/`orphan_file`).
+  The root password is cleared so the firmware's getty logs straight in.
+
+Boot (`qemu_run.sh` attaches `build/qemu/sd.img` to `sdhc4` = `mmc0`):
+
+```
+### rootfs = sd ###                          ← fw_printenv read the SD env
+starting pid … '/etc/rc.d/rcS'               ← real init / rc scripts
+#### apl_start script ###  #### Application Start!! ###
+BusyBox v1.20.2 built-in shell (ash)   freescale login:  → root → shell
+```
+
+Notes / limits:
+- The SD path copies the rootfs into a **fixed 48 MB tmpfs** (hard-coded in
+  `/init`), so the image omits `gui.tar.gz` (base+app = 40 MB fits). GUI assets
+  are delivered separately on the device; see Next steps.
+- `/dev/fb0` exists (major 29). Non-fatal: the USB-gadget module and some
+  peripheral pokes fail (no hardware).
+
+## Next steps — GUI bringup
+
+1. **Deliver the GUI assets** (`gui.tar.gz`: `pset/` fonts + imagedata) to the
+   app via the path it expects, without blowing the 48 MB root tmpfs (a separate
+   partition/mount, as on the device).
+2. **Model the i.MX6 IPU display** in QEMU so `/dev/fb0` scans out to a window
+   (480×800). QEMU has no i.MX6 display device; this is the main graphics work.
+3. **Run the app** (`rbp`): DirectFB should fall back to **software rendering**
+   (no `libg2d`/galcore GPU); handle the panel-MCU (`subcom`), audio, and any
+   UBIFS data the app expects.
+
+(After the GUI is up: mods such as exFAT — the `12-usb-memory-auto-mount.rules`
+USB path — can be tested on this same bed.)
+
+## Files
+
+Tracked: `qemu_prepare.py` (kernel boot blobs), `qemu_run.sh` (boot, attaches SD
+if present), `qemu/build-qemu.sh` + `qemu/patches/*.patch` (the patched QEMU),
+`qemu/build-sd.sh` + `qemu/cramfs_extract.py` (the SD rootfs). Generated under
+`build/qemu/` (git-ignored): `uImage`, `vmlinux.bin`, `tramp.bin`, `atags.bin`,
+`sd.img`, the `boot-*.log` references; patched QEMU under `build/qemu-src/`.
