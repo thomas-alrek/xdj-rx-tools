@@ -23,9 +23,11 @@ panel-MCU SPI, thermal/GPU stubs) is modelled on the QEMU side. The boot splash
 renders at 32bpp; the app then switches the framebuffer to 16bpp RGB565 and the
 main screen comes up. Both are decoded live from the IPU display stride.
 
-| Boot splash (32bpp) | Main UI (16bpp RGB565) |
-|---|---|
-| ![XDJ-RX boot splash in QEMU](docs/img/boot-splash.png) | ![XDJ-RX main UI in QEMU](docs/img/main-ui.png) |
+![XDJ-RX boot splash in QEMU](docs/img/boot-splash.png)
+Boot splash (32bpp)
+
+ ![XDJ-RX main UI in QEMU](docs/img/main-ui.png)
+ Main UI (16bpp RGB565)
 
 *Actual emulator framebuffer (800×480) captured from the running QEMU instance —
 see [`qemu/watch-sabresd.sh`](qemu/watch-sabresd.sh).*
