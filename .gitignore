@@ -1,0 +1,16 @@
+# Pioneer-owned material and secrets — never commit
+.env
+aes256.key
+
+# Large decrypted firmware artifacts
+firmware/
+*.iso
+*.UPD
+
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# macOS
+.DS_Store
