@@ -47,9 +47,11 @@ RAM_SIZE = 0x40000000              # 1 GiB
 # (DSFLIP_WAITFORSYNC) complete on a real 60Hz interrupt instead of timing out, so
 # boot is fast and the UI renders smoothly (no tearing).
 # The SABRE-SD board (the XDJ's real board) brings its early console up on UART1
-# (ttymxc0), so the sabresd cmdline uses console=ttymxc0.
+# (ttymxc0), so the sabresd cmdline uses console=ttymxc0. It also registers the
+# LVDS (ldb) display, not the parallel "lcd" one, so mxcfb0 must use dev=ldb for
+# /dev/fb0 to come up (without it the app can't open the framebuffer and exits).
 CMDLINE_SABRESD = ("console=ttymxc0,115200 earlyprintk keep_bootcon "
-                   "video=mxcfb0:dev=lcd,800x480M@60,if=RGB24,bpp=32 "
+                   "video=mxcfb0:dev=ldb,800x480M@60,if=RGB24,bpp=32 "
                    "video=mxcfb1:off video=mxcfb2:off video=mxcfb3:off")
 CMDLINE = ("console=ttymxc1,115200 earlyprintk keep_bootcon "
            "video=mxcfb0:dev=lcd,800x480M@60,if=RGB24,bpp=32 "

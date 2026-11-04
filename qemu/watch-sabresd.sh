@@ -11,20 +11,21 @@
 #   - ls -l /dev/subucom_spi1.0                     (char dev 153,0)
 #   - the SD rootfs on uSDHC3 (Linux mmc0), /root/gui mounted
 #
-# Board differences handled on the QEMU side (firmware is unmodified):
+# Board differences handled on the QEMU side (firmware is unmodified, no kernel
+# patches - all via the bootloader-style cmdline/atags and the machine):
 #   - ATAG_REVISION=0x500 (system_rev) so xdj_spi_device_init registers the
 #     subucom + AK4387 board_info (see qemu_prepare.py).
 #   - console on ttymxc0 (sabresd's early console UART) -> serial 0 here.
+#   - video=mxcfb0:dev=ldb (SABRE-SD wires the panel via LVDS, not parallel
+#     "lcd"), so /dev/fb0 comes up and the app can draw.
 #   - the SD image is attached to uSDHC3 via -drive if=none,id=xdjsd (the SABRE-SD
 #     rootfs controller), by the patched machine (qemu/patches/03-...).
 #
-# NOTE: the GUI does NOT render here yet. With the subucom device present, rbp
-# takes a panel-init + GPU-accelerated-DirectFB path that needs a real g2d GPU;
-# without it rbp currently fails to draw (work in progress). For the rendered
-# splash, use qemu/watch.sh.
+# The Pioneer DJ / rekordbox splash renders here. Past the splash the app needs
+# the Subucom panel-MCU handshake (ui::panel_protocol StaticInfomation); the SSI
+# slave stub currently answers 0xff, so that handshake is still being reversed.
 #
-# Set XDJ_SUBUCOM=1 to also attach the QEMU Subucom SSI slave on ECSPI2 (traffic
-# capture for protocol reversing; SUBUCOM_TRACE=1 logs frames to stderr).
+# SUBUCOM_TRACE=1 logs the driver's SPI frames to stderr (for that reversing).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 Q=build/qemu
