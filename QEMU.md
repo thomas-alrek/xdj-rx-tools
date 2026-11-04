@@ -1,12 +1,15 @@
 # Booting the XDJ-RX firmware in QEMU
 
-**Status: the firmware boots to an interactive userspace shell in QEMU —
-unmodified.** The kernel runs through full device init, hands off to the
-firmware's own embedded-initramfs `/init`, which boots the real rootfs from an
-**SD card** (the firmware's own SD-boot mode) and reaches a login shell. The
-firmware image is loaded byte-for-byte; everything that makes it work lives on
-the QEMU side (two tiny i.MX6 patches) and in an SD image assembled from the
-firmware's own payloads. GUI bringup is the next step (see "Next steps").
+**Status: the firmware boots fast to its real on-screen UI in QEMU.** The kernel
+runs through full device init, hands off to the firmware's own embedded-initramfs
+`/init`, which boots the real rootfs from an **SD card** (the firmware's own
+SD-boot mode); the app (`rbp`) then renders the genuine **Pioneer DJ / rekordbox
+boot splash** in 800×480 landscape, smoothly and without tearing. The firmware
+image is loaded byte-for-byte; everything that makes it work lives on the QEMU
+side (a few small i.MX6 patches) and in an SD image assembled from the firmware's
+own payloads. The app next blocks on the front-panel microcontroller handshake —
+emulating that to reach the interactive main screen is the next step (see "Next
+steps").
 
 ## TL;DR
 
@@ -18,9 +21,10 @@ qemu/build-qemu.sh
 python3 xdjrx_upd.py decrypt XDJRX.UPD -o build/XDJRX_2.21.iso
 python3 qemu_prepare.py
 
-# 3. Build the SD rootfs image (needs Docker) and boot to a shell.
+# 3. Build the SD rootfs image (needs Docker), then boot.
 qemu/build-sd.sh
-./qemu_run.sh            # login: root (no password)
+qemu/watch.sh           # live 800x480 window + serial console (the UI)
+./qemu_run.sh           # headless/serial only (login: root, no password)
 ```
 
 Reference logs under `build/qemu/`: `boot-2.21.log` (device init),
@@ -175,25 +179,61 @@ the display is capturable and showable:
 ```
 
 Verified end-to-end: writing a test image to `/dev/fb0` in the guest appears
-pixel-exact in `screendump` (`build/qemu/display2.png`). To activate fb0, the
-ATAGs cmdline needs `video=mxcfb0:dev=lcd,480x800M@60,if=RGB24,bpp=32`.
+pixel-exact in `screendump`. To activate fb0, the ATAGs cmdline needs
+`video=mxcfb0:dev=lcd,800x480M@60,if=RGB24,bpp=32` — **800×480 landscape**, the
+physical panel geometry. (`rbp` adapts its UI to whatever fb size it is given, so
+the wrong geometry just renders the UI rotated.)
 
-Caveat: with no IPU interrupt, the fb driver's display-enable **times out**
-(~80 s one-time at boot) rather than completing instantly. A later step adds the
-IPU vsync IRQ to the scanout device to make enable + page-flips fast.
+## The IPU vsync-interrupt stub (fast boot, smooth UI)
 
-## Next steps — rendering the real UI
+The real win for the display is in `patches/02`: a small **IPU1 interrupt stub**
+that makes the `mxc_sdc_fb` display path behave as if a real 60 Hz panel were
+attached.
 
-1. **Deliver the GUI assets** (`gui.tar.gz`: `pset/` fonts + imagedata) to the
-   app via the path it expects, without blowing the 48 MB root tmpfs (a separate
-   partition/mount, as on the device).
-2. **Run the app** (`rbp`): DirectFB should fall back to **software rendering**
-   (no `libg2d`/galcore GPU) and draw into `/dev/fb0`; handle the panel-MCU
-   (`subcom`), audio, and any UBIFS data the app expects.
-3. **IPU vsync IRQ** in the scanout device: fast boot + smooth page-flips.
+Without it, QEMU raises none of the IPU interrupts the fb driver waits on, so
+every display-enable and every DirectFB page-flip (`rbp` flips with
+`DSFLIP_WAITFORSYNC`) falls back to a kernel **timeout** — boot stalled ~80 s and
+the splash crawled/teared. The stub models just the IPU Control-Module interrupt
+registers (`INT_CTRL`/`INT_STAT`, CM block at IPU1 `+0x200000`) and delivers a
+one-shot IRQ ~1/60 s after the driver arms one, exactly like real vsync.
 
-(After the GUI is up: mods such as exFAT — the `12-usb-memory-auto-mount.rules`
-USB path — can be tested on this same bed.)
+Two details that matter (both learned the hard way, by disassembling the firmware
+kernel with `build/qemu/vmlinux.elf`):
+
+- **Register layout** was recovered from the kernel's own `ipu_clear_irq` /
+  `ipu_enable_irq`: `INT_CTRL_n` at `0x3C+4(n-1)`, `INT_STAT_n` at `0x200+4(n-1)`,
+  write-1-to-clear; irq *k* → register `(k>>5)+1`, bit `k&31`.
+- **Only the BG display channel (IDMAC ch 23)** is driven — its EOF (`INT_STAT_1`
+  bit 23) and NFACK (`INT_STAT_3` bit 23), which the enable and vsync paths wait
+  on. Driving the FG/**alpha** channel (bit 27) instead **panics the kernel**:
+  `mxcfb_alpha_irq_handler` runs `complete()` on a completion that isn't
+  initialized until later in `mxcfb_probe`. A `IPU_TRACE=1` env var logs the
+  `INT_CTRL` writes the driver makes, which is how the exact bits were found.
+
+Result: kernel → userspace in ~8 s, and the splash renders smoothly with no
+tearing.
+
+## GUI assets (done)
+
+The app reads its fonts and imagedata from `/root/gui` (`pset/fontdata`,
+`pset/imagedata/imagedata.dat`, `pioneer/fontdata`). On the device that's a UBIFS
+volume on NAND; QEMU has no NAND, so `qemu/build-sd.sh` delivers `gui.tar.gz` on a
+**second ext4 partition** and mounts it at `/root/gui`. The mount is injected into
+`apl_start` unconditionally, because the firmware gates its own `mount_ubifs gui`
+on `$BOOTMODE`, which comes from the i.MX6 boot-mode straps that QEMU doesn't
+emulate. With the assets present, `rbp` renders the splash.
+
+## Next step — the front-panel microcontroller (Subucom)
+
+After the splash, `rbp` blocks handshaking with the panel MCU over
+`/dev/subucom_spi1.0` (SPI): it retries `Subucom StaticInfomation is not
+completed` forever. The MCU reports the hardware's identity/config and drives the
+jog wheels, faders and buttons. Reaching the interactive main screen means
+emulating it — a QEMU ECSPI slave that answers enough of the panel protocol
+(`ui::PanelComController` / `panel_protocol`) for the handshake to complete.
+
+(After the UI is interactive: mods such as exFAT — the
+`12-usb-memory-auto-mount.rules` USB path — can be tested on this same bed.)
 
 ## Files
 
