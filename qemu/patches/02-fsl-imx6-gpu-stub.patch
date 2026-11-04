@@ -1,0 +1,100 @@
+a/hw/arm/fsl-imx6.c	2026-08-11 18:40:25
++++ b/hw/arm/fsl-imx6.c	2026-11-04 11:42:05
+@@ -107,9 +107,78 @@
+                             TYPE_OR_IRQ);
+ }
+ 
++/*
++ * Minimal Vivante GPU (GC2000 3D / GC320 2D) register stub.
++ *
++ * QEMU does not model the i.MX6 GPU.  The vendor "galcore" driver, after
++ * resetting the GPU via SRC, reads these registers to identify the core and
++ * polls the idle / interrupt-acknowledge registers.  With no device mapped the
++ * reads return 0 and the driver blocks forever.  We return values that report
++ * "idle, all events acknowledged, a GC2000 rev 0x5108" so the driver's init
++ * completes and the kernel boots on to userspace.  No real GPU work happens.
++ */
++static uint32_t imx6_gpu_clkctrl; /* last value written to AQHiClockControl */
++
++static uint64_t imx6_gpu_stub_read(void *opaque, hwaddr off, unsigned size)
++{
++    qemu_irq irq = opaque; /* 3D core: GPU IRQ line; 2D core: NULL */
++
++    if (getenv("IMX6_GPU_TRACE")) {
++        fprintf(stderr, "GPUSTUB rd off=0x%03x\n", (unsigned)off);
++    }
++    switch (off) {
++    case 0x000:                     /* AQHiClockControl: echo back the last    */
++        /* value written, with the two "clock running" status bits (16,17) set */
++        /* so _ResetGPU()'s completion check passes.                           */
++        return imx6_gpu_clkctrl | 0x00030000u;
++    case 0x004: return 0xffffffffu; /* AQHiIdle          - every module idle  */
++    case 0x010:                     /* AQIntrAcknowledge - all events complete */
++        if (irq) {
++            qemu_set_irq(irq, 0);   /* the ISR read the ack: drop the line     */
++        }
++        return 0xffffffffu;
++    case 0x018: return 0x00000000u; /* chipIdentity      - take the else path  */
++    case 0x01c: return 0x00000000u; /* chipFeatures                            */
++    case 0x020: return 0x00002000u; /* chipModel         - GC2000              */
++    case 0x024: return 0x00005108u; /* chipRevision      - i.MX6Q GC2000       */
++    default:    return 0x00000000u;
++    }
++}
++
++static void imx6_gpu_stub_write(void *opaque, hwaddr off, uint64_t val,
++                                unsigned size)
++{
++    qemu_irq irq = opaque;
++
++    if (getenv("IMX6_GPU_TRACE")) {
++        fprintf(stderr, "GPUSTUB wr off=0x%03x val=0x%08x\n",
++                (unsigned)off, (unsigned)val);
++    }
++    if (off == 0x000) {
++        imx6_gpu_clkctrl = (uint32_t)val;
++    }
++    /*
++     * galcore enables GPU interrupts (AQIntrEnbl, 0x014) and kicks the command
++     * front-end (AQFEControl, 0x658) then sleeps until the GPU raises its IRQ.
++     * No GPU runs here, so raise the IRQ ourselves; the driver's ISR reads
++     * 0x010 (all events "done") and completes the wait.
++     */
++    if (irq && (off == 0x014 || off == 0x658)) {
++        qemu_set_irq(irq, 1);
++    }
++}
++
++static const MemoryRegionOps imx6_gpu_stub_ops = {
++    .read = imx6_gpu_stub_read,
++    .write = imx6_gpu_stub_write,
++    .endianness = DEVICE_NATIVE_ENDIAN,
++    .valid = { .min_access_size = 4, .max_access_size = 4 },
++};
++
+ static void fsl_imx6_realize(DeviceState *dev, Error **errp)
+ {
+     MachineState *ms = MACHINE(qdev_get_machine());
++    static MemoryRegion gpu3d_stub, gpu2d_stub;
+     FslIMX6State *s = FSL_IMX6(dev);
+     uint16_t i;
+     qemu_irq irq;
+@@ -473,6 +542,18 @@
+     create_unimplemented_device("pcie-phy", FSL_IMX6_PCIe_ADDR,
+                                 FSL_IMX6_PCIe_SIZE);
+ 
++    /* Vivante GPU register stubs (3D + 2D) so galcore init completes.
++     * The 3D region gets the GPU IRQ line so the stub can fake completion. */
++    memory_region_init_io(&gpu3d_stub, OBJECT(dev), &imx6_gpu_stub_ops,
++                          qdev_get_gpio_in(gic, FSL_IMX6_GPU3D_IRQ),
++                          "imx6.gpu3d-stub", FSL_IMX6_GPU_3D_SIZE);
++    memory_region_add_subregion(get_system_memory(), FSL_IMX6_GPU_3D_ADDR,
++                                &gpu3d_stub);
++    memory_region_init_io(&gpu2d_stub, OBJECT(dev), &imx6_gpu_stub_ops, NULL,
++                          "imx6.gpu2d-stub", FSL_IMX6_GPU_2D_SIZE);
++    memory_region_add_subregion(get_system_memory(), FSL_IMX6_GPU_2D_ADDR,
++                                &gpu2d_stub);
++
+     /* ROM memory */
+     if (!memory_region_init_rom(&s->rom, OBJECT(dev), "imx6.rom",
+                                 FSL_IMX6_ROM_SIZE, errp)) {

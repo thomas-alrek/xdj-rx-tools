@@ -1,0 +1,17 @@
+a/hw/misc/imx6_src.c	2026-08-11 18:40:25
++++ b/hw/misc/imx6_src.c	2026-11-04 11:28:52
+@@ -239,6 +239,14 @@
+             /* We pretend the IPU1 is reset */
+             clear_bit(SW_IPU1_RST_SHIFT, &current_value);
+         }
++        /*
++         * No GPU is modelled.  The i.MX6 Vivante GPU driver resets the GPU by
++         * setting the SW_GPU3D_RST (bit 1) / SW_GPU2D_RST (bit 4) bits in
++         * SRC_SCR and then polling until they self-clear.  Pretend the reset
++         * completed immediately so the guest does not spin forever.
++         */
++        clear_bit(1, &current_value); /* SW_GPU3D_RST */
++        clear_bit(4, &current_value); /* SW_GPU2D_RST */
+         s->regs[index] = current_value;
+         break;
+     default:
