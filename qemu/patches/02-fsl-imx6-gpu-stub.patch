@@ -1,6 +1,14 @@
-a/hw/arm/fsl-imx6.c	2026-08-11 18:40:25
-+++ b/hw/arm/fsl-imx6.c	2026-11-04 13:35:58
-@@ -31,6 +31,8 @@
+--- a/hw/arm/fsl-imx6.c	2026-08-11 18:40:25
++++ b/hw/arm/fsl-imx6.c	2026-11-04 15:00:35
+@@ -21,6 +21,7 @@
+ 
+ #include "qemu/osdep.h"
+ #include "qapi/error.h"
++#include "qemu/timer.h"
+ #include "hw/arm/fsl-imx6.h"
+ #include "hw/misc/unimp.h"
+ #include "hw/usb/imx-usb-phy.h"
+@@ -31,6 +32,8 @@
  #include "qemu/error-report.h"
  #include "qemu/module.h"
  #include "target/arm/cpu-qom.h"
@@ -9,7 +17,7 @@ a/hw/arm/fsl-imx6.c	2026-08-11 18:40:25
  
  #define IMX6_ESDHC_CAPABILITIES     0x057834b4
  
-@@ -105,11 +107,121 @@
+@@ -105,11 +108,246 @@
      object_initialize_child(obj, "pcie", &s->pcie, TYPE_DESIGNWARE_PCIE_HOST);
      object_initialize_child(obj, "pcie4-msi-irq", &s->pcie4_msi_irq,
                              TYPE_OR_IRQ);
@@ -84,6 +92,131 @@ a/hw/arm/fsl-imx6.c	2026-08-11 18:40:25
 +};
 +
 +/*
++ * i.MX6 IPU1 interrupt stub.
++ *
++ * QEMU models no IPU, so the mxc_sdc_fb display path never receives the
++ * vsync / end-of-frame interrupts it waits on.  The driver then falls back to
++ * a timeout on every DirectFB page-flip (DSFLIP_WAITFORSYNC) and on display
++ * enable, which makes the UI crawl and stalls boot (~80s).  We model just the
++ * IPU Control Module interrupt registers (INT_CTRL/INT_STAT) plus a 60Hz timer
++ * that asserts whatever interrupts the driver has enabled and pulses the IPU1
++ * sync IRQ.  The kernel's chained ipu_sync_irq_handler demuxes and completes
++ * the fb waits, exactly as real 60Hz vsync would.
++ *
++ * Register layout recovered from the firmware kernel's ipu_clear_irq /
++ * ipu_enable_irq: CM block at IPU1 base + 0x200000; INT_CTRL_n at 0x3C+4*(n-1),
++ * INT_STAT_n at 0x200+4*(n-1), n=1..15; INT_STAT is write-1-to-clear.  The
++ * "sync" group (serviced by ipu_sync_irq_handler -> IPU1_SYNC_IRQ) is registers
++ * 1-4 and 11-15; the error group (5-10) uses a separate line we leave idle.
++ */
++#define IPU1_CM_BASE      0x02600000u
++#define IPU_CM_SIZE       0x1000
++#define IPU_INT_CTRL_BASE 0x003c
++#define IPU_INT_STAT_BASE 0x0200
++#define IPU_NUM_INT_REG   15
++
++static uint32_t ipu_int_ctrl[IPU_NUM_INT_REG];
++static uint32_t ipu_int_stat[IPU_NUM_INT_REG];
++/*
++ * Bits the driver has itself cleared (write-1-to-clear) at least once.  We only
++ * ever synthesize an interrupt that the driver has actively managed: a bit it
++ * has cleared has had its completion/wait-queue initialized, so completing it
++ * is safe.  This gates out the probe-time race where an interrupt is enabled
++ * before its handler's data structures exist (which panics in complete()).
++ */
++static uint32_t ipu_int_seen[IPU_NUM_INT_REG];
++static qemu_irq ipu_sync_irq_line;
++static QEMUTimer *ipu_irq_timer;
++
++/*
++ * We synthesize interrupts for only the primary BG display channel (IDMAC
++ * ch23): EOF in INT_STAT_1 and NFACK in INT_STAT_3, both bit 23 (recovered
++ * from the driver's own INT_CTRL writes - see the IPU_TRACE output).  That is
++ * all the mxc_sdc_fb display-enable and DSFLIP_WAITFORSYNC paths wait on.  We
++ * deliberately do NOT drive the FG/alpha channel (bit 27) or any other channel:
++ * their handlers (e.g. mxcfb_alpha_irq_handler) call complete() on completions
++ * that aren't initialized yet during probe, which panics the kernel.
++ */
++#define IPU_BG_CH_BIT    0x00800000u          /* IDMAC channel 23 */
++static const int ipu_assert_reg[] = { 0, 2 }; /* INT_STAT_1 (EOF), _3 (NFACK) */
++
++static void ipu_sync_update_irq(void)
++{
++    uint32_t pend = 0;
++    unsigned i;
++    for (i = 0; i < ARRAY_SIZE(ipu_assert_reg); i++) {
++        int r = ipu_assert_reg[i];
++        pend |= ipu_int_stat[r] & ipu_int_ctrl[r] & IPU_BG_CH_BIT;
++    }
++    qemu_set_irq(ipu_sync_irq_line, pend ? 1 : 0);
++}
++
++/*
++ * One interrupt delivery, ~1 frame after the driver armed it.  Real hardware
++ * raises the sync/EOF IRQ once per frame after the channel is armed; we model
++ * exactly that (edge-triggered), rather than a free-running stream which
++ * livelocks the driver's setup.  Armed from register writes (see ipu_cm_write).
++ */
++static void ipu_irq_fire(void *opaque)
++{
++    unsigned i;
++    for (i = 0; i < ARRAY_SIZE(ipu_assert_reg); i++) {
++        int r = ipu_assert_reg[i];
++        /* assert the BG channel bit only if the driver enabled & cycled it */
++        ipu_int_stat[r] |= ipu_int_ctrl[r] & ipu_int_seen[r] & IPU_BG_CH_BIT;
++    }
++    ipu_sync_update_irq();
++}
++
++/* schedule one frame's worth of interrupt delivery (~60Hz) */
++static void ipu_irq_arm(void)
++{
++    timer_mod(ipu_irq_timer,
++              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + NANOSECONDS_PER_SECOND / 60);
++}
++
++static uint64_t ipu_cm_read(void *opaque, hwaddr off, unsigned size)
++{
++    if (off >= IPU_INT_CTRL_BASE &&
++        off < IPU_INT_CTRL_BASE + 4 * IPU_NUM_INT_REG) {
++        return ipu_int_ctrl[(off - IPU_INT_CTRL_BASE) >> 2];
++    }
++    if (off >= IPU_INT_STAT_BASE &&
++        off < IPU_INT_STAT_BASE + 4 * IPU_NUM_INT_REG) {
++        return ipu_int_stat[(off - IPU_INT_STAT_BASE) >> 2];
++    }
++    return 0;
++}
++
++static void ipu_cm_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
++{
++    if (off >= IPU_INT_CTRL_BASE &&
++        off < IPU_INT_CTRL_BASE + 4 * IPU_NUM_INT_REG) {
++        if (getenv("IPU_TRACE")) {
++            fprintf(stderr, "IPU INT_CTRL_%u = 0x%08x\n",
++                    (unsigned)((off - IPU_INT_CTRL_BASE) >> 2) + 1, (unsigned)val);
++        }
++        ipu_int_ctrl[(off - IPU_INT_CTRL_BASE) >> 2] = (uint32_t)val;
++        ipu_sync_update_irq();
++        ipu_irq_arm();    /* driver (re)armed an interrupt: deliver one frame */
++    } else if (off >= IPU_INT_STAT_BASE &&
++               off < IPU_INT_STAT_BASE + 4 * IPU_NUM_INT_REG) {
++        unsigned idx = (off - IPU_INT_STAT_BASE) >> 2;
++        ipu_int_stat[idx] &= ~(uint32_t)val;    /* W1C */
++        ipu_int_seen[idx] |= (uint32_t)val;     /* driver is actively cycling it */
++        ipu_sync_update_irq();
++        ipu_irq_arm();    /* driver cleared before a new wait: deliver one frame */
++    }
++}
++
++static const MemoryRegionOps ipu_cm_ops = {
++    .read = ipu_cm_read,
++    .write = ipu_cm_write,
++    .endianness = DEVICE_NATIVE_ENDIAN,
++    .valid = { .min_access_size = 4, .max_access_size = 4 },
++};
++
++/*
 + * XDJ-RX framebuffer scanout.
 + *
 + * QEMU does not model the i.MX6 IPU display path, but the vendor mxc_sdc_fb
@@ -93,8 +226,8 @@ a/hw/arm/fsl-imx6.c	2026-08-11 18:40:25
 + * read-only mirror of the framebuffer; no IPU registers are driven.
 + */
 +#define XDJ_FB_BASE    0x18000000
-+#define XDJ_FB_WIDTH   480
-+#define XDJ_FB_HEIGHT  800
++#define XDJ_FB_WIDTH   800
++#define XDJ_FB_HEIGHT  480
 +
 +static QemuConsole *xdj_fb_con;
 +
@@ -131,10 +264,11 @@ a/hw/arm/fsl-imx6.c	2026-08-11 18:40:25
      FslIMX6State *s = FSL_IMX6(dev);
      uint16_t i;
      qemu_irq irq;
-@@ -473,6 +585,18 @@
+@@ -472,6 +710,30 @@
+      */
      create_unimplemented_device("pcie-phy", FSL_IMX6_PCIe_ADDR,
                                  FSL_IMX6_PCIe_SIZE);
- 
++
 +    /* Vivante GPU register stubs (3D + 2D) so galcore init completes.
 +     * The 3D region gets the GPU IRQ line so the stub can fake completion. */
 +    memory_region_init_io(&gpu3d_stub, OBJECT(dev), &imx6_gpu_stub_ops,
@@ -147,10 +281,21 @@ a/hw/arm/fsl-imx6.c	2026-08-11 18:40:25
 +    memory_region_add_subregion(get_system_memory(), FSL_IMX6_GPU_2D_ADDR,
 +                                &gpu2d_stub);
 +
++    /* i.MX6 IPU1 interrupt stub: synthesize 60Hz vsync/EOF interrupts so the
++     * mxc_sdc_fb display path's waits complete (fast boot, paced page-flips). */
++    {
++        static MemoryRegion ipu1_cm;
++        ipu_sync_irq_line = qdev_get_gpio_in(gic, FSL_IMX6_IPU1_SYNC_IRQ);
++        memory_region_init_io(&ipu1_cm, OBJECT(dev), &ipu_cm_ops, NULL,
++                              "imx6.ipu1-cm", IPU_CM_SIZE);
++        memory_region_add_subregion(get_system_memory(), IPU1_CM_BASE, &ipu1_cm);
++        ipu_irq_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, ipu_irq_fire, NULL);
++        /* armed on demand when the driver writes the IPU interrupt registers */
++    }
+ 
      /* ROM memory */
      if (!memory_region_init_rom(&s->rom, OBJECT(dev), "imx6.rom",
-                                 FSL_IMX6_ROM_SIZE, errp)) {
-@@ -502,6 +626,10 @@
+@@ -502,6 +764,10 @@
                               &s->ocram, 0, FSL_IMX6_OCRAM_ALIAS_SIZE);
      memory_region_add_subregion(get_system_memory(), FSL_IMX6_OCRAM_ALIAS_ADDR,
                                  &s->ocram_alias);

@@ -38,11 +38,13 @@ RAM_BASE = 0x10000000
 RAM_SIZE = 0x40000000              # 1 GiB
 # ttymxc1 = UART2 = the port QEMU exposes; keep_bootcon keeps the working polled
 # early console alive (the full imx-uart driver's TX doesn't reach QEMU's chardev).
-# video=mxcfb0 activates the 480x800 LCD framebuffer so the QEMU scanout device
-# (qemu/patches/02) can mirror it. NOTE: with no IPU interrupt the display-enable
-# path times out (~80 s one-time at boot) rather than completing instantly.
+# video=mxcfb0 activates the 800x480 (landscape, matching the physical panel) LCD
+# framebuffer so the QEMU scanout device (qemu/patches/02) can mirror it. The same
+# patch's IPU vsync-interrupt stub makes display-enable and DirectFB page-flips
+# (DSFLIP_WAITFORSYNC) complete on a real 60Hz interrupt instead of timing out, so
+# boot is fast and the UI renders smoothly (no tearing).
 CMDLINE = ("console=ttymxc1,115200 earlyprintk keep_bootcon "
-           "video=mxcfb0:dev=lcd,480x800M@60,if=RGB24,bpp=32 "
+           "video=mxcfb0:dev=lcd,800x480M@60,if=RGB24,bpp=32 "
            "video=mxcfb1:off video=mxcfb2:off video=mxcfb3:off")
 
 
