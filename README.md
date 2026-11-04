@@ -14,6 +14,24 @@ interoperability and preservation.
 
 ---
 
+## Milestone: the firmware boots to its UI in QEMU
+
+The **unmodified** `2.21` firmware boots on an emulated i.MX6 (QEMU `-M sabrelite`,
+patched to the XDJ-RX's real SABRE-SD board) all the way to its on-screen UI. No
+firmware or kernel changes — the i.MX6 bring-up (IPU vsync, framebuffer scanout,
+panel-MCU SPI, thermal/GPU stubs) is modelled on the QEMU side. The boot splash
+renders at 32bpp; the app then switches the framebuffer to 16bpp RGB565 and the
+main screen comes up. Both are decoded live from the IPU display stride.
+
+| Boot splash (32bpp) | Main UI (16bpp RGB565) |
+|---|---|
+| ![XDJ-RX boot splash in QEMU](docs/img/boot-splash.png) | ![XDJ-RX main UI in QEMU](docs/img/main-ui.png) |
+
+*Actual emulator framebuffer (800×480) captured from the running QEMU instance —
+see [`qemu/watch-sabresd.sh`](qemu/watch-sabresd.sh).*
+
+---
+
 ## 1. The `.UPD` file format (fully reverse-engineered)
 
 `XDJRX.UPD` is an **ISO9660 image encrypted with Linux `cryptoloop`** (the
