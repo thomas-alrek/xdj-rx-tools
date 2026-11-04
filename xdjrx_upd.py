@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.8"
+# dependencies = ["pycryptodome>=3.20", "pycdlib>=1.14"]
+# ///
 """
 xdjrx_upd.py — decrypt / inspect / repack Pioneer XDJ-RX firmware update files (.UPD)
 
@@ -41,6 +45,8 @@ import argparse, struct, sys, zlib, subprocess, shutil, os
 
 SECTOR = 512
 ENV_VAR = "XDJRX_AES_KEY"   # 64 hex chars (32-byte AES-256 key) in environment or .env
+# Everything the tool generates goes here (git-ignored).
+WORKDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "build")
 
 
 # ---- AES backend (pycryptodome preferred, cryptography fallback) ------------
@@ -223,7 +229,8 @@ def cmd_decrypt(args):
     ok, pvd = _check_iso(plain)
     if not ok:
         sys.exit(f"error: wrong key? ISO9660 'CD001' not found at 0x8000 (got {pvd.hex()})")
-    out = args.output or (stem + ".iso")
+    out = args.output or os.path.join(WORKDIR, stem + ".iso")
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     open(out, "wb").write(plain)
     print(f"model {model!r}  ->  {out}  ({len(plain)} bytes, ISO9660 verified)")
     return out
@@ -240,11 +247,54 @@ def cmd_pack(args):
     print(f"packed {args.iso} ({len(plain)} bytes) -> {out}  model={args.model}")
 
 
+def _extract_iso_pycdlib(iso_path, dest):
+    """Pure-Python, cross-platform ISO9660 extraction (handles Rock Ridge
+    names + symlinks). No external tools or mounting required."""
+    import pycdlib
+    iso = pycdlib.PyCdlib()
+    iso.open(iso_path)
+    rr = iso.has_rock_ridge()
+    pathkw = "rr_path" if rr else ("joliet_path" if iso.has_joliet() else "iso_path")
+    try:
+        for dirpath, _dirs, files in iso.walk(**{pathkw: "/"}):
+            base = dirpath.rstrip("/")
+            outdir = os.path.join(dest, *[p for p in base.split("/") if p])
+            os.makedirs(outdir, exist_ok=True)
+            for name in files:
+                full = base + "/" + name
+                outpath = os.path.join(outdir, name.split(";")[0])  # strip ;1 version
+                rec = iso.get_record(**{pathkw: full})
+                if rr and rec.is_symlink():
+                    tgt = rec.rock_ridge.symlink_path()
+                    if isinstance(tgt, bytes):
+                        tgt = tgt.decode("utf-8", "replace")
+                    if os.path.lexists(outpath):
+                        os.remove(outpath)
+                    try:
+                        os.symlink(tgt, outpath)                     # may need privilege on Windows
+                    except (OSError, NotImplementedError):
+                        with open(outpath + ".symlink", "w") as f:   # fallback: record the target
+                            f.write(tgt + "\n")
+                else:
+                    with open(outpath, "wb") as f:
+                        iso.get_file_from_iso_fp(f, **{pathkw: full})
+    finally:
+        iso.close()
+
+
 def cmd_extract(args):
     iso = cmd_decrypt(args)
-    dest = args.dest or "contents"
+    dest = args.dest or os.path.join(WORKDIR, "contents")
     os.makedirs(dest, exist_ok=True)
-    if shutil.which("7z"):
+    try:
+        import pycdlib  # noqa: F401
+        have_pycdlib = True
+    except ImportError:
+        have_pycdlib = False
+
+    if have_pycdlib:
+        _extract_iso_pycdlib(iso, dest)                              # cross-platform, no external tools
+    elif shutil.which("7z"):
         subprocess.run(["7z", "x", "-y", f"-o{dest}", iso], check=True)
     elif shutil.which("bsdtar"):
         subprocess.run(["bsdtar", "-xf", iso, "-C", dest], check=True)
@@ -254,8 +304,9 @@ def cmd_extract(args):
                         "-mountpoint", mnt, iso], check=True)
         subprocess.run(["cp", "-a", mnt + "/.", dest], check=True)
         subprocess.run(["hdiutil", "detach", mnt], check=True)
+        subprocess.run(["chmod", "-R", "u+w", dest], check=False)    # ISO copies are read-only
     else:
-        sys.exit("need '7z' or 'bsdtar' to extract the ISO (brew install p7zip / libarchive)")
+        sys.exit("need 'pycdlib' (pip install pycdlib) or '7z' / 'bsdtar' to extract the ISO")
     print(f"extracted ISO contents -> {dest}/")
 
 

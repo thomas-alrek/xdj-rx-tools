@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.8"
+# dependencies = ["inflate64>=1.0"]
+# ///
 """
 fetch_key.py — obtain the XDJ-RX firmware AES key and write it to .env
 
@@ -32,8 +36,9 @@ Downloading/unwrapping needs:  pip install inflate64
 import argparse, io, os, sys, tarfile, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+WORKDIR = os.path.join(HERE, "build")          # all downloaded/extracted files live here (git-ignored)
 ENV_PATH = os.path.join(HERE, ".env")
-KEY_FILE = os.path.join(HERE, "aes256.key")
+KEY_FILE = os.path.join(WORKDIR, "aes256.key")
 ENV_VAR = "XDJRX_AES_KEY"
 
 # Pioneer "GPL/LGPL Source Code" page -> XDJ-RX. The downloads are deflate64
@@ -108,6 +113,7 @@ def get_passphrase(version):
         print(f"Using existing {os.path.relpath(KEY_FILE)} (delete it to re-download).")
         return open(KEY_FILE, "rb").read()
     passphrase = fetch_passphrase_from_gpl(version)
+    os.makedirs(WORKDIR, exist_ok=True)
     with open(KEY_FILE, "wb") as f:
         f.write(passphrase)
     print(f"  cached passphrase -> {os.path.relpath(KEY_FILE)}")

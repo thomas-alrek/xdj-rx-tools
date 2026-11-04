@@ -1,0 +1,10 @@
+# Python dependencies for the XDJ-RX firmware tools.
+#   python3 -m venv .venv && source .venv/bin/activate   # (optional but recommended)
+#   pip install -r requirements.txt
+#
+# Or run a single script with uv and let it resolve deps automatically
+# (the scripts carry PEP 723 inline metadata):  uv run xdjrx_upd.py info XDJRX.UPD
+
+pycryptodome>=3.20   # AES-256-CBC for xdjrx_upd.py (decrypt / pack). 'cryptography' also works.
+pycdlib>=1.14        # cross-platform ISO9660 extraction for 'xdjrx_upd.py extract' (no mounting)
+inflate64>=1.0       # deflate64 unwrap for fetch_key.py (only the GPL-source download path)
