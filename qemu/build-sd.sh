@@ -63,6 +63,13 @@ cd /tmp
 python3 /b/cramfs_extract.py /b/rootfs.cramfs tree
 mkdir -p tree/root tree/dev
 tar xzf /b/pioneer.tar.gz -C tree/root
+# The firmware is dual-core: apl_start runs /root/pioneer/rbp only when it sees a
+# second CPU, otherwise /root/pioneer/rbp_solo (which the firmware does NOT ship).
+# QEMU emulates two Cortex-A9 cores much slower than one, so for a fast test bed
+# we run single-core -- add rbp_solo as a symlink to rbp so apl_start still
+# launches the app on one core. (Test artifact; the shipped firmware is untouched
+# and runs dual-core on the real hardware.)
+ln -sf rbp tree/root/pioneer/rbp_solo
 for n in "console c 5 1" "null c 1 3" "ttymxc1 c 207 17" "ttymxc0 c 207 16" \
          "tty c 5 0" "zero c 1 5" "ptmx c 5 2" "fb0 c 29 0" \
          "mmcblk0 b 179 0" "mmcblk0p1 b 179 1" "mmcblk0p2 b 179 2"; do
@@ -76,6 +83,9 @@ sed -i "s|^root:[^:]*:|root::|" tree/etc/passwd 2>/dev/null || true
 # the app makes the directory, so it runs regardless of $BOOTMODE.
 A=tree/root/pioneer/apl_start
 sed -i "/^mkdir -p \/root\/gui/a\\mount -t ext4 -o ro /dev/mmcblk0p2 /root/gui 2>/dev/null" "$A"
+# Log the faulting PC/registers to the console if the app crashes (debug aid; the
+# app binary is untouched). Injected right after apl_start cds into its dir.
+sed -i "/^cd \/root\/pioneer/a\\echo 1 > /proc/sys/kernel/print-fatal-signals 2>/dev/null" "$A"
 
 mke2fs -q -t ext4 -O ^metadata_csum,^64bit,^orphan_file,^metadata_csum_seed \
        -b 1024 -d tree -F p1.ext4 500000
