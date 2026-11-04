@@ -223,14 +223,39 @@ volume on NAND; QEMU has no NAND, so `qemu/build-sd.sh` delivers `gui.tar.gz` on
 on `$BOOTMODE`, which comes from the i.MX6 boot-mode straps that QEMU doesn't
 emulate. With the assets present, `rbp` renders the splash.
 
-## Next step — the front-panel microcontroller (Subucom)
+## The real board is SABRE-SD (front-panel MCU bring-up)
 
-After the splash, `rbp` blocks handshaking with the panel MCU over
-`/dev/subucom_spi1.0` (SPI): it retries `Subucom StaticInfomation is not
-completed` forever. The MCU reports the hardware's identity/config and drives the
-jog wheels, faders and buttons. Reaching the interactive main screen means
-emulating it — a QEMU ECSPI slave that answers enough of the panel protocol
-(`ui::PanelComController` / `panel_protocol`) for the handshake to complete.
+The splash renders, but the app needs the **front-panel microcontroller**
+("Subucom") on `/dev/subucom_spi1.0` and exits without it. Tracing why that
+device never appeared led to the key discovery: **the XDJ-RX firmware is a
+SABRE-SD board, not sabrelite.** The firmware supports four board inits; we had
+been forcing sabrelite (MACH_TYPE 3769), whose init registers only ECSPI1
+(bus 0). The subucom's `spi_board_info` is **bus 1** (ECSPI2), and only the
+**SABRE-SD** init (`MACH_TYPE 3980`) registers it — along with the AK4387 audio
+codecs on bus 0. (Found by disassembling the kernel's board inits and
+`xdj_spi_device_init` with `build/qemu/vmlinux.elf` and REA.)
+
+Booting the **unmodified** firmware under its own SABRE-SD init needs three
+things on the QEMU side, all now in place (`qemu/watch-sabresd.sh`):
+
+- **`MACH_TYPE 3980` + `ATAG_REVISION=0x500`.** `xdj_spi_device_init` reads
+  `system_rev` and only registers the subucom/codec `spi_board_info` when its
+  rev field (bits 8-11) is `0x400`/`0x500`. `system_rev` is set from
+  `ATAG_REVISION`, which `qemu_prepare.py` now supplies.
+- **SD on uSDHC3.** SABRE-SD's rootfs controller is uSDHC3 (Linux `mmc0` =
+  `sdhci-esdhc-imx.2`), not uSDHC4. `patches/03` teaches the machine to attach
+  `-drive if=none,id=xdjsd` there.
+- **Console on `ttymxc0`.** SABRE-SD's early console is a different UART.
+
+Result: the firmware boots under SABRE-SD to a root shell, and
+**`/dev/subucom_spi1.0` exists** (`subucom_spi spi1.0: SPI device initialized`).
+
+**Remaining:** with the subucom device present, `rbp` takes a panel-init +
+GPU-accelerated-DirectFB path (`DS_HW_Glib3_DFB`) that currently fails without a
+real g2d GPU, so the GUI does not yet render under SABRE-SD. Nailing that down
+(and then answering the Subucom SPI protocol — `ui::PanelComController` /
+`panel_protocol`, an XOR-checksummed frame protocol, via the `xdj-subucom` SSI
+slave stub, `XDJ_SUBUCOM=1`) is the path to the interactive main screen.
 
 (After the UI is interactive: mods such as exFAT — the
 `12-usb-memory-auto-mount.rules` USB path — can be tested on this same bed.)
