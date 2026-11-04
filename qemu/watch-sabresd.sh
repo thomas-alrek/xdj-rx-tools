@@ -21,26 +21,46 @@
 #   - the SD image is attached to uSDHC3 via -drive if=none,id=xdjsd (the SABRE-SD
 #     rootfs controller), by the patched machine (qemu/patches/03-...).
 #
-# The Pioneer DJ / rekordbox splash renders here. Past the splash the app needs
-# the Subucom panel-MCU handshake (ui::panel_protocol StaticInfomation); the SSI
-# slave stub currently answers 0xff, so that handshake is still being reversed.
+# Boots single-core by default (XDJSMP=2 for the real dual-core config). rbp is
+# heavily multi-threaded; QEMU emulates two Cortex-A9 cores (with SCU cache
+# coherency + atomics) far slower than one, so the UI comes up much faster on a
+# single core. apl_start normally runs /root/pioneer/rbp only when it sees a
+# second CPU (else rbp_solo, which the firmware does not ship) -- build-sd.sh adds
+# rbp_solo as a symlink to rbp so the single-core path launches the app too.
+# The console reaches "#### Application Start!! ###" and execs it either way.
 #
-# SUBUCOM_TRACE=1 logs the driver's SPI frames to stderr (for that reversing).
+# Current state: boots to the live UI. The boot splash (Pioneer DJ / rekordbox +
+# progress bar) renders at 32bpp, then the app switches the framebuffer to 16bpp
+# RGB565 and the main screen (DECK1/DECK2, rekordbox, BEAT EFFECTS, BPM/TEMPO)
+# comes up. The QEMU-side scanout (hw/arm/fsl-imx6.c) reads the live line stride
+# from the IPU display channel's CPMEM and decodes whichever depth is active, so
+# both the splash and the UI render correctly -- no firmware/kernel changes.
+#
+# DirectFB's GAL (Vivante GPU) graphics core still needs /dev/galcore, which this
+# model does not provide yet; the default image here (sd-nogal.img) has that one
+# gfxdriver removed so DirectFB falls back to software rendering (the drawing is
+# all DirectFB software anyway -- the GPU is only used for an unreached g2d_blit).
+# Running the fully stock firmware needs a minimal galcore/Vivante stub (next).
+#
+# The window is resizable (zoom-to-fit, aspect locked 800:480) -- drag a corner.
+# SUBUCOM_TRACE=1 logs the driver's SPI frames to stderr (for panel reversing).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 Q=build/qemu
 QEMU="${QEMU:-$(ls build/qemu-src/*/build/qemu-system-arm 2>/dev/null | head -1 || true)}"
 QEMU="${QEMU:-qemu-system-arm}"
-SD="${1:-$Q/sd.img}"
+# Default to the UI-rendering image (sd-nogal.img) if present, else sd.img.
+if [ -n "${1:-}" ]; then SD="$1"; elif [ -f "$Q/sd-nogal.img" ]; then SD="$Q/sd-nogal.img"; else SD="$Q/sd.img"; fi
 for f in vmlinux.bin tramp-sabresd.bin atags-sabresd.bin; do
   [ -f "$Q/$f" ] || { echo "missing $Q/$f — run: python3 qemu_prepare.py" >&2; exit 1; }
 done
 [ -f "$SD" ] || { echo "no SD image: $SD  (run qemu/build-sd.sh)"; exit 1; }
+SMP="${XDJSMP:-1}"   # single-core (fast) by default; XDJSMP=2 for the real dual-core
 
 # sabresd console is ttymxc0 = serial 0 -> wire it to this terminal (Ctrl-A X quits).
-exec "$QEMU" -M sabrelite -smp 1 -m 1024 -no-reboot \
+exec "$QEMU" -M sabrelite -smp "$SMP" -m 1024 -no-reboot \
   -name "Pioneer XDJ-RX (SABRE-SD)" \
-  -display cocoa \
+  -display cocoa,zoom-to-fit=on,zoom-interpolation=on \
   -device loader,file="$Q/vmlinux.bin",addr=0x10008000,force-raw=on \
   -device loader,file="$Q/atags-sabresd.bin",addr=0x10000100,force-raw=on \
   -device loader,file="$Q/tramp-sabresd.bin",addr=0x10000000,cpu-num=0 \
