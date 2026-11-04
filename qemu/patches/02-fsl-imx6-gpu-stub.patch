@@ -1,5 +1,5 @@
---- a/hw/arm/fsl-imx6.c	2026-08-11 18:40:25
-+++ b/hw/arm/fsl-imx6.c	2026-11-04 17:56:33
+--- a/hw/arm/fsl-imx6.c
++++ b/hw/arm/fsl-imx6.c
 @@ -21,6 +21,8 @@
  
  #include "qemu/osdep.h"
@@ -18,10 +18,12 @@
  
  #define IMX6_ESDHC_CAPABILITIES     0x057834b4
  
-@@ -107,9 +111,303 @@
+@@ -105,11 +109,450 @@
+     object_initialize_child(obj, "pcie", &s->pcie, TYPE_DESIGNWARE_PCIE_HOST);
+     object_initialize_child(obj, "pcie4-msi-irq", &s->pcie4_msi_irq,
                              TYPE_OR_IRQ);
- }
- 
++}
++
 +/*
 + * Minimal Vivante GPU (GC2000 3D / GC320 2D) register stub.
 + *
@@ -86,6 +88,41 @@
 +static const MemoryRegionOps imx6_gpu_stub_ops = {
 +    .read = imx6_gpu_stub_read,
 +    .write = imx6_gpu_stub_write,
++    .endianness = DEVICE_NATIVE_ENDIAN,
++    .valid = { .min_access_size = 4, .max_access_size = 4 },
++};
++
++/*
++ * i.MX6 anatop temperature-sensor (TEMPSENSE0) stub.
++ *
++ * The anatop thermal driver measures die temperature by triggering a
++ * conversion and polling HW_ANADIG_TEMPSENSE0 (ANALOG base + 0x180) for the
++ * FINISHED bit (bit 2).  QEMU models no temperature sensor, so that bit never
++ * sets: anatop_thermal_get_temp() spins msleep(10) up to ~500 jiffies (~5 s),
++ * prints "Thermal sensor timeout, retry!", and the thermal zone repeats it
++ * forever -- pegging a core and (under TCG) stealing ~half the emulation
++ * throughput from the app on the other core.  Report the conversion as always
++ * finished (bit 2 set) with a plausible count, so every read returns at once
++ * and the thermal poll stops burning CPU.  Offsets 0x4/0x8/0xc are the i.MX6
++ * SET/CLR/TOG aliases; writes (MEASURE_TEMP, clear-FINISHED) are no-ops here.
++ */
++static uint64_t imx6_tempsense_stub_read(void *opaque, hwaddr off, unsigned size)
++{
++    if (off == 0x0) {
++        /* bit 2 = FINISHED; bits 8..19 = TEMP_VALUE (a mid-range raw count) */
++        return (1u << 2) | (0x580u << 8);
++    }
++    return 0;
++}
++
++static void imx6_tempsense_stub_write(void *opaque, hwaddr off, uint64_t val,
++                                      unsigned size)
++{
++}
++
++static const MemoryRegionOps imx6_tempsense_stub_ops = {
++    .read = imx6_tempsense_stub_read,
++    .write = imx6_tempsense_stub_write,
 +    .endianness = DEVICE_NATIVE_ENDIAN,
 +    .valid = { .min_access_size = 4, .max_access_size = 4 },
 +};
@@ -156,22 +193,47 @@
 + * exactly that (edge-triggered), rather than a free-running stream which
 + * livelocks the driver's setup.  Armed from register writes (see ipu_cm_write).
 + */
-+static void ipu_irq_fire(void *opaque)
-+{
-+    unsigned i;
-+    for (i = 0; i < ARRAY_SIZE(ipu_assert_reg); i++) {
-+        int r = ipu_assert_reg[i];
-+        /* assert the BG channel bit only if the driver enabled & cycled it */
-+        ipu_int_stat[r] |= ipu_int_ctrl[r] & ipu_int_seen[r] & IPU_BG_CH_BIT;
-+    }
-+    ipu_sync_update_irq();
-+}
-+
 +/* schedule one frame's worth of interrupt delivery (~60Hz) */
 +static void ipu_irq_arm(void)
 +{
 +    timer_mod(ipu_irq_timer,
 +              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + NANOSECONDS_PER_SECOND / 60);
++}
++
++static void ipu_irq_fire(void *opaque)
++{
++    unsigned i;
++    bool enabled = false;
++    for (i = 0; i < ARRAY_SIZE(ipu_assert_reg); i++) {
++        int r = ipu_assert_reg[i];
++        /*
++         * Real hardware raises the BG display channel's sync/EOF interrupt once
++         * per frame for as long as that interrupt is ENABLED, independent of
++         * whether anything is currently waiting on it.  Model exactly that:
++         * assert the BG status bit whenever the driver has the BG interrupt
++         * enabled in INT_CTRL.  (|= is idempotent while a previous one is still
++         * pending, like the real level/edge status latch.)
++         */
++        if (ipu_int_ctrl[r] & IPU_BG_CH_BIT) {
++            ipu_int_stat[r] |= IPU_BG_CH_BIT;
++            enabled = true;
++        }
++    }
++    ipu_sync_update_irq();
++    /*
++     * Free-run at ~60Hz while the BG channel interrupt stays enabled, so vsync
++     * delivery is self-driving.  Without this a new IRQ was only scheduled when
++     * the driver wrote an IPU register (ipu_cm_write), so the very first
++     * display-enable wait and any DirectFB DSFLIP_WAITFORSYNC page-flip that
++     * waits on an already-enabled interrupt could miss their edge and stall --
++     * which froze the UI and left display bring-up dependent on the host
++     * display's refresh cadence (worked under a live window, hung/crashed
++     * headless).  Delivery stops as soon as the driver disables the BG
++     * interrupt (INT_CTRL BG bit cleared), so this cannot run forever.
++     */
++    if (enabled) {
++        ipu_irq_arm();
++    }
 +}
 +
 +static uint64_t ipu_cm_read(void *opaque, hwaddr off, unsigned size)
@@ -247,8 +309,8 @@
 +    }
 +    s->idx++;
 +    return 0xff;
-+}
-+
+ }
+ 
 +static void xdj_subucom_realize(SSIPeripheral *dev, Error **errp)
 +{
 +    /* nothing to set up; state is zero-initialized */
@@ -287,25 +349,110 @@
 +#define XDJ_FB_WIDTH   800
 +#define XDJ_FB_HEIGHT  480
 +
++/*
++ * IPU1 CPMEM (channel parameter memory) capture.
++ *
++ * The framebuffer pixel depth changes at runtime: the boot splash is drawn at
++ * 32bpp, then DirectFB (the app) reprograms the display to 16bpp RGB565 for the
++ * UI.  The mxc_sdc_fb driver records the active geometry in the IPU's CPMEM for
++ * the display IDMAC channel (23, "MEM_BG_SYNC").  QEMU does not model the IPU,
++ * so we back CPMEM with RAM purely to capture those writes and read back the
++ * current line stride -- 3200 bytes => 32bpp, 1600 => 16bpp -- so the scanout
++ * decodes whichever mode is live.  CPMEM per-channel is two 32-byte words; the
++ * SLY (stride-1) field is word1, bit 102, 14 bits (-> data[3] bits 6..19); the
++ * EBA0 buffer address is word1, bits 0..28 (phys/8).
++ */
++#define IPU1_CPMEM_BASE  0x02700000u
++#define IPU1_CPMEM_SIZE  0x20000u
++#define IPU_DISP_CH      23
++#define IPU_CH_PARAM(ch) ((ch) * 0x40u)        /* sizeof(ipu_ch_param) */
++#define IPU_CH_W1_D0(ch) (IPU_CH_PARAM(ch) + 0x20u + 0)   /* word1.data[0] */
++#define IPU_CH_W1_D3(ch) (IPU_CH_PARAM(ch) + 0x20u + 12)  /* word1.data[3] */
++
 +static QemuConsole *xdj_fb_con;
++static uint8_t *ipu_cpmem_ram;
++
++/* Return the live framebuffer bit depth (16 or 32) read from CPMEM, or 0 if the
++ * driver has not programmed a recognisable stride yet. */
++static int xdj_fb_detect_bpp(void)
++{
++    uint32_t w1d3, w1d0, stride, eba;
++
++    if (!ipu_cpmem_ram) {
++        return 0;
++    }
++    w1d3 = ldl_le_p(ipu_cpmem_ram + IPU_CH_W1_D3(IPU_DISP_CH));
++    w1d0 = ldl_le_p(ipu_cpmem_ram + IPU_CH_W1_D0(IPU_DISP_CH));
++    stride = ((w1d3 >> 6) & 0x3FFFu) + 1;      /* SLY: bytes per line */
++    eba = (w1d0 & 0x1FFFFFFFu) << 3;           /* EBA0: buffer phys addr */
++    if (getenv("XDJ_FB_TRACE")) {
++        static uint32_t last;
++        if (stride != last) {
++            fprintf(stderr, "XDJ_FB: ch%d stride=%u eba=0x%08x -> %dbpp\n",
++                    IPU_DISP_CH, stride, eba, stride >= 2400 ? 32 : 16);
++            last = stride;
++        }
++    }
++    if (stride >= 1400 && stride <= 1800) {
++        return 16;
++    }
++    if (stride >= 3000 && stride <= 3400) {
++        return 32;
++    }
++    return 0;
++}
 +
 +static bool xdj_fb_gfx_update(void *opaque)
 +{
 +    DisplaySurface *ds = qemu_console_surface(xdj_fb_con);
++    static int last_bpp = 32;        /* splash is 32bpp until the app switches */
 +    uint8_t *dst;
-+    int stride, y;
++    int stride, x, y, bpp;
 +
 +    if (!ds) {
 +        return false;
 +    }
 +    dst = surface_data(ds);
 +    stride = surface_stride(ds);
-+    /* fb is ARGB8888 little-endian (B,G,R,A bytes) == native x8r8g8b8 surface */
-+    for (y = 0; y < XDJ_FB_HEIGHT; y++) {
-+        address_space_read(&address_space_memory,
-+                           XDJ_FB_BASE + (hwaddr)y * XDJ_FB_WIDTH * 4,
-+                           MEMTXATTRS_UNSPECIFIED,
-+                           dst + (size_t)y * stride, XDJ_FB_WIDTH * 4);
++
++    bpp = xdj_fb_detect_bpp();
++    if (bpp == 0) {
++        bpp = last_bpp;              /* keep the last known good mode */
++    } else {
++        last_bpp = bpp;
++    }
++
++    if (bpp == 16) {
++        /* RGB565: read each 16bpp row and expand R5G6B5 -> x8r8g8b8. */
++        uint16_t rowbuf[XDJ_FB_WIDTH];
++        for (y = 0; y < XDJ_FB_HEIGHT; y++) {
++            uint32_t *d = (uint32_t *)(dst + (size_t)y * stride);
++            address_space_read(&address_space_memory,
++                               XDJ_FB_BASE + (hwaddr)y * XDJ_FB_WIDTH * 2,
++                               MEMTXATTRS_UNSPECIFIED,
++                               rowbuf, XDJ_FB_WIDTH * 2);
++            for (x = 0; x < XDJ_FB_WIDTH; x++) {
++                uint16_t p = rowbuf[x];
++                uint32_t r = (p >> 11) & 0x1f, g = (p >> 5) & 0x3f, b = p & 0x1f;
++                r = (r << 3) | (r >> 2);
++                g = (g << 2) | (g >> 4);
++                b = (b << 3) | (b >> 2);
++                d[x] = 0xff000000u | (r << 16) | (g << 8) | b;
++            }
++        }
++    } else {
++        /* 32bpp x8r8g8b8 (boot splash): copy a row at a time, forcing alpha. */
++        uint32_t rowbuf[XDJ_FB_WIDTH];
++        for (y = 0; y < XDJ_FB_HEIGHT; y++) {
++            uint32_t *d = (uint32_t *)(dst + (size_t)y * stride);
++            address_space_read(&address_space_memory,
++                               XDJ_FB_BASE + (hwaddr)y * XDJ_FB_WIDTH * 4,
++                               MEMTXATTRS_UNSPECIFIED,
++                               rowbuf, XDJ_FB_WIDTH * 4);
++            for (x = 0; x < XDJ_FB_WIDTH; x++) {
++                d[x] = 0xff000000u | (rowbuf[x] & 0x00ffffffu);
++            }
++        }
 +    }
 +    qemu_console_update(xdj_fb_con, 0, 0, XDJ_FB_WIDTH, XDJ_FB_HEIGHT);
 +    return true;
@@ -318,11 +465,11 @@
  static void fsl_imx6_realize(DeviceState *dev, Error **errp)
  {
      MachineState *ms = MACHINE(qdev_get_machine());
-+    static MemoryRegion gpu3d_stub, gpu2d_stub;
++    static MemoryRegion gpu3d_stub, gpu2d_stub, tempsense_stub;
      FslIMX6State *s = FSL_IMX6(dev);
      uint16_t i;
      qemu_irq irq;
-@@ -472,7 +770,34 @@
+@@ -472,7 +915,60 @@
       */
      create_unimplemented_device("pcie-phy", FSL_IMX6_PCIe_ADDR,
                                  FSL_IMX6_PCIe_SIZE);
@@ -339,6 +486,20 @@
 +    memory_region_add_subregion(get_system_memory(), FSL_IMX6_GPU_2D_ADDR,
 +                                &gpu2d_stub);
  
++    /*
++     * anatop TEMPSENSE0 stub (ANALOG base + 0x180): report the temperature
++     * conversion as always finished so anatop_thermal_get_temp() returns at
++     * once instead of spinning ~5s per read and retrying forever ("Thermal
++     * sensor timeout, retry!"), which otherwise pegs a core and starves the
++     * app under TCG.  Overlaps the ANALOG region at higher priority so it wins
++     * for these four words (TEMPSENSE0 and its SET/CLR/TOG aliases).
++     */
++    memory_region_init_io(&tempsense_stub, OBJECT(dev), &imx6_tempsense_stub_ops,
++                          NULL, "imx6.tempsense-stub", 0x10);
++    memory_region_add_subregion_overlap(get_system_memory(),
++                                        FSL_IMX6_ANALOG_ADDR + 0x180,
++                                        &tempsense_stub, 1);
++
 +    /* i.MX6 IPU1 interrupt stub: synthesize 60Hz vsync/EOF interrupts so the
 +     * mxc_sdc_fb display path's waits complete (fast boot, paced page-flips). */
 +    {
@@ -351,13 +512,25 @@
 +        /* armed on demand when the driver writes the IPU interrupt registers */
 +    }
 +
++    /* IPU1 CPMEM capture: back the channel-parameter memory with RAM so the
++     * mxc_sdc_fb driver's geometry writes are retained, letting the scanout
++     * read the live line stride and pick 16bpp (UI) vs 32bpp (splash). */
++    {
++        static MemoryRegion ipu1_cpmem;
++        memory_region_init_ram(&ipu1_cpmem, OBJECT(dev), "imx6.ipu1-cpmem",
++                               IPU1_CPMEM_SIZE, &error_abort);
++        memory_region_add_subregion_overlap(get_system_memory(),
++                                             IPU1_CPMEM_BASE, &ipu1_cpmem, 1);
++        ipu_cpmem_ram = memory_region_get_ram_ptr(&ipu1_cpmem);
++    }
++
 +    /* The XDJ-RX front-panel MCU (Subucom) SSI slave is attached to ECSPI2 by
 +     * the machine (hw/arm/sabrelite.c), after the SoC is realized. */
 +
      /* ROM memory */
      if (!memory_region_init_rom(&s->rom, OBJECT(dev), "imx6.rom",
                                  FSL_IMX6_ROM_SIZE, errp)) {
-@@ -502,6 +827,10 @@
+@@ -502,6 +998,10 @@
                               &s->ocram, 0, FSL_IMX6_OCRAM_ALIAS_SIZE);
      memory_region_add_subregion(get_system_memory(), FSL_IMX6_OCRAM_ALIAS_ADDR,
                                  &s->ocram_alias);
