@@ -34,7 +34,7 @@ if [ -f "$Q/sd.img" ]; then
 fi
 
 # Console is on the 2nd serial (ttymxc1); wire it to your terminal. Ctrl-A X quits.
-exec "$QEMU" -M sabrelite -smp 1 -m 1024 -no-reboot -display none \
+exec "$QEMU" -M sabrelite -smp 1 -m 1024 -no-reboot -name "Pioneer XDJ-RX" -display none \
   -device loader,file="$Q/vmlinux.bin",addr=0x10008000,force-raw=on \
   -device loader,file="$Q/atags.bin",addr=0x10000100,force-raw=on \
   -device loader,file="$Q/tramp.bin",addr=0x10000000,cpu-num=0 \
