@@ -1,9 +1,20 @@
 a/hw/arm/fsl-imx6.c	2026-08-11 18:40:25
-+++ b/hw/arm/fsl-imx6.c	2026-11-04 11:42:05
-@@ -107,9 +107,78 @@
-                             TYPE_OR_IRQ);
- }
++++ b/hw/arm/fsl-imx6.c	2026-11-04 13:35:58
+@@ -31,6 +31,8 @@
+ #include "qemu/error-report.h"
+ #include "qemu/module.h"
+ #include "target/arm/cpu-qom.h"
++#include "ui/console.h"
++#include "system/address-spaces.h"
  
+ #define IMX6_ESDHC_CAPABILITIES     0x057834b4
+ 
+@@ -105,11 +107,121 @@
+     object_initialize_child(obj, "pcie", &s->pcie, TYPE_DESIGNWARE_PCIE_HOST);
+     object_initialize_child(obj, "pcie4-msi-irq", &s->pcie4_msi_irq,
+                             TYPE_OR_IRQ);
++}
++
 +/*
 + * Minimal Vivante GPU (GC2000 3D / GC320 2D) register stub.
 + *
@@ -72,6 +83,47 @@ a/hw/arm/fsl-imx6.c	2026-08-11 18:40:25
 +    .valid = { .min_access_size = 4, .max_access_size = 4 },
 +};
 +
++/*
++ * XDJ-RX framebuffer scanout.
++ *
++ * QEMU does not model the i.MX6 IPU display path, but the vendor mxc_sdc_fb
++ * driver still allocates and configures the framebuffer (480x800 ARGB8888) in
++ * DRAM at a fixed address, and userspace draws into it. We register a graphic
++ * console that scans that memory out to a window / screendump. This is a
++ * read-only mirror of the framebuffer; no IPU registers are driven.
++ */
++#define XDJ_FB_BASE    0x18000000
++#define XDJ_FB_WIDTH   480
++#define XDJ_FB_HEIGHT  800
++
++static QemuConsole *xdj_fb_con;
++
++static bool xdj_fb_gfx_update(void *opaque)
++{
++    DisplaySurface *ds = qemu_console_surface(xdj_fb_con);
++    uint8_t *dst;
++    int stride, y;
++
++    if (!ds) {
++        return false;
++    }
++    dst = surface_data(ds);
++    stride = surface_stride(ds);
++    /* fb is ARGB8888 little-endian (B,G,R,A bytes) == native x8r8g8b8 surface */
++    for (y = 0; y < XDJ_FB_HEIGHT; y++) {
++        address_space_read(&address_space_memory,
++                           XDJ_FB_BASE + (hwaddr)y * XDJ_FB_WIDTH * 4,
++                           MEMTXATTRS_UNSPECIFIED,
++                           dst + (size_t)y * stride, XDJ_FB_WIDTH * 4);
++    }
++    qemu_console_update(xdj_fb_con, 0, 0, XDJ_FB_WIDTH, XDJ_FB_HEIGHT);
++    return true;
+ }
+ 
++static const GraphicHwOps xdj_fb_ops = {
++    .gfx_update = xdj_fb_gfx_update,
++};
++
  static void fsl_imx6_realize(DeviceState *dev, Error **errp)
  {
      MachineState *ms = MACHINE(qdev_get_machine());
@@ -79,7 +131,7 @@ a/hw/arm/fsl-imx6.c	2026-08-11 18:40:25
      FslIMX6State *s = FSL_IMX6(dev);
      uint16_t i;
      qemu_irq irq;
-@@ -473,6 +542,18 @@
+@@ -473,6 +585,18 @@
      create_unimplemented_device("pcie-phy", FSL_IMX6_PCIe_ADDR,
                                  FSL_IMX6_PCIe_SIZE);
  
@@ -98,3 +150,14 @@ a/hw/arm/fsl-imx6.c	2026-08-11 18:40:25
      /* ROM memory */
      if (!memory_region_init_rom(&s->rom, OBJECT(dev), "imx6.rom",
                                  FSL_IMX6_ROM_SIZE, errp)) {
+@@ -502,6 +626,10 @@
+                              &s->ocram, 0, FSL_IMX6_OCRAM_ALIAS_SIZE);
+     memory_region_add_subregion(get_system_memory(), FSL_IMX6_OCRAM_ALIAS_ADDR,
+                                 &s->ocram_alias);
++
++    /* Framebuffer scanout console (mirror of the mxc_sdc_fb memory) */
++    xdj_fb_con = qemu_graphic_console_create(dev, 0, &xdj_fb_ops, NULL);
++    qemu_console_resize(xdj_fb_con, XDJ_FB_WIDTH, XDJ_FB_HEIGHT);
+ }
+ 
+ static const Property fsl_imx6_properties[] = {

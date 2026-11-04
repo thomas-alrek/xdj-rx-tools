@@ -9,12 +9,14 @@
 #       they self-clear, so it spun forever. Make those bits self-clearing.
 #
 #   patches/02-fsl-imx6-gpu-stub.patch
-#       QEMU maps no device at the Vivante GPU registers (0x00130000), so
-#       galcore's reset/identify reads returned 0 and it looped. Add a tiny
-#       register stub: reports the GPU idle, echoes the clock-control status
-#       bits (16/17) that _ResetGPU() waits for, and reports a GC2000. galcore's
-#       reset then completes, its probe fails gracefully (no real GPU), and the
-#       kernel boots on to its init.
+#       Two additions to the i.MX6 machine:
+#       (a) Vivante GPU register stub at 0x00130000 — reports the GPU idle,
+#           echoes the clock-control status bits (16/17) that _ResetGPU() waits
+#           for, and reports a GC2000. galcore's reset then completes, its probe
+#           fails gracefully (no real GPU), and the kernel boots on to its init.
+#       (b) Framebuffer scanout console — mirrors the mxc_sdc_fb memory
+#           (480x800 ARGB8888 at 0x18000000) to a QEMU graphic console, so the
+#           display is capturable (monitor 'screendump') and showable (-display).
 #
 # Result: the kernel reaches "Freeing init memory" and runs the firmware's
 # embedded initramfs /init (see build/qemu/boot-userspace-2.21.log).

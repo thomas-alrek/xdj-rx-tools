@@ -159,16 +159,38 @@ Notes / limits:
 - `/dev/fb0` exists (major 29). Non-fatal: the USB-gadget module and some
   peripheral pokes fail (no hardware).
 
-## Next steps — GUI bringup
+## Display — framebuffer scanout works
+
+QEMU models no i.MX6 IPU, but the `mxc_sdc_fb` driver still allocates and
+configures the framebuffer (**480×800 ARGB8888 at physical `0x18000000`**) and
+userspace draws into it. A small **scanout device** added to the i.MX6 machine
+(`qemu/patches/02-…`) registers a graphic console that mirrors that memory, so
+the display is capturable and showable:
+
+```bash
+# activate the LCD framebuffer via the kernel cmdline (in atags), then:
+./qemu_run.sh -display cocoa          # live 480×800 window (or gtk/sdl)
+# or headless capture via the monitor:
+#   (qemu) screendump out.ppm          -> 480×800 image of /dev/fb0
+```
+
+Verified end-to-end: writing a test image to `/dev/fb0` in the guest appears
+pixel-exact in `screendump` (`build/qemu/display2.png`). To activate fb0, the
+ATAGs cmdline needs `video=mxcfb0:dev=lcd,480x800M@60,if=RGB24,bpp=32`.
+
+Caveat: with no IPU interrupt, the fb driver's display-enable **times out**
+(~80 s one-time at boot) rather than completing instantly. A later step adds the
+IPU vsync IRQ to the scanout device to make enable + page-flips fast.
+
+## Next steps — rendering the real UI
 
 1. **Deliver the GUI assets** (`gui.tar.gz`: `pset/` fonts + imagedata) to the
    app via the path it expects, without blowing the 48 MB root tmpfs (a separate
    partition/mount, as on the device).
-2. **Model the i.MX6 IPU display** in QEMU so `/dev/fb0` scans out to a window
-   (480×800). QEMU has no i.MX6 display device; this is the main graphics work.
-3. **Run the app** (`rbp`): DirectFB should fall back to **software rendering**
-   (no `libg2d`/galcore GPU); handle the panel-MCU (`subcom`), audio, and any
-   UBIFS data the app expects.
+2. **Run the app** (`rbp`): DirectFB should fall back to **software rendering**
+   (no `libg2d`/galcore GPU) and draw into `/dev/fb0`; handle the panel-MCU
+   (`subcom`), audio, and any UBIFS data the app expects.
+3. **IPU vsync IRQ** in the scanout device: fast boot + smooth page-flips.
 
 (After the GUI is up: mods such as exFAT — the `12-usb-memory-auto-mount.rules`
 USB path — can be tested on this same bed.)
