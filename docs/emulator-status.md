@@ -10,72 +10,30 @@ Legend: ✅ done · 🔶 partial/diagnosed · ⬜ investigated, not started · �
 
 ## ✅ Boot to the live UI (unmodified firmware)
 Splash (32bpp) + main UI (16bpp RGB565) render; dynamic bpp scanout reads the IPU
-display stride. Launch: `qemu/watch-sabresd.sh`. Uses `nand-nogal.img` (the GAL
+display stride. Launch: `qemu/watch.sh`. Uses `nand.img` (the GAL
 DirectFB gfxdriver removed so DirectFB software-renders). Committed.
 
-## 🔶 A. galcore / Vivante stub → fully stock boot
-**`-22` is SOLVED.** Root cause: our 2D GPU stub reported a 3D chip (GC2000), but
-galcore requires the 2D register slot to identify as `gcvHARDWARE_2D`. Fix: the 2D
-core reports **GC320** (model 0x320, rev 0x5007). This is now in the build, **gated
-behind the `XDJ_GPU2D=1` env var** (hw/arm/fsl-imx6.c, patch 02): default = old
-behaviour (2D reports GC2000 → `-22` fast-fails → working nand-nogal UI path
-untouched); `XDJ_GPU2D=1` = full-stock attempt (2D=GC320, clears `-22`, galcore
-loads and boot advances to mount the SD card).
+## ✅ A. galcore / Vivante GPU — resolved by shipping nand.img
+The built-in galcore (Vivante) driver probes at boot and fails `-22` (no real GPU),
+which is harmless: `nand.img` has the one DirectFB GAL gfxdriver
+(`libdirectfb_gal.so`) removed, so the UI software-renders without `/dev/galcore`
+(the GPU is only used for an unreached `g2d_blit`). The baseline GPU register stub
+(patch 02) just makes that `-22` clean rather than a hang.
 
-**Remaining stock-boot blocker — ROOT-CAUSED (2026-11-05, Ghidra on a region ELF):**
-the hang is **NOT galcore itself** and not a GPU IRQ. Clearing `-22` lets galcore's
-2D init enable the GPU AXI/bus clocks, which triggers the **i.MX6 bus-frequency DVFS**
-(`set_high_bus_freq` → `FUN_803cf2c0` disables IRQs → `FUN_803dc544` → the DDR
-frequency-change routine). That routine does a **settling wait for a timer interrupt**
-that never completes under QEMU:
-- **single-core** path `FUN_803dc2d4`: sets CCM `CACRR` (ARM clock-root divider,
-  phys CCM 0x020c4000 +0x10), waits the `CDHIPR` handshake (+0x48), then busy-polls
-  `GICC_HPPIR` (`while (*(GICC+0x18) == 0x3ff)`, phys 0x00a00118) for the next tick.
-- **dual-core** path `FUN_803dc4e8`: both CPUs set a per-core flag, one does the MMDC
-  change, then **both execute `WFI`** (kernel 0x803de134) as the settling delay,
-  expecting a timer tick to wake them.
-The i.MX6 clockevent is the **GPT** (QEMU IRQ 55 = GIC ID 87, enabled) in oneshot
-free-run mode; during the IRQ-disabled DVFS section its OCR1 isn't reprogrammed, so
-the single already-scheduled tick doesn't carry the sequence to completion. **Tested,
-none fix it:** `-smp 1`, `-smp 2` (both CPUs hang at the same WFI), injecting GPT
-ID 87 pending, reprogramming GPT OCR1 ahead (a tick fires — `hrtimer: interrupt took…`
-— but the DVFS still doesn't finish), `-icount shift=auto`, and raising the GPU IRQ
-lines (41/42, the earlier dead-end). The RAM size (256 MB) does not affect it either.
-**This is the i.MX6 DDR DVFS — a known hard-to-emulate feature** (timing-sensitive
-settling + IRAM code + inter-core sync). Fix options (unresolved, needs a design
-call): (A) QEMU-side — model the bus-freq-change completion / deliver the settling
-wake (preferred per the stock-firmware constraint; moderate effort); (B) a QEMU ARM
-`WFI` spurious-wakeup/timeout so the dual-core settling returns (architecturally
-valid; pairs with `-smp 2`); (C) disable the busfreq driver (no cmdline param exists
-on this 3.0.35 kernel, so this means a rootfs/init tweak — conflicts with "stock").
-Until one lands, the UI path is **nand-nogal** (galcore `-22` fast-fails harmlessly).
-The `XDJ_GPU2D=1` gate (patch 02) clears `-22` and advances the boot to exactly this
-DVFS point; the GPU command submission is fully modelled (2D MMU regs 0x400–0x40c =
-0x18400000, FE cmd-buf reg 0x654 = a `WAIT 200; LINK→self` idle loop, kick reg 0x658).
-
-**Option A progress (2026-11-05, patch 04 `imx_gpt_kick` + CACRR trap in patch 02):**
-delivering the settling tick works — trapping the CCM `CACRR` (0x020c4010) write (the
-bus-freq clock step) and calling `imx_gpt_kick()` (force a GPT OF1 interrupt) clears
-the settling wait, and the stock boot now advances **past** the first DVFS point
-(verified via gdb: the busfreq WFI/poll at 0x803dc2ac/0x803de134 no longer blocks).
-**But it then retry-loops** in the clk/busfreq framework (PCs cycle 0x807a3xxx clk ⇄
-`FUN_803dc064` PLL-config ⇄ 0x803f0bxx; busfreq state `DAT_80d12848` frozen at 0x3f).
-Root cause of the loop: **QEMU models no MMDC** (DDR controller, phys 0x021b0000), so
-the actual DDR frequency transition the bus-freq performs never takes effect / passes
-its verification, and the clk framework keeps retrying. So finishing stock boot via
-(A) now means **modelling the i.MX6 MMDC + DDR DVFS transition**, not just the tick —
-a substantial undertaking. Secondary issue this exposed: under wall-clock TCG the long
-IRQ-masked bus-freq lets the GPT accumulate large real-time, so the kick's tick makes
-the kernel process a huge time delta → `hrtimer: interrupt took …` storm → the guest
-can't catch up to real time. `-icount` fixes the storm (virtual time = instructions)
-but is much slower and does not resolve the MMDC retry-loop. Net: the `imx_gpt_kick`
-mechanism is correct and committed (gated), but full stock boot is blocked on the
-MMDC/DVFS model — reassess (A) scope vs. (B)/(C) before investing further.
-**RE tooling that cracked it:** QEMU `-gdb tcp::<port>` + raw-RSP Python client
-(halt/`g`/`m`/`M`, multi-CPU via `Hg<n>`), kernel VA→phys page-table walk
-(swapper_pg_dir VA 0x80004000), and **Ghidra via REA on a 160 KB region ELF**
-(0x803c0000–0x803e8000 extracted at its real base — the full 13 MB kernel times out
-Ghidra's import, but a sliced region decompiles in seconds).
+**Why not a byte-for-byte rootfs?** Making galcore fully initialise is blocked by a
+feature QEMU does not model. Deep RE (the `-22` was root-caused and cleared; boot then
+hangs) showed the real blocker is **not galcore** but the **i.MX6 bus-frequency DVFS**
+it triggers once the GPU clocks are enabled: `set_high_bus_freq` does an ARM-clock /
+DDR frequency change with CPU IRQs masked, waits for a settling timer tick, and — even
+once that tick is delivered — **retry-loops in the clk framework because QEMU models no
+MMDC** (DDR controller, phys 0x021b0000), so the DDR frequency transition never
+completes/verifies. Closing it would mean modelling the i.MX6 MMDC + DDR DVFS, a
+substantial undertaking, so the experiment was removed (it lives in git history:
+commits for the 2D-core identity + `imx_gpt_kick` + CCM CACRR trap) and we ship the
+gfxdriver-removed image. The GPU does no work in the idle UI, so nothing is lost
+visually. RE tooling used: QEMU `-gdb` + a raw-RSP python client, kernel VA→phys
+page-table walk, and Ghidra (REA) on a sliced region ELF (the full 13 MB kernel times
+out Ghidra's import).
 
 ## 🔶 B. Ethernet → Pro DJ Link
 FEC is modeled; `-nic user,id=net0` attaches and the FEC driver loads

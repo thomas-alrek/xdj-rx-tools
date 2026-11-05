@@ -30,7 +30,7 @@ Boot splash (32bpp)
  Main UI (16bpp RGB565)
 
 *Actual emulator framebuffer (800×480) captured from the running QEMU instance —
-see [`qemu/watch-sabresd.sh`](qemu/watch-sabresd.sh).*
+see [`qemu/watch.sh`](qemu/watch.sh).*
 
 ---
 
@@ -114,13 +114,13 @@ python3 fetch_key.py          # or: uv run fetch_key.py
 # The .UPD argument may also be the Pioneer-shipped .zip that contains it —
 # the tool finds and unwraps the .UPD member automatically:
 #   python3 xdjrx_upd.py info  XDJ-RX_v2.21.zip
-#   python3 xdjrx_upd.py decrypt XDJ-RX_v2.21.zip -o build/XDJRX_2.21.iso
+#   python3 xdjrx_upd.py decrypt XDJ-RX_v2.21.zip -o build/XDJRX.iso
 
 # Inspect (verifies key + footer CRC, finds the ISO9660 magic)
 python3 xdjrx_upd.py info XDJRX.UPD
 
 # Decrypt to an ISO you can mount/inspect
-python3 xdjrx_upd.py decrypt XDJRX.UPD -o build/XDJRX_2.21.iso
+python3 xdjrx_upd.py decrypt XDJRX.UPD -o build/XDJRX.iso
 
 # Decrypt AND unpack the ISO tree — pure-Python (pycdlib), cross-platform,
 # no mounting; falls back to 7z / bsdtar / hdiutil only if pycdlib is absent
@@ -214,34 +214,44 @@ kernel rebuild. Start with FUSE.
 
 ---
 
-## 5. QEMU boot — **interactive shell working** (see [QEMU.md](QEMU.md))
+## 5. QEMU boot — **the live UI runs** (see [QEMU.md](QEMU.md))
 
-The **unmodified firmware boots in QEMU all the way to an interactive root
-shell.** The kernel runs full device init, hands off to the firmware's own
-embedded `/init`, which boots the real rootfs from an **SD card** (the firmware's
-own SD-boot mode) and reaches a login shell.
+The **unmodified firmware boots in QEMU all the way to its live UI** — the
+Pioneer DJ / rekordbox splash, then the main deck screen (DECK1/DECK2, BEAT
+EFFECTS, BPM/TEMPO). One command does everything from scratch:
 
 ```bash
-qemu/build-qemu.sh                                         # patched QEMU (once, ~15 min)
-python3 xdjrx_upd.py decrypt XDJRX.UPD -o build/XDJRX_2.21.iso
-python3 qemu_prepare.py                                    # kernel boot blobs
-qemu/build-nand.sh                                           # SD rootfs (needs Docker)
-./qemu_run.sh                                              # login: root (no password)
+./run.sh      # download firmware → key → decrypt → build QEMU → build nand.img → launch
 ```
 
-What it took (all **emulator-side, firmware untouched**):
+`run.sh` is idempotent (skips finished steps). The individual steps:
+
+```bash
+./run.sh            # or, by hand:
+qemu/build-qemu.sh                                         # patched QEMU (once, ~15 min)
+python3 xdjrx_upd.py decrypt XDJRX.UPD -o build/XDJRX.iso  # decrypt firmware
+python3 qemu_prepare.py                                    # kernel boot blobs
+qemu/build-nand.sh                                         # nand image (needs Docker)
+qemu/watch.sh                                              # live display + serial console
+```
+
+What it took (all **emulator-side, firmware untouched** except one removed file):
 - **Machine-id trampoline** — QEMU's `-M sabrelite` passes board-id `-1`; this
   ATAG kernel rejects it (silent spin in `dump_machine_table`). A tiny trampoline
-  supplies machine id **3769** + hand-built ATAGs via `-device loader`.
-- **Two i.MX6 QEMU patches** (`qemu/patches/`) — make the SRC GPU-reset bits
-  self-clearing and add a Vivante GPU register stub, so the kernel gets past the
-  `galcore` GPU driver (which then fails its probe gracefully).
-- **SD rootfs** (`qemu/build-nand.sh`) — assembled from the firmware's own payloads
-  (`rootfs.cramfs` + `pioneer.tar.gz`), as ext4 with kernel-3.0.35-compatible
-  features, booted via the firmware's SD mode.
-
-Full diagnosis and the **GUI-bringup** next steps (IPU display model, GUI asset
-delivery, running the app with software rendering) are in **[QEMU.md](QEMU.md)**.
+  supplies the real board's machine id **3980 (SABRE-SD)** + hand-built ATAGs
+  (incl. `ATAG_REVISION=0x500`, which binds the `subucom` panel MCU) via
+  `-device loader`.
+- **Three i.MX6 QEMU patches** (`qemu/patches/`) — self-clearing SRC GPU-reset
+  bits; a Vivante GPU register stub + a live framebuffer scanout (reads the IPU
+  display stride, decodes 32bpp splash / 16bpp RGB565 UI) + IPU vsync IRQ; and the
+  SABRE-SD board wiring (uSDHC3 nand, ECSPI2 subucom slave).
+- **nand image** (`qemu/build-nand.sh`) — assembled from the firmware's own
+  payloads (`rootfs.cramfs` + `pioneer.tar.gz` + `gui.tar.gz`) as a 256 MB ext4
+  image. The **one** change vs. a byte-for-byte rootfs: the Vivante GAL DirectFB
+  gfxdriver (`libdirectfb_gal.so`) is removed so DirectFB software-renders without
+  `/dev/galcore` — QEMU can't emulate the i.MX6 DDR bus-frequency DVFS the GPU
+  driver needs, and the GPU does no work in the idle UI anyway. See
+  [docs/emulator-status.md](docs/emulator-status.md).
 
 ---
 
@@ -269,19 +279,18 @@ Source tree of note:
 Tracked in git (the whole repository):
 
 ```
+run.sh                   one command: download → key → decrypt → build → launch
 xdjrx_upd.py             decrypt / info / extract / pack the .UPD (reads key from .env)
 fetch_key.py             resolve the AES key from Pioneer's GPL source -> .env
 qemu_prepare.py          build the QEMU kernel boot blobs (kernel, trampoline, ATAGs)
-qemu_run.sh              boot the firmware in QEMU (attaches the SD if built)
 requirements.txt         Python deps (pip install -r; also PEP 723 in each script)
 README.md / QEMU.md      this document / the QEMU bring-up writeup
 .gitignore               excludes .env, build/ and the firmware image
 docs/img/                bring-up screenshots used in this README
 qemu/build-qemu.sh       build the patched QEMU (applies qemu/patches/*.patch)
-qemu/build-nand.sh         assemble the SD rootfs image (uses cramfs_extract.py)
+qemu/build-nand.sh       assemble the nand image (uses cramfs_extract.py)
 qemu/cramfs_extract.py   extract the firmware's rootfs.cramfs
-qemu/watch-sabresd.sh    boot to the live UI on the real SABRE-SD board (default)
-qemu/watch.sh            boot the sabrelite variant (dev=lcd)
+qemu/watch.sh            launch the emulator — live UI on the real SABRE-SD board
 qemu/patches/            01 SRC GPU-reset · 02 i.MX6 GPU/IPU/scanout stubs · 03 SABRE-SD SD
 ```
 
@@ -296,8 +305,8 @@ Generated by the scripts (git-ignored, see `.gitignore`):
 ```
 .env                     XDJRX_AES_KEY=<hex>   (created by fetch_key.py)
 build/aes256.key         passphrase cached from the GPL source
-build/XDJRX_2.21.iso     decrypted ISO9660 image (mountable)
-build/qemu/              kernel, boot blobs, nand.img / nand-nogal.img, reference logs
+build/XDJRX.iso          decrypted ISO9660 image (mountable)
+build/qemu/              kernel, boot blobs, nand.img, reference logs
 build/qemu-src/          the patched QEMU source + build
 ```
 
@@ -305,6 +314,7 @@ build/qemu-src/          the patched QEMU source + build
 
 - [x] `.UPD` format fully specified; decrypt + byte-exact re-pack working
 - [x] Update mechanism, boot flow, NAND layout, component inventory mapped
-- [x] **Firmware boots in QEMU (unmodified) to an interactive shell** — [QEMU.md](QEMU.md)
-- [ ] **GUI bringup**: IPU display model + GUI asset delivery + run the app (software render)
+- [x] **Firmware boots in QEMU to its live UI** (one gfxdriver removed) — [QEMU.md](QEMU.md)
+- [x] **GUI bringup** done: IPU display model, framebuffer scanout, app runs (software render)
+- [ ] **Button input**: inject the Subucom panel-MCU SPI frames (buttons/jogs/faders)
 - [ ] exFAT mod: patch `12-usb-memory-auto-mount.rules`; cross-compile `fuse-exfat`

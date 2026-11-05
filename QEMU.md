@@ -18,14 +18,16 @@ steps").
 qemu/build-qemu.sh
 
 # 2. Decrypt the firmware and prepare the kernel boot blobs.
-python3 xdjrx_upd.py decrypt XDJRX.UPD -o build/XDJRX_2.21.iso
+python3 xdjrx_upd.py decrypt XDJRX.UPD -o build/XDJRX.iso
 python3 qemu_prepare.py
 
-# 3. Build the SD rootfs image (needs Docker), then boot.
+# 3. Build the nand image (needs Docker), then boot.
 qemu/build-nand.sh
-qemu/watch.sh           # live 800x480 window + serial console (the UI)
-./qemu_run.sh           # headless/serial only (login: root, no password)
+qemu/watch.sh                       # live 800x480 window + serial console (the UI)
+XDJDISPLAY=none qemu/watch.sh       # headless/serial only (login: root, no password)
 ```
+
+(Or just `./run.sh` from the repo root to do all of the above from scratch.)
 
 Reference logs under `build/qemu/`: `boot-2.21.log` (device init),
 `boot-userspace-2.21.log` (kernel → `/init`, no SD), `boot-shell-2.21.log`
@@ -64,7 +66,7 @@ r2 = 0x10000100      ; -> ATAG list (CORE + MEM 1GB@0x10000000 + CMDLINE + NONE)
 pc = 0x10008000      ; kernel entry
 ```
 
-Everything is placed with `-device loader` (see `qemu_run.sh`). Using the
+Everything is placed with `-device loader` (see `qemu/watch.sh`). Using the
 decompressed `vmlinux.bin` (extracted from the zImage's gzip payload) avoids any
 dependence on how the decompressor forwards registers.
 
@@ -80,7 +82,7 @@ dependence on how the decompressor forwards registers.
   is lost.
 - Workaround (no firmware change): cmdline **`console=ttymxc1,115200
   earlyprintk keep_bootcon`** — keep the working polled console alive. In
-  `qemu_run.sh` serial index 1 is wired to your terminal (`-serial null -serial
+  `qemu/watch.sh` serial index 1 is wired to your terminal (`-serial null -serial
   mon:stdio`).
 
 ## The GPU patches (why the firmware now boots to userspace)
@@ -147,7 +149,7 @@ mode. `qemu/build-nand.sh` assembles an SD image from the firmware's own payload
   features kernel 3.0.35 can mount** (no `metadata_csum`/`64bit`/`orphan_file`).
   The root password is cleared so the firmware's getty logs straight in.
 
-Boot (`qemu_run.sh` attaches `build/qemu/nand.img` to `sdhc4` = `mmc0`):
+Boot (`qemu/watch.sh` attaches `build/qemu/nand.img` to `sdhc4` = `mmc0`):
 
 ```
 ### rootfs = sd ###                          ← fw_printenv read the SD env
@@ -173,7 +175,7 @@ the display is capturable and showable:
 
 ```bash
 # activate the LCD framebuffer via the kernel cmdline (in atags), then:
-./qemu_run.sh -display cocoa          # live 480×800 window (or gtk/sdl)
+./qemu/watch.sh -display cocoa          # live 480×800 window (or gtk/sdl)
 # or headless capture via the monitor:
 #   (qemu) screendump out.ppm          -> 480×800 image of /dev/fb0
 ```
@@ -236,7 +238,7 @@ codecs on bus 0. (Found by disassembling the kernel's board inits and
 `xdj_spi_device_init` with `build/qemu/vmlinux.elf` and REA.)
 
 Booting the **unmodified** firmware under its own SABRE-SD init needs three
-things on the QEMU side, all now in place (`qemu/watch-sabresd.sh`):
+things on the QEMU side, all now in place (`qemu/watch.sh`):
 
 - **`MACH_TYPE 3980` + `ATAG_REVISION=0x500`.** `xdj_spi_device_init` reads
   `system_rev` and only registers the subucom/codec `spi_board_info` when its
@@ -262,7 +264,7 @@ slave stub, `XDJ_SUBUCOM=1`) is the path to the interactive main screen.
 
 ## Files
 
-Tracked: `qemu_prepare.py` (kernel boot blobs), `qemu_run.sh` (boot, attaches SD
+Tracked: `qemu_prepare.py` (kernel boot blobs), `qemu/watch.sh` (boot, attaches SD
 if present), `qemu/build-qemu.sh` + `qemu/patches/*.patch` (the patched QEMU),
 `qemu/build-nand.sh` + `qemu/cramfs_extract.py` (the SD rootfs). Generated under
 `build/qemu/` (git-ignored): `uImage`, `vmlinux.bin`, `tramp.bin`, `atags.bin`,
