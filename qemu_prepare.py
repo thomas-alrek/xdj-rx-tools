@@ -12,7 +12,7 @@ It produces, under build/qemu/:
   vmlinux.bin   the gzip payload inside the zImage, decompressed (the raw kernel)
   tramp.bin     tiny ARM trampoline: sets r0=0, r1=3769 (MACH_TYPE sabrelite),
                 r2=ATAGs, then jumps to the kernel entry
-  atags.bin     hand-built ATAG list (CORE + MEM 1GB@0x10000000 + CMDLINE + NONE)
+  atags.bin     hand-built ATAG list (CORE + MEM 256MB@0x10000000 + CMDLINE + NONE)
 
 Why the trampoline + manual boot?  QEMU's 'sabrelite' is a device-tree machine;
 it passes board-id -1.  The firmware's Freescale 3.0.35 kernel is ATAG-based and
@@ -38,7 +38,7 @@ MACH_TYPE_SABRESD   = 3980         # 0x0F8C, the board the XDJ-RX firmware actua
 BOARD_REV_SABRESD   = 0x00000500   # system_rev; rev field (bits 8-11) gates the XDJ
                                    # spi_board_info (subucom + AK4387), see ATAG_REVISION
 RAM_BASE = 0x10000000
-RAM_SIZE = 0x40000000              # 1 GiB
+RAM_SIZE = 0x10000000              # 256 MiB (real XDJ-RX: i.MX6 DualLite/Solo, 256 MB DDR)
 # ttymxc1 = UART2 = the port QEMU exposes; keep_bootcon keeps the working polled
 # early console alive (the full imx-uart driver's TX doesn't reach QEMU's chardev).
 # video=mxcfb0 activates the 800x480 (landscape, matching the physical panel) LCD

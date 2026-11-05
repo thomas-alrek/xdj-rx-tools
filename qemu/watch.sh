@@ -38,7 +38,7 @@ SD="${1:-$Q/sd.img}"
 [ -f "$SD" ] || { echo "no SD image: $SD  (run qemu/build-sd.sh)"; exit 1; }
 
 SMP="${XDJSMP:-1}"   # single-core (fast) by default; XDJSMP=2 for the real dual-core
-exec "$QEMU" -M sabrelite -smp "$SMP" -m 1024 -no-reboot \
+exec "$QEMU" -M sabrelite -smp "$SMP" -m 256 -no-reboot \
   -name "Pioneer XDJ-RX" \
   -display cocoa \
   -device loader,file="$Q/vmlinux.bin",addr=0x10008000,force-raw=on \

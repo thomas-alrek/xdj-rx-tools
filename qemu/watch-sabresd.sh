@@ -58,7 +58,7 @@ done
 SMP="${XDJSMP:-1}"   # single-core (fast) by default; XDJSMP=2 for the real dual-core
 
 # sabresd console is ttymxc0 = serial 0 -> wire it to this terminal (Ctrl-A X quits).
-exec "$QEMU" -M sabrelite -smp "$SMP" -m 1024 -no-reboot \
+exec "$QEMU" -M sabrelite -smp "$SMP" -m 256 -no-reboot \
   -name "Pioneer XDJ-RX (SABRE-SD)" \
   -display cocoa,zoom-to-fit=on,zoom-interpolation=on \
   -device loader,file="$Q/vmlinux.bin",addr=0x10008000,force-raw=on \

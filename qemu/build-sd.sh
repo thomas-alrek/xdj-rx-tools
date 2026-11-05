@@ -88,7 +88,7 @@ sed -i "/^mkdir -p \/root\/gui/a\\mount -t ext4 -o ro /dev/mmcblk0p2 /root/gui 2
 sed -i "/^cd \/root\/pioneer/a\\echo 1 > /proc/sys/kernel/print-fatal-signals 2>/dev/null" "$A"
 
 mke2fs -q -t ext4 -O ^metadata_csum,^64bit,^orphan_file,^metadata_csum_seed \
-       -b 1024 -d tree -F p1.ext4 500000
+       -b 1024 -d tree -F p1.ext4 150000
 
 # ---- partition 2: GUI assets ------------------------------------------------
 mkdir -p gui; tar xzf /b/gui.tar.gz -C gui
@@ -98,11 +98,11 @@ mke2fs -q -t ext4 -O ^metadata_csum,^64bit,^orphan_file,^metadata_csum_seed \
 # ---- assemble the SD image --------------------------------------------------
 printf "rootfs=sd\nmmcdev=/dev/mmcblk0p1\nboot_type=normal\nubifs_formatted=true\nbootdelay=0\n" > env.txt
 mkenvimage -s 0x2000 -o env.bin env.txt
-dd if=/dev/zero of=sd.img bs=1M count=1024 status=none            # 1 GiB (power of 2)
+dd if=/dev/zero of=sd.img bs=1M count=256 status=none             # 256 MiB (real XDJ-RX NAND)
 dd if=env.bin of=sd.img bs=1 seek=786432 conv=notrunc status=none # env @ 0xC0000
-printf "label: dos\nstart=4096, size=1000000, type=83\nstart=1004096, type=83\n" | sfdisk sd.img >/dev/null 2>&1
+printf "label: dos\nstart=4096, size=307200, type=83\nstart=311296, type=83\n" | sfdisk sd.img >/dev/null 2>&1
 dd if=p1.ext4 of=sd.img bs=512 seek=4096    conv=notrunc status=none
-dd if=p2.ext4 of=sd.img bs=512 seek=1004096 conv=notrunc status=none
+dd if=p2.ext4 of=sd.img bs=512 seek=311296  conv=notrunc status=none
 cp sd.img /b/sd.img
 '
 mv "$Q/sdbuild/sd.img" "$Q/sd.img"
