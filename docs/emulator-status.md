@@ -14,16 +14,38 @@ display stride. Launch: `qemu/watch-sabresd.sh`. Uses `sd-nogal.img` (the GAL
 DirectFB gfxdriver removed so DirectFB software-renders). Committed.
 
 ## 🔶 A. galcore / Vivante stub → fully stock boot
-Root-caused the `galcore probe … -22`: our 2D GPU stub reported a 3D chip (GC2000),
-but galcore requires the 2D register slot to be type `gcvHARDWARE_2D`. **Fix found**
-(per-core identity: 3D=GC2000, 2D=GC320) clears the -22 — saved at
-`scratchpad/fsl-imx6-with-2d-identity.c`, reverted from the build because galcore
-(a built-in initcall) then proceeds into 2D init and **hangs the kernel boot** on:
-(1) a `__mxs_reset_block` reset-poll timeout (slow, bounded) and (2) an infinite
-WFI completion-wait needing the 2D core's IRQ+completion faking. Finishing = a
-minimal 2D-core model (identity + IRQ + completion + reset-done). Full notes in
-memory `galcore-minus22-solved`. Until then, `-22` fast-fails harmlessly and the UI
-path works via sd-nogal.
+**`-22` is SOLVED.** Root cause: our 2D GPU stub reported a 3D chip (GC2000), but
+galcore requires the 2D register slot to identify as `gcvHARDWARE_2D`. Fix: the 2D
+core reports **GC320** (model 0x320, rev 0x5007). This is now in the build, **gated
+behind the `XDJ_GPU2D=1` env var** (hw/arm/fsl-imx6.c, patch 02): default = old
+behaviour (2D reports GC2000 → `-22` fast-fails → working sd-nogal UI path
+untouched); `XDJ_GPU2D=1` = full-stock attempt (2D=GC320, clears `-22`, galcore
+loads and boot advances to mount the SD card).
+
+**Remaining stock-boot blocker (precisely localized, needs more RE):** with `-22`
+cleared, galcore's 2D init reaches a **busy-poll** at kernel `0x803dc2ac`:
+`while (GICC_HPPIR == 0x3ff) dsb/isb;` — i.e. it polls the **GIC CPU interface's
+Highest-Priority-Pending register** (phys `0x00a00118`, galcore's ioremap
+`0xf2a00100`; A9 PERIPHBASE = phys `0x00a00000`) waiting for *some* interrupt to go
+pending, with CPU IRQs masked (`cpsr.I=1`; nearby galcore code does `cpsie i`). The
+GIC Distributor (VA `0xf2a01000`) shows the enabled SPI set does **not** include the
+GPU lines (ID 41 = GPU3D / ID 42 = GPU2D) — they only appear in ISPENDR once the
+stub raises them, and *pending+disabled never reaches HPPIR*. So galcore is waiting
+on a **different, enabled interrupt source** (enabled IDs include 34,35,37,38,44,…),
+not the per-core GPU IRQ. Attempts that did **not** unblock it: raise R2D (ID 42)
+synchronously, raise it from a timer after the kick, and raise both GPU lines
+(41+42). Next: identify which enabled interrupt galcore's 2D init actually waits on
+(disassemble the galcore caller at ~`0x806eee58`/`0x806f27f0` and its arch helper
+`0x803cf2e0`→`0x80360784`→spin), then make that source fire in the model. The
+command submission is understood: galcore sets the 2D MMU (regs 0x400–0x40c =
+0x18400000), writes the FE command-buffer phys addr (reg 0x654 = 0x1827a000; the
+buffer is a `WAIT 200; LINK→self` idle loop), and kicks the FE (reg 0x658 =
+0x00010002). Scaffolding for timer-delivered completion IRQs on both GPU lines is in
+the `XDJ_GPU2D` path (patch 02), ready once the right source is known. Full notes in
+memory `galcore-minus22-solved`. Until finished, the UI path is sd-nogal (`-22`
+fast-fails harmlessly). **RE tooling:** QEMU `-gdb tcp::<port>` + a raw-RSP Python
+client (halt/`g`/`m`/`M`), kernel ELF wrapped at base 0x80008000, page-table walk to
+translate kernel VAs (swapper_pg_dir VA 0x80004000).
 
 ## 🔶 B. Ethernet → Pro DJ Link
 FEC is modeled; `-nic user,id=net0` attaches and the FEC driver loads

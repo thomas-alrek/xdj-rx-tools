@@ -18,7 +18,7 @@
  
  #define IMX6_ESDHC_CAPABILITIES     0x057834b4
  
-@@ -105,11 +109,450 @@
+@@ -105,11 +109,499 @@
      object_initialize_child(obj, "pcie", &s->pcie, TYPE_DESIGNWARE_PCIE_HOST);
      object_initialize_child(obj, "pcie4-msi-irq", &s->pcie4_msi_irq,
                              TYPE_OR_IRQ);
@@ -34,30 +34,72 @@
 + * "idle, all events acknowledged, a GC2000 rev 0x5108" so the driver's init
 + * completes and the kernel boots on to userspace.  No real GPU work happens.
 + */
-+static uint32_t imx6_gpu_clkctrl; /* last value written to AQHiClockControl */
++/*
++ * Each Vivante core (3D @0x130000, 2D @0x134000) has its own identity and IRQ.
++ * galcore reads chipModel/chipRevision to derive the core's gceHARDWARE_TYPE;
++ * the 2D register slot MUST identify as a 2D part (GC320) or gckGALDEVICE_Construct
++ * rejects it with -EINVAL (the "probe of galcore.0 failed with error -22").
++ */
++typedef struct XdjGpuCore {
++    qemu_irq irq;       /* this core's GIC line (for faking command completion) */
++    uint32_t model;     /* chipModel    (0x020): GC2000=0x2000, GC320=0x0320     */
++    uint32_t revision;  /* chipRevision (0x024)                                  */
++    uint32_t clkctrl;   /* last AQHiClockControl written                         */
++    QEMUTimer *fe_timer;/* if set, raise the completion IRQ a short delay after  */
++                        /* the command kick (so galcore sees it once it is in    */
++                        /* its GIC poll loop with the IRQ enabled), instead of    */
++                        /* raising synchronously on the register write.           */
++    qemu_irq sibling_irq;/* the other GPU core's GIC line; when set, completion  */
++                        /* is delivered (and acked) on BOTH lines, so galcore's   */
++                        /* GICC_HPPIR poll is satisfied whether it enabled the    */
++                        /* per-core 2D line or a unified GPU completion IRQ.       */
++} XdjGpuCore;
++
++/*
++ * Models "the GPU finished the submitted command and raised its completion
++ * interrupt".  galcore's probe submits a sync command then, with CPU IRQs
++ * masked, busy-polls the GIC CPU interface (GICC_HPPIR) for the GPU IRQ to
++ * become pending.  A synchronous raise on the kick write can land before
++ * galcore has enabled/EOI'd the line (lost edge); firing from a timer delivers
++ * the completion once galcore is actually waiting for it.
++ */
++static void imx6_gpu_fe_fire(void *opaque)
++{
++    XdjGpuCore *c = opaque;
++    if (c->irq) {
++        qemu_set_irq(c->irq, 1);
++    }
++    if (c->sibling_irq) {
++        qemu_set_irq(c->sibling_irq, 1);
++    }
++}
 +
 +static uint64_t imx6_gpu_stub_read(void *opaque, hwaddr off, unsigned size)
 +{
-+    qemu_irq irq = opaque; /* 3D core: GPU IRQ line; 2D core: NULL */
++    XdjGpuCore *c = opaque;
 +
 +    if (getenv("IMX6_GPU_TRACE")) {
-+        fprintf(stderr, "GPUSTUB rd off=0x%03x\n", (unsigned)off);
++        fprintf(stderr, "GPUSTUB[%04x] rd off=0x%03x\n",
++                (unsigned)c->model, (unsigned)off);
 +    }
 +    switch (off) {
 +    case 0x000:                     /* AQHiClockControl: echo back the last    */
 +        /* value written, with the two "clock running" status bits (16,17) set */
 +        /* so _ResetGPU()'s completion check passes.                           */
-+        return imx6_gpu_clkctrl | 0x00030000u;
++        return c->clkctrl | 0x00030000u;
 +    case 0x004: return 0xffffffffu; /* AQHiIdle          - every module idle  */
 +    case 0x010:                     /* AQIntrAcknowledge - all events complete */
-+        if (irq) {
-+            qemu_set_irq(irq, 0);   /* the ISR read the ack: drop the line     */
++        if (c->irq) {
++            qemu_set_irq(c->irq, 0); /* the ISR read the ack: drop the line    */
++        }
++        if (c->sibling_irq) {
++            qemu_set_irq(c->sibling_irq, 0);
 +        }
 +        return 0xffffffffu;
 +    case 0x018: return 0x00000000u; /* chipIdentity      - take the else path  */
 +    case 0x01c: return 0x00000000u; /* chipFeatures                            */
-+    case 0x020: return 0x00002000u; /* chipModel         - GC2000              */
-+    case 0x024: return 0x00005108u; /* chipRevision      - i.MX6Q GC2000       */
++    case 0x020: return c->model;    /* chipModel                               */
++    case 0x024: return c->revision; /* chipRevision                            */
 +    default:    return 0x00000000u;
 +    }
 +}
@@ -65,23 +107,30 @@
 +static void imx6_gpu_stub_write(void *opaque, hwaddr off, uint64_t val,
 +                                unsigned size)
 +{
-+    qemu_irq irq = opaque;
++    XdjGpuCore *c = opaque;
 +
 +    if (getenv("IMX6_GPU_TRACE")) {
-+        fprintf(stderr, "GPUSTUB wr off=0x%03x val=0x%08x\n",
-+                (unsigned)off, (unsigned)val);
++        fprintf(stderr, "GPUSTUB[%04x] wr off=0x%03x val=0x%08x\n",
++                (unsigned)c->model, (unsigned)off, (unsigned)val);
 +    }
 +    if (off == 0x000) {
-+        imx6_gpu_clkctrl = (uint32_t)val;
++        c->clkctrl = (uint32_t)val;
 +    }
 +    /*
 +     * galcore enables GPU interrupts (AQIntrEnbl, 0x014) and kicks the command
 +     * front-end (AQFEControl, 0x658) then sleeps until the GPU raises its IRQ.
 +     * No GPU runs here, so raise the IRQ ourselves; the driver's ISR reads
-+     * 0x010 (all events "done") and completes the wait.
++     * 0x010 (all events "done") and completes the wait.  This drives both the
++     * 3D core's init and the 2D core's command-completion wait.
 +     */
-+    if (irq && (off == 0x014 || off == 0x658)) {
-+        qemu_set_irq(irq, 1);
++    if (c->irq && (off == 0x014 || off == 0x658)) {
++        if (c->fe_timer) {
++            /* deliver the completion ~200us later, once galcore is polling */
++            timer_mod(c->fe_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++                                   NANOSECONDS_PER_SECOND / 5000);
++        } else {
++            qemu_set_irq(c->irq, 1); /* default path: synchronous (unchanged) */
++        }
 +    }
 +}
 +
@@ -268,8 +317,8 @@
 +        ipu_sync_update_irq();
 +        ipu_irq_arm();    /* driver cleared before a new wait: deliver one frame */
 +    }
-+}
-+
+ }
+ 
 +static const MemoryRegionOps ipu_cm_ops = {
 +    .read = ipu_cm_read,
 +    .write = ipu_cm_write,
@@ -309,8 +358,8 @@
 +    }
 +    s->idx++;
 +    return 0xff;
- }
- 
++}
++
 +static void xdj_subucom_realize(SSIPeripheral *dev, Error **errp)
 +{
 +    /* nothing to set up; state is zero-initialized */
@@ -469,23 +518,57 @@
      FslIMX6State *s = FSL_IMX6(dev);
      uint16_t i;
      qemu_irq irq;
-@@ -472,7 +915,60 @@
-      */
+@@ -473,6 +965,94 @@
      create_unimplemented_device("pcie-phy", FSL_IMX6_PCIe_ADDR,
                                  FSL_IMX6_PCIe_SIZE);
-+
-+    /* Vivante GPU register stubs (3D + 2D) so galcore init completes.
-+     * The 3D region gets the GPU IRQ line so the stub can fake completion. */
-+    memory_region_init_io(&gpu3d_stub, OBJECT(dev), &imx6_gpu_stub_ops,
-+                          qdev_get_gpio_in(gic, FSL_IMX6_GPU3D_IRQ),
-+                          "imx6.gpu3d-stub", FSL_IMX6_GPU_3D_SIZE);
-+    memory_region_add_subregion(get_system_memory(), FSL_IMX6_GPU_3D_ADDR,
-+                                &gpu3d_stub);
-+    memory_region_init_io(&gpu2d_stub, OBJECT(dev), &imx6_gpu_stub_ops, NULL,
-+                          "imx6.gpu2d-stub", FSL_IMX6_GPU_2D_SIZE);
-+    memory_region_add_subregion(get_system_memory(), FSL_IMX6_GPU_2D_ADDR,
-+                                &gpu2d_stub);
  
++    /* Vivante GPU register stubs (3D + 2D) so galcore init completes.
++     * Each core reports its own identity + IRQ.  The 3D core (GC2000) always
++     * reports a 3D part.  The 2D core defaults to the old behaviour (reports
++     * GC2000 too, so galcore fails -22 and fast-aborts, leaving the working
++     * sd-nogal UI path untouched).  Set XDJ_GPU2D=1 to make the 2D slot report
++     * a real 2D part (GC320) + wire its R2D IRQ so full stock galcore init can
++     * proceed (clears -22 and satisfies the 2D command-completion wait). */
++    {
++        static XdjGpuCore gpu3d_core, gpu2d_core;
++        bool gpu2d_full = getenv("XDJ_GPU2D") != NULL;
++
++        gpu3d_core = (XdjGpuCore){
++            .irq      = qdev_get_gpio_in(gic, FSL_IMX6_GPU3D_IRQ),
++            .model    = 0x00002000u,  /* GC2000 */
++            .revision = 0x00005108u,  /* i.MX6Q GC2000 */
++        };
++        memory_region_init_io(&gpu3d_stub, OBJECT(dev), &imx6_gpu_stub_ops,
++                              &gpu3d_core, "imx6.gpu3d-stub",
++                              FSL_IMX6_GPU_3D_SIZE);
++        memory_region_add_subregion(get_system_memory(), FSL_IMX6_GPU_3D_ADDR,
++                                    &gpu3d_stub);
++
++        gpu2d_core = (XdjGpuCore){
++            .irq      = gpu2d_full ?
++                        qdev_get_gpio_in(gic, FSL_IMX6_R2D_IRQ) : NULL,
++            .model    = gpu2d_full ? 0x00000320u : 0x00002000u, /* GC320/GC2000 */
++            .revision = gpu2d_full ? 0x00005007u : 0x00005108u,
++        };
++        if (gpu2d_full) {
++            /* Full stock galcore boot: deliver GPU command-completion IRQs from
++             * a timer so galcore's GICC_HPPIR busy-poll sees them, on BOTH the
++             * 3D and 2D GIC lines (galcore may use a unified GPU completion IRQ
++             * rather than the per-core 2D line). */
++            gpu3d_core.fe_timer =
++                timer_new_ns(QEMU_CLOCK_VIRTUAL, imx6_gpu_fe_fire, &gpu3d_core);
++            gpu2d_core.fe_timer =
++                timer_new_ns(QEMU_CLOCK_VIRTUAL, imx6_gpu_fe_fire, &gpu2d_core);
++            gpu3d_core.sibling_irq = gpu2d_core.irq;
++            gpu2d_core.sibling_irq = gpu3d_core.irq;
++        }
++        memory_region_init_io(&gpu2d_stub, OBJECT(dev), &imx6_gpu_stub_ops,
++                              &gpu2d_core, "imx6.gpu2d-stub",
++                              FSL_IMX6_GPU_2D_SIZE);
++        memory_region_add_subregion(get_system_memory(), FSL_IMX6_GPU_2D_ADDR,
++                                    &gpu2d_stub);
++    }
++
 +    /*
 +     * anatop TEMPSENSE0 stub (ANALOG base + 0x180): report the temperature
 +     * conversion as always finished so anatop_thermal_get_temp() returns at
@@ -530,7 +613,7 @@
      /* ROM memory */
      if (!memory_region_init_rom(&s->rom, OBJECT(dev), "imx6.rom",
                                  FSL_IMX6_ROM_SIZE, errp)) {
-@@ -502,6 +998,10 @@
+@@ -502,6 +1082,10 @@
                               &s->ocram, 0, FSL_IMX6_OCRAM_ALIAS_SIZE);
      memory_region_add_subregion(get_system_memory(), FSL_IMX6_OCRAM_ALIAS_ADDR,
                                  &s->ocram_alias);
