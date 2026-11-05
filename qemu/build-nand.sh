@@ -30,7 +30,7 @@
 #
 # Needs Docker (Linux: symlinks, device nodes, mke2fs).
 #
-# Usage:  qemu/build-sd.sh        # -> build/qemu/sd.img   (then qemu/watch.sh)
+# Usage:  qemu/build-nand.sh        # -> build/qemu/nand.img   (then qemu/watch.sh)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ISO=build/XDJRX_2.21.iso
@@ -98,13 +98,26 @@ mke2fs -q -t ext4 -O ^metadata_csum,^64bit,^orphan_file,^metadata_csum_seed \
 # ---- assemble the SD image --------------------------------------------------
 printf "rootfs=sd\nmmcdev=/dev/mmcblk0p1\nboot_type=normal\nubifs_formatted=true\nbootdelay=0\n" > env.txt
 mkenvimage -s 0x2000 -o env.bin env.txt
-dd if=/dev/zero of=sd.img bs=1M count=256 status=none             # 256 MiB (real XDJ-RX NAND)
-dd if=env.bin of=sd.img bs=1 seek=786432 conv=notrunc status=none # env @ 0xC0000
-printf "label: dos\nstart=4096, size=307200, type=83\nstart=311296, type=83\n" | sfdisk sd.img >/dev/null 2>&1
-dd if=p1.ext4 of=sd.img bs=512 seek=4096    conv=notrunc status=none
-dd if=p2.ext4 of=sd.img bs=512 seek=311296  conv=notrunc status=none
-cp sd.img /b/sd.img
+dd if=/dev/zero of=nand.img bs=1M count=256 status=none             # 256 MiB (real XDJ-RX NAND)
+dd if=env.bin of=nand.img bs=1 seek=786432 conv=notrunc status=none # env @ 0xC0000
+printf "label: dos\nstart=4096, size=307200, type=83\nstart=311296, type=83\n" | sfdisk nand.img >/dev/null 2>&1
+dd if=p1.ext4 of=nand.img bs=512 seek=4096    conv=notrunc status=none
+dd if=p2.ext4 of=nand.img bs=512 seek=311296  conv=notrunc status=none
+cp nand.img /b/nand.img
+
+# ---- nand-nogal.img: the same image with the Vivante GAL DirectFB gfxdriver
+# removed, so DirectFB software-renders without needing /dev/galcore. This is the
+# image that currently boots to the live UI (the stock nand.img needs the galcore
+# /bus-freq DVFS work, see docs/emulator-status.md). One file is removed:
+#   /usr/lib/directfb-1.4-0/gfxdrivers/libdirectfb_gal.so
+cp nand.img nand-nogal.img
+mkdir -p /mnt-nogal
+mount -o loop,offset=2097152 nand-nogal.img /mnt-nogal
+rm -f /mnt-nogal/usr/lib/directfb-1.4-0/gfxdrivers/libdirectfb_gal.so
+sync; umount /mnt-nogal
+cp nand-nogal.img /b/nand-nogal.img
 '
-mv "$Q/sdbuild/sd.img" "$Q/sd.img"
+mv "$Q/sdbuild/nand.img"       "$Q/nand.img"
+mv "$Q/sdbuild/nand-nogal.img" "$Q/nand-nogal.img"
 rm -rf "$Q/sdbuild"
-echo "built $Q/sd.img  ->  qemu/watch.sh   (boots to the UI)"
+echo "built $Q/nand.img (stock) + $Q/nand-nogal.img (UI path)  ->  qemu/watch-sabresd.sh"

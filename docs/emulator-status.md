@@ -10,7 +10,7 @@ Legend: ✅ done · 🔶 partial/diagnosed · ⬜ investigated, not started · �
 
 ## ✅ Boot to the live UI (unmodified firmware)
 Splash (32bpp) + main UI (16bpp RGB565) render; dynamic bpp scanout reads the IPU
-display stride. Launch: `qemu/watch-sabresd.sh`. Uses `sd-nogal.img` (the GAL
+display stride. Launch: `qemu/watch-sabresd.sh`. Uses `nand-nogal.img` (the GAL
 DirectFB gfxdriver removed so DirectFB software-renders). Committed.
 
 ## 🔶 A. galcore / Vivante stub → fully stock boot
@@ -18,7 +18,7 @@ DirectFB gfxdriver removed so DirectFB software-renders). Committed.
 galcore requires the 2D register slot to identify as `gcvHARDWARE_2D`. Fix: the 2D
 core reports **GC320** (model 0x320, rev 0x5007). This is now in the build, **gated
 behind the `XDJ_GPU2D=1` env var** (hw/arm/fsl-imx6.c, patch 02): default = old
-behaviour (2D reports GC2000 → `-22` fast-fails → working sd-nogal UI path
+behaviour (2D reports GC2000 → `-22` fast-fails → working nand-nogal UI path
 untouched); `XDJ_GPU2D=1` = full-stock attempt (2D=GC320, clears `-22`, galcore
 loads and boot advances to mount the SD card).
 
@@ -48,7 +48,7 @@ wake (preferred per the stock-firmware constraint; moderate effort); (B) a QEMU 
 `WFI` spurious-wakeup/timeout so the dual-core settling returns (architecturally
 valid; pairs with `-smp 2`); (C) disable the busfreq driver (no cmdline param exists
 on this 3.0.35 kernel, so this means a rootfs/init tweak — conflicts with "stock").
-Until one lands, the UI path is **sd-nogal** (galcore `-22` fast-fails harmlessly).
+Until one lands, the UI path is **nand-nogal** (galcore `-22` fast-fails harmlessly).
 The `XDJ_GPU2D=1` gate (patch 02) clears `-22` and advances the boot to exactly this
 DVFS point; the GPU command submission is fully modelled (2D MMU regs 0x400–0x40c =
 0x18400000, FE cmd-buf reg 0x654 = a `WAIT 200; LINK→self` idle loop, kick reg 0x658).

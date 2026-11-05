@@ -26,11 +26,11 @@ done
 QEMU="${QEMU:-$(ls build/qemu-src/*/build/qemu-system-arm 2>/dev/null | head -1 || true)}"
 QEMU="${QEMU:-qemu-system-arm}"
 
-# Attach the SD rootfs if built (qemu/build-sd.sh). Without it the kernel boots
+# Attach the SD rootfs if built (qemu/build-nand.sh). Without it the kernel boots
 # to its embedded /init and stops at the root mount; with it, you get a shell.
 SD=()
-if [ -f "$Q/sd.img" ]; then
-  SD=(-drive file="$Q/sd.img",format=raw,id=mysd,if=none -device sd-card,drive=mysd)
+if [ -f "$Q/nand.img" ]; then
+  SD=(-drive file="$Q/nand.img",format=raw,id=mysd,if=none -device sd-card,drive=mysd)
 fi
 
 # Console is on the 2nd serial (ttymxc1); wire it to your terminal. Ctrl-A X quits.

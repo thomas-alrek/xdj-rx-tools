@@ -25,7 +25,7 @@
 # heavily multi-threaded; QEMU emulates two Cortex-A9 cores (with SCU cache
 # coherency + atomics) far slower than one, so the UI comes up much faster on a
 # single core. apl_start normally runs /root/pioneer/rbp only when it sees a
-# second CPU (else rbp_solo, which the firmware does not ship) -- build-sd.sh adds
+# second CPU (else rbp_solo, which the firmware does not ship) -- build-nand.sh adds
 # rbp_solo as a symlink to rbp so the single-core path launches the app too.
 # The console reaches "#### Application Start!! ###" and execs it either way.
 #
@@ -37,7 +37,7 @@
 # both the splash and the UI render correctly -- no firmware/kernel changes.
 #
 # DirectFB's GAL (Vivante GPU) graphics core still needs /dev/galcore, which this
-# model does not provide yet; the default image here (sd-nogal.img) has that one
+# model does not provide yet; the default image here (nand-nogal.img) has that one
 # gfxdriver removed so DirectFB falls back to software rendering (the drawing is
 # all DirectFB software anyway -- the GPU is only used for an unreached g2d_blit).
 # Running the fully stock firmware needs a minimal galcore/Vivante stub (next).
@@ -49,12 +49,12 @@ cd "$(dirname "$0")/.."
 Q=build/qemu
 QEMU="${QEMU:-$(ls build/qemu-src/*/build/qemu-system-arm 2>/dev/null | head -1 || true)}"
 QEMU="${QEMU:-qemu-system-arm}"
-# Default to the UI-rendering image (sd-nogal.img) if present, else sd.img.
-if [ -n "${1:-}" ]; then SD="$1"; elif [ -f "$Q/sd-nogal.img" ]; then SD="$Q/sd-nogal.img"; else SD="$Q/sd.img"; fi
+# Default to the UI-rendering image (nand-nogal.img) if present, else nand.img.
+if [ -n "${1:-}" ]; then SD="$1"; elif [ -f "$Q/nand-nogal.img" ]; then SD="$Q/nand-nogal.img"; else SD="$Q/nand.img"; fi
 for f in vmlinux.bin tramp-sabresd.bin atags-sabresd.bin; do
   [ -f "$Q/$f" ] || { echo "missing $Q/$f — run: python3 qemu_prepare.py" >&2; exit 1; }
 done
-[ -f "$SD" ] || { echo "no SD image: $SD  (run qemu/build-sd.sh)"; exit 1; }
+[ -f "$SD" ] || { echo "no SD image: $SD  (run qemu/build-nand.sh)"; exit 1; }
 SMP="${XDJSMP:-1}"   # single-core (fast) by default; XDJSMP=2 for the real dual-core
 
 # sabresd console is ttymxc0 = serial 0 -> wire it to this terminal (Ctrl-A X quits).

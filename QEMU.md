@@ -22,7 +22,7 @@ python3 xdjrx_upd.py decrypt XDJRX.UPD -o build/XDJRX_2.21.iso
 python3 qemu_prepare.py
 
 # 3. Build the SD rootfs image (needs Docker), then boot.
-qemu/build-sd.sh
+qemu/build-nand.sh
 qemu/watch.sh           # live 800x480 window + serial console (the UI)
 ./qemu_run.sh           # headless/serial only (login: root, no password)
 ```
@@ -133,12 +133,12 @@ now running under emulation.
 Non-fatal emulation gaps (harmless): `mxs-dma` apbh reset timeout, one
 `mxc_sdc_fb` probe conflict, `imx-sdma` CH0 timeout (recovers).
 
-## Boot to a shell via SD (`qemu/build-sd.sh`)
+## Boot to a shell via SD (`qemu/build-nand.sh`)
 
 Without a rootfs, `/init` exits (above). The firmware's `/init` supports three
 rootfs modes (`nand`/`sd`/`nfs`) chosen from the u-boot env. QEMU models no NAND
 but **does** model the uSDHC/SD controller, so we use the firmware's own **SD**
-mode. `qemu/build-sd.sh` assembles an SD image from the firmware's own payloads:
+mode. `qemu/build-nand.sh` assembles an SD image from the firmware's own payloads:
 
 - **Env** blob at byte `0xC0000` (`rootfs=sd`, `mmcdev=/dev/mmcblk0p1`). The
   SD/NAND DIP switch defaults to SD in QEMU, so `fw_printenv` reads this env.
@@ -147,7 +147,7 @@ mode. `qemu/build-sd.sh` assembles an SD image from the firmware's own payloads:
   features kernel 3.0.35 can mount** (no `metadata_csum`/`64bit`/`orphan_file`).
   The root password is cleared so the firmware's getty logs straight in.
 
-Boot (`qemu_run.sh` attaches `build/qemu/sd.img` to `sdhc4` = `mmc0`):
+Boot (`qemu_run.sh` attaches `build/qemu/nand.img` to `sdhc4` = `mmc0`):
 
 ```
 ### rootfs = sd ###                          ← fw_printenv read the SD env
@@ -217,7 +217,7 @@ tearing.
 
 The app reads its fonts and imagedata from `/root/gui` (`pset/fontdata`,
 `pset/imagedata/imagedata.dat`, `pioneer/fontdata`). On the device that's a UBIFS
-volume on NAND; QEMU has no NAND, so `qemu/build-sd.sh` delivers `gui.tar.gz` on a
+volume on NAND; QEMU has no NAND, so `qemu/build-nand.sh` delivers `gui.tar.gz` on a
 **second ext4 partition** and mounts it at `/root/gui`. The mount is injected into
 `apl_start` unconditionally, because the firmware gates its own `mount_ubifs gui`
 on `$BOOTMODE`, which comes from the i.MX6 boot-mode straps that QEMU doesn't
@@ -264,6 +264,6 @@ slave stub, `XDJ_SUBUCOM=1`) is the path to the interactive main screen.
 
 Tracked: `qemu_prepare.py` (kernel boot blobs), `qemu_run.sh` (boot, attaches SD
 if present), `qemu/build-qemu.sh` + `qemu/patches/*.patch` (the patched QEMU),
-`qemu/build-sd.sh` + `qemu/cramfs_extract.py` (the SD rootfs). Generated under
+`qemu/build-nand.sh` + `qemu/cramfs_extract.py` (the SD rootfs). Generated under
 `build/qemu/` (git-ignored): `uImage`, `vmlinux.bin`, `tramp.bin`, `atags.bin`,
-`sd.img`, the `boot-*.log` references; patched QEMU under `build/qemu-src/`.
+`nand.img`, the `boot-*.log` references; patched QEMU under `build/qemu-src/`.

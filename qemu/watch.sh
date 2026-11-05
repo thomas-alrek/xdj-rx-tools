@@ -4,7 +4,7 @@
 # in this terminal. Run this in your OWN terminal — QEMU runs natively on macOS
 # (Docker is only used to build the SD image), so it opens a real window here.
 #
-#   qemu/watch.sh                     # build/qemu/sd.img (built by build-sd.sh)
+#   qemu/watch.sh                     # build/qemu/nand.img (built by build-nand.sh)
 #   qemu/watch.sh path/to/other.img   # a specific SD image
 #
 # In the window/terminal:
@@ -17,7 +17,7 @@
 # coherency + atomics) far slower than one, so the UI comes up much faster on a
 # single core. apl_start picks the app binary by core count -- /root/pioneer/rbp
 # on >1 core, else /root/pioneer/rbp_solo (which the firmware does NOT ship);
-# build-sd.sh adds rbp_solo as a symlink to rbp so the single-core path launches
+# build-nand.sh adds rbp_solo as a symlink to rbp so the single-core path launches
 # the app too. apl_start then reaches "#### Application Start!! ###" and execs it.
 #
 # This is the sabrelite path (parallel-LCD / dev=lcd). For the firmware's real
@@ -34,8 +34,8 @@ cd "$(dirname "$0")/.."
 Q=build/qemu
 QEMU="${QEMU:-$(ls build/qemu-src/*/build/qemu-system-arm 2>/dev/null | head -1 || true)}"
 QEMU="${QEMU:-qemu-system-arm}"
-SD="${1:-$Q/sd.img}"
-[ -f "$SD" ] || { echo "no SD image: $SD  (run qemu/build-sd.sh)"; exit 1; }
+SD="${1:-$Q/nand.img}"
+[ -f "$SD" ] || { echo "no SD image: $SD  (run qemu/build-nand.sh)"; exit 1; }
 
 SMP="${XDJSMP:-1}"   # single-core (fast) by default; XDJSMP=2 for the real dual-core
 exec "$QEMU" -M sabrelite -smp "$SMP" -m 256 -no-reboot \
