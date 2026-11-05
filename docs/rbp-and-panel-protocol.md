@@ -285,3 +285,30 @@ slow. Next: pin the 0x1234 handler via a QEMU gdbstub breakpoint on `FUN_0002b0e
 (known-hit when a command arrives) and follow the message to the command parser —
 that reveals the command keywords. Then: map host keys → UDP lines (a small guest
 TCP↔UDP bridge reachable via QEMU hostfwd, since DebugSub binds 127.0.0.1).
+
+## SPI panel read path — architecture (why rbp doesn't read the panel)
+
+Classes (RTTI): `ui::PanelComController`, `ui::PanelComReciever`,
+`ui::PanelComPeerLinux` (SPI peer for `/dev/subucom_spi1.0`), and the nested
+`ui::PanelComPeerLinux::MemorandomTimer`.
+
+- The SPI panel is **polled by a periodic timer**, `MemorandomTimer`
+  (`timerCallback` = `FUN_0028a7b8`), driven by rbp's JUCE timer thread —
+  **not** a blocked read thread. That's why no thread was ever seen blocked on
+  the panel, yet 0 SPI frames were clocked.
+- `PanelComPeerLinux` ctor `FUN_00282214` builds the peer + `MemorandomTimer`
+  but does **not** open the device (lazy). The device path is registered
+  (`FUN_002816c8`, `"/dev/subucom_spi1.0"`, buf=100).
+- `FUN_0028a7b8` reads the per-control state arrays and dispatches events by the
+  same codes the `button` command uses (0x410d loopin, 0x420c decksel, …) →
+  the shared dispatcher `FUN_002482d0()->(+8)` / `FUN_00222188`. So the panel's
+  **output/dispatch** path is the same one the debug `button` command drives.
+
+**The gate is on the read side.** rbp never clocks the SPI, so either (a) the
+`MemorandomTimer` is never started, (b) it fires but the transfer/open of
+`/dev/subucom_spi1.0` is skipped/gated, or (c) the open fails and the peer
+disables itself. Since `button` (which bypasses the read and dispatches directly)
+also appears inert on the idle screen, the whole panel subsystem may be disabled.
+
+**Next (gdbstub):** breakpoint `FUN_0028a7b8` (does the timer fire?) and the
+peer's SPI transfer/open (is the device ever opened?) to pin which of a/b/c it is.
