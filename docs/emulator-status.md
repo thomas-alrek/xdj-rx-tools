@@ -52,33 +52,34 @@ link is a **menu action in rbp** (needs panel buttons — feature C), and rbp's 
 handler is `LnkHand` / the `(rekordbox)` code. The device is NOT a player-to-player
 Pro-DJ-Link master here; the target is the rekordbox app library link.
 
-## 🔶 D. 2× USB passthrough (= the original exFAT goal)
-USB **is** modeled (ChipIdea, 4 controllers → `usb-bus.0..3`; firmware brings up
-hosts `fsl-ehci.0` @0x02184000=`usb-bus.0` and `fsl-ehci.1` @0x02184200=`usb-bus.1`).
-A FAT32 `usb-storage` attaches on the QEMU side (`info usb`: *Device 0.2, Port 1,
-480 Mb/s, QEMU USB MSD*) and the **EHCI PORTSC correctly reflects it** — reading
-`0x02184184` gives `0x00001005` = CCS=1 (connected) + PED=1 (enabled) + PP=1
-(powered). So this is **NOT a QEMU model bug**; the controller sees the device and
-enables the port, but the kernel then doesn't emit "new USB device" / read the
-descriptor. Two leads:
-1. **Real topology has a hub**: the firmware logs `register_usbhub_USB2512B` +
-   `attach_usbhub` at late boot — a Microchip **USB2512B** 2-port hub sits between
-   the i.MX6 host and the two front ports (USB1/USB2), likely configured over I2C
-   (unmodeled). The firmware's USB flow may expect that hub; a drive belongs on a
-   USB2512B downstream port, not the EHCI root. Options: model/attach a `usb-hub`,
-   or (if the hub config is I2C) model the USB2512B on I2C.
-2. Debug why enumeration doesn't proceed though the root port is enabled: **both
-   cold- and clean hot-plug** (`device_add` after boot) leave PORTSC connected but
-   produce **no** "new USB device" and **no** error — so khubd isn't running the
-   descriptor read. Suspect the ChipIdea EHCI port-change interrupt / async-schedule
-   isn't driving khubd (the controller starts and the root hub works, so it's a
-   port-change-notify or control-transfer issue specific to this EHCI). Ruled out:
-   the USB IRQ wiring is correct (OTG→GIC 43→irq 75, HOST1→GIC 40→irq 72, both
-   matching the kernel's fsl-ehci.{0,1}), so it is not an interrupt-mapping bug.
+## 🔶 D. USB mass storage (= the original exFAT goal)
+**Cold-plug now works end to end.** A `usb-storage` disk present at boot
+(`XDJUSB=<image> ./run.sh`, wired in `qemu/watch.sh`, on `usb-bus.0`) fully
+enumerates — `usb 1-1: new … device`, `scsi … Direct-Access`, `sd … [sda]`,
+`sda: sda1` — and the firmware **auto-mounts** it at `/media/usb1/sda1` (vfat)
+and writes `mount /media/usb1/sda1` into `/proc/udev_usb1`, which is exactly what
+rbp's `DBSA_Task_USB` thread watches. Verified with the rekordbox test image
+(`test/usb/`, PIONEER/rekordbox/export.pdb etc.). The earlier "doesn't enumerate"
+note was from the pre-SABRE-SD wiring and is obsolete.
+
+Two live caveats:
+- **Hot-plug does NOT enumerate.** `device_add usb-storage` after boot leaves
+  EHCI PORTSC = `0x00501003` (CCS=1 connect, CSC=1, **PED=0** not-enabled) and the
+  host suspends — the port is never reset/enabled. So the stick must be present at
+  boot. (Fixing hot-plug = the ChipIdea EHCI port-enable/resume path.)
+- **rbp crashes rendering the rekordbox content.** With the stick cold-plugged,
+  rbp's `gui_task` SIGSEGVs (signal 11): PC lands in an anonymous `rwxp` buffer
+  via a garbage function pointer — a **call through an uninitialized GPU 2D
+  callback**. `libg2d.so`/`libGAL-fb.so` are loaded but galcore is dead (-22), so
+  when rbp reaches the artwork/browse blit path it jumps into garbage. The idle UI
+  software-renders fine; USB content reaches the dead GPU path. **This re-opens the
+  galcore/GPU-2D problem (feature A).** To "see" the USB track we need that 2D path
+  to work (or a software fallback / to avoid the blit).
+
 **exFAT itself:** the 3.0.35 kernel has vfat/msdos/**ntfs** but **no exFAT and no
 FUSE** — so the old "fuse-exfat" plan won't work; exFAT needs an out-of-tree kernel
-module (e.g. exfat-nofuse) built against this kernel + a mount rule. (Test images:
-`scratchpad/usbbuild/usbfat.img`.)
+module (e.g. exfat-nofuse) built against this kernel + a mount rule. (FAT32 is used
+for the current bring-up test image.)
 
 ## ⬜ E. Audio
 Not started. Need to model the i.MX6 audio path (SSI/codec) + `-audiodev`.
@@ -91,13 +92,16 @@ format→codec-lib factory. Adding FLAC = ship a FLAC codec lib + register it in
 factory's format map (follow-up: locate the dlopen/format-map factory in
 `playengine_Player`). (Device feature; modifies firmware.)
 
-## 🔶 C / G. Controls → app + rbp structure
-Documented in `docs/rbp-and-panel-protocol.md`: control surface (buttons/jogs/
-faders) comes via the Subucom panel MCU over SPI (`/dev/subucom_spi1.0`) →
-`PanelComPeerLinux` → `PanelComReciever` → `panel_protocol::SubRxData`
-(Common/Fmt/Other/Mixer + XOR). Next: decompile the concrete `SubRxFormat` subclass
-for the exact RX frame byte layout (enables button injection in the emulator), and
-the `StaticInfomation` boot handshake (blocks full stock boot after galcore).
+## 🔶 C / G. Controls → app (panel buttons)
+Control surface (buttons/jogs/faders) comes via the Subucom panel MCU over SPI
+(`/dev/subucom_spi1.0`, 24-byte frames). **The SPI path works** — a guest read
+clocks a 24-byte transfer into the QEMU SSI slave — but **rbp never reads the
+panel**: the poll is gated by a precondition that fails under emulation, so rbp
+leaves the panel disabled (0 SPI frames; no thread blocked on it). See
+`docs/rbp-and-panel-protocol.md` → "Panel input path — empirical findings" for
+the full map and the 4-step plan (pin the read gate → make QEMU pass it + return
+valid 24-byte frames → RE the frame format → key-injection). `/dev/gpiodrv` (9
+discrete lines) is NOT the button path.
 
 ## RE tooling notes
 - Kernel: link base **0x80008000** (PAGE_OFFSET 0x80000000); wrap `vmlinux.bin` as

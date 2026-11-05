@@ -212,3 +212,50 @@ Fmt/Mixer bytes) vs **jog** (Other section).
 - Decompile `PanelComPeerLinux` SPI transfer + `StaticInfomation` handshake
   (what the QEMU Subucom SSI slave must satisfy).
 - Map `playengine_Player` decoder selection (for FLAC).
+
+## Panel input path — empirical findings (buttons bring-up)
+
+Live analysis of the running emulator (rbp + /proc + SUBUCOM_TRACE + QEMU
+monitor) corrected the earlier assumptions:
+
+- **Buttons come from the subucom MCU over SPI, as 24-byte frames.** Confirmed:
+  a guest `dd if=/dev/subucom_spi1.0 bs=24 count=3` clocked exactly a 24-byte
+  SPI transaction per read into the QEMU SSI slave (72 bytes for 3 reads),
+  MOSI=0x00. So **the kernel SPI path works** — a userspace read triggers one
+  24-byte transfer, MISO carries the panel's reply. The QEMU slave currently
+  returns 0xff for every byte (invalid frame).
+- **`/dev/gpiodrv` is NOT the button path.** rbp's `GpioManager`
+  (`common_GpioManagerLinux.cpp`, ctor `FUN_0002be28`) does
+  `open("/dev/gpiodrv")`, `lseek(fd, gpio_id)`, `read(fd,1)` = level (0/1),
+  `ioctl(0x4004f101,{gpio_id,mode})`. rbp opens ~9 discrete lines this way —
+  board signals, not the dozens of DJ controls.
+- **The `PanelComController` ctor (`FUN_0021a4ac`)** builds the panel: 4 panel
+  GPIOs (ids **0xa2–0xa5**), a **24-byte `SubTxData`** TX buffer (the LED/display
+  frame sent to the MCU), vtables `DAT_00420700` / `PTR_LAB_00420620`. The peer
+  `PanelComPeerLinux("/dev/subucom_spi1.0", ...)` is built in the big device-init
+  `FUN_00245098` (which also builds Settings/LedManager/PowerManager/…).
+- **The blocker: rbp never reads the panel.** With no manual read, the SSI slave
+  sees **0 frames**, and no rbp thread is blocked on the panel (the 57 threads
+  sit in futex/nanosleep/poll/skb_recv — none in a char-device read). So the
+  panel poll is **gated by a flag/precondition that fails under emulation**
+  (board-detect GPIO and/or the StaticInfomation bootstrap), and rbp quietly
+  leaves the panel disabled. The read trigger lives in the controller's vtable
+  update method (not yet pinned).
+
+### Plan to make buttons work
+1. **Pin the gate** — find the controller update/poll method (via `DAT_00420700`
+   / `PTR_LAB_00420620`) and the exact precondition that disables the read
+   (candidate: one of GPIO 0xa2–0xa5 read as "panel present", or StaticInfomation
+   != 0xffff). A QEMU gdbstub breakpoint on the panel read path is the fast way.
+2. **QEMU side** — make the gate pass (assert the right GPIO / satisfy the
+   StaticInfomation handshake) and extend the `xdj-subucom` SSI slave to return
+   valid **24-byte** frames: a StaticInfomation reply at boot, then idle frames,
+   then injected button/jog/fader frames.
+3. **Frame format** — RE the 24-byte RX frame (sections via
+   refCommonData/refFmtData/refOtherData/tMixerData, the XOR/getCrcAdress check,
+   and StaticInfomation layout) to encode controls correctly.
+4. **Injection** — map host keys (QEMU input) to button bits in the synthesized
+   frame; tie each to the physical labels catalogued above.
+
+Note: the SSI-slave SubRxData protocol work done earlier is still needed for
+step 3, but step 1 (the read gate) must be solved first or rbp never reads it.
