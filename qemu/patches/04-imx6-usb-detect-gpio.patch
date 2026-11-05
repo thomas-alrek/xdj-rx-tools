@@ -1,0 +1,60 @@
+--- a/include/hw/gpio/imx_gpio.h
++++ b/include/hw/gpio/imx_gpio.h
+@@ -56,6 +56,7 @@
+     bool has_edge_sel;
+     uint32_t edge_sel;
+     bool has_upper_pin_irq;
++    uint32_t psr_reset;
+ 
+     qemu_irq irq[2];
+     qemu_irq output[IMX_GPIO_PIN_COUNT];
+--- a/hw/gpio/imx_gpio.c
++++ b/hw/gpio/imx_gpio.c
+@@ -288,6 +288,12 @@
+     DEFINE_PROP_BOOL("has-edge-sel", IMXGPIOState, has_edge_sel, true),
+     DEFINE_PROP_BOOL("has-upper-pin-irq", IMXGPIOState, has_upper_pin_irq,
+                      false),
++    /*
++     * Reset value of the pad-status register (external input levels). Normally
++     * 0, but a board can set it so pins driven high by an external pull-up read
++     * high out of reset (e.g. the XDJ-RX USB "device present" detect lines).
++     */
++    DEFINE_PROP_UINT32("psr-reset", IMXGPIOState, psr_reset, 0),
+ };
+ 
+ static void imx_gpio_reset(DeviceState *dev)
+@@ -296,7 +302,7 @@
+ 
+     s->dr       = 0;
+     s->gdir     = 0;
+-    s->psr      = 0;
++    s->psr      = s->psr_reset;
+     s->icr      = 0;
+     s->imr      = 0;
+     s->isr      = 0;
+--- a/hw/arm/fsl-imx6.c
++++ b/hw/arm/fsl-imx6.c
+@@ -746,6 +746,23 @@
+                                  &error_abort);
+         object_property_set_bool(OBJECT(&s->gpio[i]), "has-upper-pin-irq",
+                                  true, &error_abort);
++        /*
++         * XDJ-RX: the two USB-storage "device present" detect lines idle HIGH
++         * (external pull-up; pulled LOW only when a USB drive is inserted), so
++         * reset them high. Without this they read 0 ("USB present"); rbp's
++         * UsbStorageManager then tries to push an initial USB state to the
++         * front-panel MCU during UI init -- before the panel poll thread has
++         * been started -- and blocks there forever, so the panel (buttons/jogs)
++         * never comes up. deck1 = GPIO4_IO30 (gpiodrv id 126/0x7e), deck2 =
++         * GPIO7_IO12 (id 204/0xcc).
++         */
++        if (i == 3) {        /* GPIO4: USB-detect deck1 (GPIO4_IO30) */
++            object_property_set_uint(OBJECT(&s->gpio[i]), "psr-reset",
++                                     1u << 30, &error_abort);
++        } else if (i == 6) { /* GPIO7: USB-detect deck2 (GPIO7_IO12) */
++            object_property_set_uint(OBJECT(&s->gpio[i]), "psr-reset",
++                                     1u << 12, &error_abort);
++        }
+         if (!sysbus_realize(SYS_BUS_DEVICE(&s->gpio[i]), errp)) {
+             return;
+         }

@@ -24,6 +24,15 @@
 #       (d) XDJ Subucom SSI device type (front-panel MCU), attached by the
 #           machine when booting as SABRE-SD (see patch 03).
 #
+#   patches/04-imx6-usb-detect-gpio.patch
+#       The two USB-"device present" detect lines (GPIO4_IO30 = gpiodrv 126, and
+#       GPIO7_IO12 = gpiodrv 204) idle HIGH on real hardware (pull-up, "no USB").
+#       QEMU reset every GPIO input to 0, i.e. "USB present", so at UI init rbp's
+#       UsbStorageManager pushed an initial USB state to the front-panel MCU
+#       BEFORE the panel poll thread was started -- and blocked there forever, so
+#       the panel (buttons/jogs) never came up. Reset those two pins high so the
+#       unmodified firmware sees "no USB" and the panel initialises normally.
+#
 #   patches/03-sabrelite-sabresd-sd.patch
 #       The XDJ-RX firmware's real board is SABRE-SD (MACH_TYPE 3980), which
 #       registers ECSPI2 (bus 1) for the panel MCU + audio codecs, on a
