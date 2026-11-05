@@ -791,3 +791,34 @@ effect on an empty deck. Definitive next tests (both now feasible with `/proc/me
    auto-clear) = proof frames are processed.
 2. **Receiver frame counter** — locate the live `PanelComReciever` object and watch
    its `+0x8c` counter / `+0x88` marker increment = proof frames are accepted.
+
+## DECODE CONFIRMED — the CRC frame is processed end-to-end (2026-11-05)
+
+Definitive result via a controlled test + `/proc` process check:
+1. Boot the CRC-valid slave to a **stable** UI (rbp_solo pid alive, two identical
+   framebuffers).
+2. `touch /tmp/subucom_menu` → the slave writes non-zero values into the **deck-1
+   analog section** (rbp_buf `+0x24`, decoded by `FUN_00282800`).
+3. **rbp_solo is dead immediately afterward** (`ps | grep -c rbp_solo` → 0), while it
+   was alive before.
+
+A rejected frame (bad CRC) is ignored and cannot affect rbp, so the only way the
+injection can kill rbp is if the **frame was accepted and decoded**. Reproduced twice
+(analog-in-idle crashed during boot; analog-gated crashed right after the trigger),
+while menu-only / all-global-button runs reach a stable UI. **Therefore the CRC gate
+works and the panel input path runs end-to-end**: slave frame → kernel → parser
+`FUN_00284d44` (CRC matches) → section decoder → control handler.
+
+- The crash is **downstream of decode**, in the control-change **render** (the earlier
+  kernel fault dump shows `r6=0x320`=800, `r5=0x1e0`=480, the framebuffer dims → a
+  blit). This is the project's known **GPU-2D render** flakiness (feature A/D), not a
+  panel-protocol problem. (It may also be sensitive to out-of-range injected ADC
+  values; real hardware stays in range.)
+- So **the panel protocol (transport + CRC-16/X-25 + SubRxFormat sections) is solved
+  and working at the decode level.** Clean *visible* control feedback is gated by the
+  separate GPU-2D render path.
+
+### Analog control map (deck section, `FUN_00282800`, value = sec[off]|sec[off+1]<<8, /1023)
+`+0x24` deck1 / `+0x34` deck2, six 16-bit ADC values at section offsets 0/2/4/6/8/0xa
+→ event codes `0x5008/0x5007/0x500a/0x5009/0x5011/0x508b`; plus a button at section
+`[0xf]` bit7 → code `0x5112`. One of the analog codes is the TEMPO fader.
