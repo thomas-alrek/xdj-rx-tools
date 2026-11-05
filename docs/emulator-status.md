@@ -106,11 +106,26 @@ no firmware change). Verified on a stock boot: `/dev/subucom_spi1.0` open, the
 the SSI slave (~300k MOSI bytes). Full story + symbols:
 `docs/rbp-and-panel-protocol.md` → "SOLVED".
 
-**Remaining (in progress):** the `xdj-subucom` SSI slave still returns `0xff`, so no
-`StaticInfomation` handshake and no button/jog/fader frames. Next: RE the SPI
-command protocol + handshake and have the slave return decoded frames (the reader
-dispatches only on a *changed* frame). `/dev/gpiodrv` is for discrete lines (incl.
-the USB-detect ones above), not the button data path.
+**Live proof the panel SPI path works (2026-11-05).** Booting with a visible window
+(`qemu/watch.sh`, Cocoa display) the deck UI comes up and **DECK1 shows a red
+`E-7206 AUTH CHIP ERROR`** while DECK2 shows `Not Loaded.`
+(![auth-chip error](img/panel-auth-chip-error.png)). This is the milestone: rbp has
+opened `/dev/subucom_spi1.0`, the `UiMain` poll thread is clocking the slave, and
+rbp **runs the panel auth-chip verification on the SPI data it reads** — which fails
+because the `xdj-subucom` slave returns stub bytes (no valid auth response). The
+error is **per-deck** (DECK1 errors first; DECK2 falls back to `Not Loaded.`), and it
+is shown transiently during boot before the deck settles to `Not Loaded.`. So the
+auth-chip handshake (E-7206) is the next gate, exactly as expected.
+
+**Remaining (in progress):** the `xdj-subucom` SSI slave returns stub bytes, so the
+auth handshake fails and no button/jog/fader frames are accepted. The QEMU-side
+inject scaffolding (per-`spi_message` frame reset, +3 MISO shift, menu-byte offset)
+is captured in `docs/wip/subucom-inject-scaffolding.txt`. Next: RE the **E-7206
+auth-chip handshake** — determine whether it is a simple version/serial check
+(emulatable) or a crypto challenge-response — then the valid `SubRxData` frame
+header that routes frames to the button decoders, and have the slave return decoded
+frames (the reader dispatches only on a *changed* frame). `/dev/gpiodrv` is for
+discrete lines (incl. the USB-detect ones above), not the button data path.
 
 ## RE tooling notes
 - Kernel: link base **0x80008000** (PAGE_OFFSET 0x80000000); wrap `vmlinux.bin` as
