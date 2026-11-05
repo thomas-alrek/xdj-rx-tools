@@ -31,7 +31,7 @@ This is interoperability/preservation work on hardware you own.
 
 Usage
 -----
-    python3 xdjrx_upd.py decrypt XDJRX.UPD -o XDJRX_2.21.iso
+    python3 xdjrx_upd.py decrypt XDJRX.UPD -o build/XDJRX.iso
     python3 xdjrx_upd.py info    XDJRX.UPD
     python3 xdjrx_upd.py extract XDJRX.UPD -d firmware/contents   # needs 7z/bsdtar or macOS
     python3 xdjrx_upd.py pack    modified.iso -o XDJRX_new.UPD --model XDJAERO2.21

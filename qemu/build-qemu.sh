@@ -34,10 +34,10 @@
 #
 # Result: the kernel boots to userspace in ~8s. As sabrelite (qemu/watch.sh) the
 # app renders the real Pioneer DJ / rekordbox boot splash; as SABRE-SD
-# (qemu/watch-sabresd.sh) the panel-MCU device binds (see QEMU.md).
+# qemu/watch.sh boots the firmware to its live UI with the panel MCU bound.
 #
 # Usage:  qemu/build-qemu.sh      # -> build/qemu-src/qemu-<ver>/build/qemu-system-arm
-# Then:   ./qemu_run.sh           # auto-detects the patched binary
+# Then:   qemu/build-nand.sh && qemu/watch.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # The patches are diffs against this EXACT QEMU release; a different version's
@@ -82,4 +82,4 @@ mkdir -p build && cd build
 ninja qemu-system-arm
 echo
 echo "built: $(pwd)/qemu-system-arm"
-echo "run:   ./qemu_run.sh"
+echo "run:   qemu/watch.sh"

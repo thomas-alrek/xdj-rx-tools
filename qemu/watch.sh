@@ -1,48 +1,46 @@
 #!/usr/bin/env bash
 #
-# Watch the XDJ-RX emulator LIVE: a 480x800 display window + the serial console
-# in this terminal. Run this in your OWN terminal — QEMU runs natively on macOS
-# (Docker is only used to build the SD image), so it opens a real window here.
+# Launch the XDJ-RX emulator: a live display window + the serial console.
 #
-#   qemu/watch.sh                     # build/qemu/nand.img (built by build-nand.sh)
-#   qemu/watch.sh path/to/other.img   # a specific SD image
+# Boots the unmodified firmware as its real board -- Freescale i.MX6 SABRE-SD
+# (MACH_TYPE 3980) -- which registers ECSPI2 (SPI bus 1) so the front-panel
+# microcontroller ("Subucom") binds and /dev/subucom_spi1.0 exists.
 #
-# In the window/terminal:
-#   - the Cocoa window shows /dev/fb0 (the firmware's framebuffer)
-#   - this terminal is the serial console AND the QEMU monitor (Ctrl-A C toggles;
-#     Ctrl-A X quits).
+# Board specifics handled on the QEMU side (firmware untouched; all via the
+# bootloader-style cmdline/atags and the patched machine, qemu/patches/):
+#   - ATAG_REVISION=0x500 (system_rev) so the board registers the subucom + AK4387
+#     spi_board_info (see qemu_prepare.py).
+#   - console on ttymxc0 (sabresd's early-console UART) -> serial 0 here.
+#   - video=mxcfb0:dev=ldb (SABRE-SD panel is LVDS) so /dev/fb0 comes up.
+#   - the nand image is attached to uSDHC3 via -drive id=xdjsd (patch 03).
 #
-# Boots single-core by default (XDJSMP=2 for the real dual-core config). rbp is
-# heavily multi-threaded and QEMU emulates two Cortex-A9 cores (SCU cache
-# coherency + atomics) far slower than one, so the UI comes up much faster on a
-# single core. apl_start picks the app binary by core count -- /root/pioneer/rbp
-# on >1 core, else /root/pioneer/rbp_solo (which the firmware does NOT ship);
-# build-nand.sh adds rbp_solo as a symlink to rbp so the single-core path launches
-# the app too. apl_start then reaches "#### Application Start!! ###" and execs it.
+# The boot splash renders at 32bpp, then the app switches the framebuffer to
+# 16bpp RGB565 and the main deck UI comes up. The QEMU scanout
+# (hw/arm/fsl-imx6.c) reads the live IPU display-channel stride and decodes
+# whichever depth is active, so both render with no firmware changes.
 #
-# This is the sabrelite path (parallel-LCD / dev=lcd). For the firmware's real
-# board (LVDS panel + front-panel MCU) use qemu/watch-sabresd.sh, which boots to
-# the live UI. The framebuffer scanout renders both the 32bpp boot splash and the
-# 16bpp RGB565 UI (hw/arm/fsl-imx6.c picks the depth from the IPU display stride).
-# With the fully stock image here, DirectFB's GAL (Vivante) graphics core still
-# aborts init because it needs /dev/galcore, which this model does not provide
-# yet; a minimal galcore/Vivante stub is the remaining piece for stock firmware.
-#
-# Login at "freescale login:" is root (no password) on the test-harness SD.
+# Single-core by default (fast; XDJSMP=2 for the real dual-core config, slower
+# under TCG). The window is resizable (aspect locked 800:480) -- drag a corner.
+# SUBUCOM_TRACE=1 logs the panel-MCU SPI frames to stderr (for panel reversing).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 Q=build/qemu
 QEMU="${QEMU:-$(ls build/qemu-src/*/build/qemu-system-arm 2>/dev/null | head -1 || true)}"
 QEMU="${QEMU:-qemu-system-arm}"
 SD="${1:-$Q/nand.img}"
-[ -f "$SD" ] || { echo "no SD image: $SD  (run qemu/build-nand.sh)"; exit 1; }
+for f in vmlinux.bin tramp.bin atags.bin; do
+  [ -f "$Q/$f" ] || { echo "missing $Q/$f — run: python3 qemu_prepare.py" >&2; exit 1; }
+done
+[ -f "$SD" ] || { echo "no nand image: $SD  (run qemu/build-nand.sh)" >&2; exit 1; }
+SMP="${XDJSMP:-1}"            # single-core (fast) by default; XDJSMP=2 for dual-core
+DISPLAY_OPT="${XDJDISPLAY:-cocoa,zoom-to-fit=on,zoom-interpolation=on}"
 
-SMP="${XDJSMP:-1}"   # single-core (fast) by default; XDJSMP=2 for the real dual-core
+# sabresd console is ttymxc0 = serial 0 -> wire it to this terminal (Ctrl-A X quits).
 exec "$QEMU" -M sabrelite -smp "$SMP" -m 256 -no-reboot \
   -name "Pioneer XDJ-RX" \
-  -display cocoa \
+  -display "$DISPLAY_OPT" \
   -device loader,file="$Q/vmlinux.bin",addr=0x10008000,force-raw=on \
   -device loader,file="$Q/atags.bin",addr=0x10000100,force-raw=on \
   -device loader,file="$Q/tramp.bin",addr=0x10000000,cpu-num=0 \
-  -drive file="$SD",format=raw,id=mysd,if=none -device sd-card,drive=mysd \
-  -serial null -serial mon:stdio
+  -drive if=none,id=xdjsd,file="$SD",format=raw \
+  -serial mon:stdio -serial null

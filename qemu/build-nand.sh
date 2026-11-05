@@ -33,7 +33,7 @@
 # Usage:  qemu/build-nand.sh        # -> build/qemu/nand.img   (then qemu/watch.sh)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-ISO=build/XDJRX_2.21.iso
+ISO=build/XDJRX.iso
 Q=build/qemu
 PY="${PYTHON:-python3}"
 
@@ -86,6 +86,12 @@ sed -i "/^mkdir -p \/root\/gui/a\\mount -t ext4 -o ro /dev/mmcblk0p2 /root/gui 2
 # Log the faulting PC/registers to the console if the app crashes (debug aid; the
 # app binary is untouched). Injected right after apl_start cds into its dir.
 sed -i "/^cd \/root\/pioneer/a\\echo 1 > /proc/sys/kernel/print-fatal-signals 2>/dev/null" "$A"
+# Remove the one Vivante GAL DirectFB gfxdriver so DirectFB software-renders the
+# UI without needing /dev/galcore. QEMU does not model the i.MX6 GPU's bus-freq
+# DVFS, so the stock galcore path cannot complete (see docs/emulator-status.md);
+# the GPU is only used for an unreached g2d_blit, so the UI is identical. This is
+# the single compromise vs. a byte-for-byte rootfs.
+rm -f tree/usr/lib/directfb-1.4-0/gfxdrivers/libdirectfb_gal.so
 
 mke2fs -q -t ext4 -O ^metadata_csum,^64bit,^orphan_file,^metadata_csum_seed \
        -b 1024 -d tree -F p1.ext4 150000
@@ -104,20 +110,7 @@ printf "label: dos\nstart=4096, size=307200, type=83\nstart=311296, type=83\n" |
 dd if=p1.ext4 of=nand.img bs=512 seek=4096    conv=notrunc status=none
 dd if=p2.ext4 of=nand.img bs=512 seek=311296  conv=notrunc status=none
 cp nand.img /b/nand.img
-
-# ---- nand-nogal.img: the same image with the Vivante GAL DirectFB gfxdriver
-# removed, so DirectFB software-renders without needing /dev/galcore. This is the
-# image that currently boots to the live UI (the stock nand.img needs the galcore
-# /bus-freq DVFS work, see docs/emulator-status.md). One file is removed:
-#   /usr/lib/directfb-1.4-0/gfxdrivers/libdirectfb_gal.so
-cp nand.img nand-nogal.img
-mkdir -p /mnt-nogal
-mount -o loop,offset=2097152 nand-nogal.img /mnt-nogal
-rm -f /mnt-nogal/usr/lib/directfb-1.4-0/gfxdrivers/libdirectfb_gal.so
-sync; umount /mnt-nogal
-cp nand-nogal.img /b/nand-nogal.img
 '
-mv "$Q/sdbuild/nand.img"       "$Q/nand.img"
-mv "$Q/sdbuild/nand-nogal.img" "$Q/nand-nogal.img"
+mv "$Q/sdbuild/nand.img" "$Q/nand.img"
 rm -rf "$Q/sdbuild"
-echo "built $Q/nand.img (stock) + $Q/nand-nogal.img (UI path)  ->  qemu/watch-sabresd.sh"
+echo "built $Q/nand.img  ->  qemu/watch.sh   (boots to the UI)"
