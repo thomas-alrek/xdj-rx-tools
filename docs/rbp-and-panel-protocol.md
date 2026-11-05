@@ -259,3 +259,29 @@ monitor) corrected the earlier assumptions:
 
 Note: the SSI-slave SubRxData protocol work done earlier is still needed for
 step 3, but step 1 (the read gate) must be solved first or rbp never reads it.
+
+## Quick-win input path: the DebugSub UDP console (allinone_debug::DebugSub)
+
+rbp has a built-in debug injection channel that **bypasses the gated SPI panel
+path** entirely:
+
+- A thread `DebugSub` (`allinone_debug::DebugSub`, run loop `FUN_0002b260`) binds
+  a **UDP socket on `127.0.0.1:20000`** (port from DebugManager config, default
+  20000) and loops on `recvfrom`. It's **live at boot** (confirmed: `netstat -uln`
+  shows `127.0.0.1:20000`). Also-listening: UDP `0.0.0.0:50000/50001/50002`.
+- Each received **text line** (\r/\n terminated) is wrapped into a
+  `common::CommonMessage` (type **0x1234**, tag 0x74583, parser `FUN_0002b0e8`),
+  posted to rbp's message bus, and the handler's reply (waited up to 10 s) is sent
+  back over UDP. Unhandled/empty → a 1-byte `'1'` ack.
+- **Sending from the guest:** busybox `nc` is TCP-only and there's no socat/python,
+  BUT the rootfs has `/bin/bash`, which supports `/dev/udp`:
+  `bash -c 'exec 3<>/dev/udp/127.0.0.1/20000; printf "%s\n" "$0" >&3; cat <&3 >/tmp/r & p=$!; sleep 11; kill $p' "<cmd>"`.
+  Verified end to end: `help` → 1-byte `'1'` ack (channel works; "help" is not a
+  recognised command).
+
+**Remaining piece: the command vocabulary.** The text→action mapping is behind the
+CommonMessage(0x1234) dispatch (generic C++ message bus), so static tracing is
+slow. Next: pin the 0x1234 handler via a QEMU gdbstub breakpoint on `FUN_0002b0e8`
+(known-hit when a command arrives) and follow the message to the command parser —
+that reveals the command keywords. Then: map host keys → UDP lines (a small guest
+TCP↔UDP bridge reachable via QEMU hostfwd, since DebugSub binds 127.0.0.1).
