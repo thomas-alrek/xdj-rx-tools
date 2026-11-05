@@ -9,14 +9,16 @@
 # just relaunches. Needs: python3, curl, docker (for the nand image), and a C
 # toolchain + Homebrew (build-qemu.sh pulls meson/ninja). macOS or Linux.
 #
-# Networking: the emulator bridges eth0 onto your LAN by default so a rekordbox
-# PC on the same LAN can reach the device for library LINK. On macOS that needs
-# root (vmnet) for an unsigned qemu, so run.sh keeps the *build* steps unprivileged
-# and elevates only the final launch (one password prompt). Override with
-# XDJNIC=user to stay on user-mode NAT and skip sudo entirely.
+# Networking: by default eth0 is on user-mode NAT, so `./run.sh` just opens the
+# live UI window as you with no password — the fast path to see the device run.
+# To put the device on your real LAN (so a rekordbox PC can reach it for library
+# LINK) set XDJNIC=bridged; on macOS vmnet needs root for an unsigned qemu, so
+# run.sh keeps the *build* steps unprivileged and elevates only that launch.
+# (LINK is a menu action in the app and needs the panel buttons, so bridged is
+# not useful yet — hence it's opt-in, not the default.)
 #
-#   ./run.sh                 # build (as you), then launch bridged (sudo at launch)
-#   XDJNIC=user ./run.sh     # no sudo; eth0 on user-mode NAT, not your LAN
+#   ./run.sh                 # build + launch the UI window as you (no sudo)
+#   XDJNIC=bridged ./run.sh  # device on your LAN for rekordbox (sudo at launch)
 #   sudo ./run.sh            # also fine: builds drop back to your user, launch is root
 #
 set -euo pipefail
@@ -69,15 +71,23 @@ ls "$Q"/../qemu-src/*/build/qemu-system-arm >/dev/null 2>&1 || { echo "==> build
 # 6. Build the nand image from the firmware's own rootfs payloads (needs docker)
 [ -f "$Q/nand.img" ] || { echo "==> building nand.img"; asuser bash qemu/build-nand.sh; }
 
-# 7. Launch. Bridged LAN networking (for rekordbox) needs root on macOS; the
-#    builds above stayed unprivileged, so elevate just the launch.
-if [ "$(id -u)" = 0 ]; then
-  echo "==> launching emulator (root: bridged LAN networking)"
-  exec qemu/watch.sh "$@"
-elif [ "$(uname)" = "Darwin" ] && [ "${XDJNIC:-}" != "user" ]; then
-  echo "==> launching emulator (sudo for bridged LAN networking; XDJNIC=user to skip)"
-  exec sudo -E qemu/watch.sh "$@"
-else
-  echo "==> launching emulator (close the window or Ctrl-A X to quit)"
-  exec qemu/watch.sh "$@"
-fi
+# 7. Launch. Default: open the live UI window as *you* — user-mode NAT, no
+#    password. That's the fast path to just see the device running. Opt into
+#    bridged LAN (so a rekordbox PC on your LAN can reach the device for LINK)
+#    with XDJNIC=bridged; on macOS vmnet needs root, so we elevate only the
+#    launch (one password prompt) while the builds above stayed yours.
+case "${XDJNIC:-}" in
+  ""|user)
+    echo "==> launching emulator — a window opens; boot to the UI takes ~60–90s"
+    echo "    (a black window is normal at first). Close the window or Ctrl-A X to quit."
+    exec qemu/watch.sh "$@" ;;
+  *)
+    if [ "$(id -u)" = 0 ]; then
+      exec qemu/watch.sh "$@"
+    elif [ "$(uname)" = "Darwin" ]; then
+      echo "==> launching emulator (sudo for bridged LAN networking; unset XDJNIC to skip)"
+      exec sudo -E XDJNIC="$XDJNIC" qemu/watch.sh "$@"
+    else
+      exec qemu/watch.sh "$@"
+    fi ;;
+esac

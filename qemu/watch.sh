@@ -35,24 +35,25 @@ done
 SMP="${XDJSMP:-1}"            # single-core (fast) by default; XDJSMP=2 for dual-core
 DISPLAY_OPT="${XDJDISPLAY:-cocoa,zoom-to-fit=on,zoom-interpolation=on}"
 # Network backend attached to the i.MX6 FEC (eth0). The firmware runs a DHCP
-# client on eth0 at boot (see qemu/build-nand.sh), so with a bridged nic the
-# device becomes a normal host on your LAN and a rekordbox PC on the same LAN can
-# reach it for library LINK. Bridged is the default -- but macOS vmnet needs root
-# for an unsigned qemu, so without privileges we fall back to user-mode NAT (the
-# UI still works, just not on the real LAN). Run bridged with:
-#     sudo qemu/watch.sh            # bridges to your default-route interface
-# Override explicitly with XDJNIC=... (e.g. vmnet-bridged,ifname=en1 for Wi-Fi,
-# or on Linux a tap into a bridge). rekordbox LINK is then enabled from the app's
-# LINK menu (needs the panel buttons).
-if [ -n "${XDJNIC:-}" ]; then
-  NIC="$XDJNIC"
-elif [ "$(uname)" = "Darwin" ] && [ "$(id -u)" = "0" ]; then
-  IFN="$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}')"
-  NIC="vmnet-bridged,ifname=${IFN:-en0}"
-  echo "net: bridging eth0 to host ${IFN:-en0} (vmnet) — device will be on your LAN" >&2
-else
-  NIC="user"
-  [ "$(uname)" = "Darwin" ] && echo "net: eth0 on user-mode NAT (not your LAN). For rekordbox LAN link: sudo qemu/watch.sh" >&2
+# client on eth0 at boot (see qemu/build-nand.sh). Default: user-mode NAT -- it
+# always works, needs no root, and the UI window opens as you (eth0 still gets a
+# lease, just on a private NAT, not your LAN). Opt into bridged LAN so a rekordbox
+# PC on the same LAN can reach the device for library LINK:
+#     XDJNIC=bridged sudo qemu/watch.sh    # bridge to your default-route interface
+# macOS vmnet needs root for an unsigned qemu (run.sh elevates this for you).
+# XDJNIC may also be a literal qemu nic spec (e.g. vmnet-bridged,ifname=en1 for
+# Wi-Fi, or a tap into a bridge on Linux). rekordbox LINK is then enabled from the
+# app's LINK menu (needs the panel buttons -- feature C).
+case "${XDJNIC:-user}" in
+  user)    NIC="user" ;;
+  bridged)
+    IFN="$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}')"
+    NIC="vmnet-bridged,ifname=${IFN:-en0}"
+    echo "net: bridging eth0 to host ${IFN:-en0} (vmnet) — device will be on your LAN" >&2 ;;
+  *)       NIC="$XDJNIC" ;;
+esac
+if [ "$NIC" != "user" ] && [ "$(uname)" = "Darwin" ] && [ "$(id -u)" != "0" ]; then
+  echo "net: '$NIC' needs root on macOS (vmnet) — re-run with sudo, or unset XDJNIC for user-mode NAT" >&2
 fi
 
 # sabresd console is ttymxc0 = serial 0 -> wire it to this terminal (Ctrl-A X quits).

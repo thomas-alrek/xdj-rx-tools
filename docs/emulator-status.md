@@ -40,12 +40,14 @@ FEC is modeled and `eth0` now **comes up on the LAN**. The firmware's
 `/etc/rc.d/init.d/network` only configures eth0 when `rc.conf` sets
 `SYSCFG_IFACE0=y`, and the apl_start boot path never runs it — so build-nand.sh
 injects `ifconfig lo up; udhcpc -b -i eth0 … &` into apl_start (DHCP client,
-backgrounded so it can't block the UI). `watch.sh` attaches a QEMU nic to the FEC,
-**defaulting to `vmnet-bridged`** so the device is a normal host on your LAN (user
-goal: a **rekordbox PC on the same LAN pulls/serves library over the network**);
-falls back to user-mode NAT when not root (vmnet needs root for the unsigned qemu).
-`run.sh` builds unprivileged and elevates only the launch. **Verified:** eth0 gets
-a DHCP lease and the UI still boots. Remaining: actually enabling the rekordbox
+backgrounded so it can't block the UI). `watch.sh` attaches a QEMU nic to the FEC.
+The **default is user-mode NAT** so `./run.sh` opens the UI window as you with no
+password (a sudo'd Cocoa window won't attach to the macOS session — that was what
+hid the UI). Bridged LAN is opt-in with **`XDJNIC=bridged`** so the device is a
+normal host on your LAN (user goal: a **rekordbox PC on the same LAN pulls/serves
+library over the network**); on macOS vmnet needs root, so `run.sh` builds
+unprivileged and elevates only that launch. **Verified:** eth0 gets a DHCP lease
+(user-mode) and the UI boots to the live deck screen. Remaining: actually enabling the rekordbox
 link is a **menu action in rbp** (needs panel buttons — feature C), and rbp's link
 handler is `LnkHand` / the `(rekordbox)` code. The device is NOT a player-to-player
 Pro-DJ-Link master here; the target is the rekordbox app library link.
