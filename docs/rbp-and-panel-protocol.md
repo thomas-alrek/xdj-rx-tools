@@ -113,6 +113,21 @@ patch 03; the Subucom SSI slave is the XDJ-RX panel MCU.)
   `FUN_0002be28(obj, id, 1, 100, 0, 0x1e)` with ids `0xa2,0xa3,0xa4,0xa5` (panel
   poll/refresh timers; `100`/`0x1e` look like periods).
 
+### Receiver dispatch chain (recovered)
+
+- `PanelComReciever` vtable at rbp `0x4272cc` (primary) / `0x4272e0` (secondary,
+  `IPanelComReciever` interface thunks). RTTI name `N2ui16PanelComRecieverE`
+  @`0x4272f0`, typeinfo @`0x427308`. Methods: `0x285b6c`/`0x285df0` (destructors),
+  **`0x285160` = the single virtual (`onReceive`-style callback)**.
+- `0x285160` is a thin forwarder: for event type 0 it calls the real handler
+  (`bl 0x284d44`), which **dispatches to observer lists** (iterates arrays at
+  `this+0x7c/0x84`, `+0x10c/0x114`, `+0x118/0x120`, calling each observer's
+  vtable+0xC) and pushes control changes down to the **decks/PlayEngine**
+  (`FUN_002ac1d4(deck, index, 100, 0x7f)` for deck indices < 4). So the path is:
+  SPI RX frame → onReceive → per-section dispatch → deck/mixer/key observers.
+- (Note: Ghidra doesn't auto-disassemble these vtable-referenced targets — reach
+  them via `objdump -d --start-address=` on the rbp ELF, base `0x8000`.)
+
 ## Open follow-ups
 - Decompile the concrete `SubRxFormat` subclass → exact RX frame byte layout
   (section offsets, which bytes/bits = which button/jog/fader) and the XOR position
