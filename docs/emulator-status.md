@@ -106,26 +106,30 @@ no firmware change). Verified on a stock boot: `/dev/subucom_spi1.0` open, the
 the SSI slave (~300k MOSI bytes). Full story + symbols:
 `docs/rbp-and-panel-protocol.md` → "SOLVED".
 
-**Live proof the panel SPI path works (2026-11-05).** Booting with a visible window
-(`qemu/watch.sh`, Cocoa display) the deck UI comes up and **DECK1 shows a red
-`E-7206 AUTH CHIP ERROR`** while DECK2 shows `Not Loaded.`
-(![auth-chip error](img/panel-auth-chip-error.png)). This is the milestone: rbp has
-opened `/dev/subucom_spi1.0`, the `UiMain` poll thread is clocking the slave, and
-rbp **runs the panel auth-chip verification on the SPI data it reads** — which fails
-because the `xdj-subucom` slave returns stub bytes (no valid auth response). The
-error is **per-deck** (DECK1 errors first; DECK2 falls back to `Not Loaded.`), and it
-is shown transiently during boot before the deck settles to `Not Loaded.`. So the
-auth-chip handshake (E-7206) is the next gate, exactly as expected.
+**SOLVED + DECODE CONFIRMED (2026-11-05).** The panel input protocol is reverse-
+engineered and the `xdj-subucom` slave now feeds frames that rbp **decodes end to
+end** (proven: injecting a decoded control crashes rbp in its render path — a
+rejected frame could not). The real gate was never the auth/handshake — it was a
+**per-frame CRC**: the MISO `SubRxData` frame (class `ui::SubRxFormat`) is a flat
+100-byte frame and parser `FUN_00284d44` decodes it only when a **CRC-16/X-25**
+(poly 0x8408, init/xorout 0xFFFF) over the first 96 bytes (each 32-bit word
+byte-swapped) matches the LE halfword at `[0x62]`. Sections: `refFmtData` +0x04,
+`refCommonData` +0x14 (global buttons `[0x1a]/[0x1b]`), `tMixerData` +0x24/+0x34
+(per-deck analog), `refOtherData` +0x44. The `E-7206 AUTH CHIP ERROR` was a red
+herring — it auto-clears, and the StaticInfomation handshake is a lazy
+version-screen cache (confirmed uninitialized in rbp's live memory), not on the
+button path. Full protocol: `docs/rbp-and-panel-protocol.md`.
 
-**Remaining (in progress):** the `xdj-subucom` SSI slave returns stub bytes, so the
-auth handshake fails and no button/jog/fader frames are accepted. The QEMU-side
-inject scaffolding (per-`spi_message` frame reset, +3 MISO shift, menu-byte offset)
-is captured in `docs/wip/subucom-inject-scaffolding.txt`. Next: RE the **E-7206
-auth-chip handshake** — determine whether it is a simple version/serial check
-(emulatable) or a crypto challenge-response — then the valid `SubRxData` frame
-header that routes frames to the button decoders, and have the slave return decoded
-frames (the reader dispatches only on a *changed* frame). `/dev/gpiodrv` is for
-discrete lines (incl. the USB-detect ones above), not the button data path.
+**Remaining:** (1) **wire up the full control map** — RE every section decoder
+(`FUN_002841e4`, `FUN_00282800`, `FUN_00282a98`, the global-button decoder
+`0x2832b8`) into a byte/bit → control → event-code table, and model the whole
+surface in the slave. (2) **GPU-2D render** (feature A/D): dynamic on-screen
+feedback (a moved fader, a loaded track) blits through the stubbed GPU-2D path and
+crashes, so control *effects* aren't yet visible even though decode works — this is
+the same blocker USB track-loading needs solved. Verification tooling: guest shell
+(root, empty pw, `-serial` socket) + `/proc/<pid>/mem` reads
+(`dd bs=4 skip=$((addr/4)) count=N | hexdump -e ...`); the QEMU gdbstub breakpoints
+are non-functional here. `/dev/gpiodrv` is for discrete lines, not the button data.
 
 ## RE tooling notes
 - Kernel: link base **0x80008000** (PAGE_OFFSET 0x80000000); wrap `vmlinux.bin` as
