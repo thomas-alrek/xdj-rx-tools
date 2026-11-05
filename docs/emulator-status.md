@@ -54,15 +54,19 @@ with the flag set. Three nested blockers were found and cleared:
    boot runs through to Application Start.
 
 **Remaining (true "Part 2"): galcore still probe-fails `-22`.** With the hang gone, the
-real galcore verdict is visible: `gckGALDEVICE_Construct` returns `-EINVAL` because all
-three per-core hardware objects come back null (`[dev+0x4]/+0x8/+0xc` all 0; checked at
-`0x8067abd0`). Each core's construct submits an init command to the FE (regs
-0x654/0x658 = a `WAIT;LINK` idle loop) and waits for the GPU to execute it, which never
-happens (no real GPU, and the completion IRQ 41/42 is never enabled at the GIC). So the
-firmware still falls back to the software path (`-22`, gfxdriver-removed image) and
-`/dev/galcore` is absent — the GPU-2D blit path is still unreached. Closing this means
-modelling GPU command-completion (execute/ack the FE command buffer and signal
-completion) so each core's construct succeeds.
+real galcore verdict is visible (and `/dev/galcore` is absent — confirmed from a guest
+shell, which now works since boot completes). The `-22` chain was fully traced with
+Ghidra (on a sliced region ELF — the full 13 MB kernel times out Ghidra's import):
+`gckGALDEVICE_Construct` builds three cores (3D/2D/VG). The 2D-type check the earlier
+notes described *passes* — GC320 (chipModel 0x320) correctly derives hardware type 2.
+The failure is the **VG (GC355) core construct**: its identify path
+(`gckVGHARDWARE_Construct`) uniquely calls `request_irq` for the VG interrupt (the 3D/2D
+cores poll and never request theirs — the GIC shows GPU IRQ 41/42 permanently
+disabled). That `request_irq` fails under emulation, so the VG construct returns an
+error that propagates up to `-22`. The firmware therefore still falls back to the
+software path and the GPU-2D blit path is unreached. Closing this means making the VG
+core's interrupt setup succeed (wire/validate the VG IRQ, or make galcore treat the VG
+core as absent) — then each core's construct succeeds and `/dev/galcore` appears.
 
 RE tooling: QEMU `-gdb` + a raw-RSP python client (halt+read; breakpoints are
 non-functional here), kernel ELF wrapped at base `0x80008000` for objdump, a validated
