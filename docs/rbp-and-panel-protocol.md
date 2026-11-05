@@ -529,3 +529,35 @@ MISO stream never framing-syncs and never changes → zero events.
 Recommended: (1) to nail the driver framing, then (2) to validate a menu press on
 screen. NOTE the debug-console `button` path does not reach the UI — only real SPI
 frames do.
+
+### Kernel `subucom_spi` driver — transport map (from vmlinux.bin)
+
+Disassembled out of the kernel (wrap a slice as an ARM ELF at VA = 0x80008000 +
+file-offset; `/tmp/wrapelf.py` in session history). char-dev **major 153**, 256
+minors, registered by the module_init at VA **0x800135a4** ("subucom SPI user
+interface"). `file_operations` @ **0x807a54f4**:
+
+| op | addr |
+|---|---|
+| read | 0x803eefd8 |
+| write | 0x803ee8e0 |
+| poll | 0x803edd28 |
+| unlocked_ioctl | 0x803eea2c |
+| open | 0x803ee860 |
+| release | 0x803edd74 |
+
+**read()** has two paths on a mode byte `priv[0x44]`: `==1` copies a pre-buffered
+frame from `priv[0x98]`; otherwise it allocates `len*2`, builds a `spi_transfer`
+(36B) + `spi_message`, calls the driver's SPI helper **0x803eddf8** (→ `spi_sync`
+0x80616da0), then `copy_to_user(buf, priv[0xdc], len)`. **Either way the frame rbp
+reads = the MISO of one `len`-byte (100) SPI burst.** So there is no stream-framing
+to reverse: the QEMU `xdj_subucom` slave just needs to present a 100-byte SubRxData
+frame per read burst (reset its byte index on CS/burst start).
+
+**Still to do for buttons:** the SubRxData *content* layout (which bytes/bits =
+which control, press/release, player) is defined by rbp's parser `FUN_00284d44` +
+sub-decoders (the Ghidra-under-analyzed 0x284xxx-0x289xxx range) feeding the event
+router `FUN_0028cea4` (code@+8/player@+10/flags@+0xb). Fastest way to map it now
+that transport is understood: add a frame-inject hook to `xdj_subucom`, breakpoint
+`FUN_0028cea4` via the gdbstub, and vary the injected frame until it reports menu
+(0x20a). Then baseline-idle frame + a one-shot changed frame = a press on screen.
