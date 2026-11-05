@@ -312,3 +312,19 @@ also appears inert on the idle screen, the whole panel subsystem may be disabled
 
 **Next (gdbstub):** breakpoint `FUN_0028a7b8` (does the timer fire?) and the
 peer's SPI transfer/open (is the device ever opened?) to pin which of a/b/c it is.
+
+### gdbstub result: the panel poll timer is never started (confirmed)
+
+Pinned with a QEMU gdbstub breakpoint on the `MemorandomTimer::timerCallback`
+(**`0x282484`** — note `FUN_0028a7b8` is only the dispatch helper it tail-calls):
+with rbp **fully booted** (UI painted), the callback **never fires** in 60 s and
+0 SPI frames are clocked. So of the three candidates it is **(a): `startTimer`
+on the panel `MemorandomTimer` is never called.** rbp constructs the panel
+(peer + timer at peer+0x2c, receiver, controller) but never starts polling.
+
+Next: find the `startTimer` call site for the panel timer and the precondition
+that skips it in the emulator (candidates: a board-detect GPIO read as "no panel",
+or the `StaticInfomation` bootstrap). Once that precondition is satisfied (or the
+timer forced to start), the poll reads `/dev/subucom_spi1.0` (24-byte frames) and
+the `xdj-subucom` SSI slave can answer with StaticInfomation + button frames — and
+the same path lights up the `button` debug command too.
