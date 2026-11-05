@@ -616,3 +616,55 @@ Decisive for emulation (symmetric-extractable vs asymmetric-unforgeable):
 3. Extend the QEMU `xdj-subucom` slave to stream: valid static-info + auth-OK +
    idle frame, then one-shot the control bit for a press (scaffolding in
    `docs/wip/subucom-inject-scaffolding.txt`).
+
+## SubRxData frame parser `FUN_00284d44` — decoded via objdump (2026-11-05)
+
+Ghidra left `0x284xxx` undefined; `objdump -d --start-address` on the rbp ELF
+disassembles it cleanly. This is the parser rbp runs on each 100-byte MISO frame.
+**All offsets below are in rbp's read-buffer coordinates; the kernel drops 3 MISO
+bytes, so `rbp_buf[j] == slave_frame[j+3]`** (e.g. rbp `[2..3]` = slave `[5..6]`).
+
+### The frame-routing gate (this was the "bare frame not routed" blocker)
+```
+284dd4  ldrb r2,[frame,#3]            ; frame[3]
+284dd8  ldrb r3,[frame,#2]            ; frame[2]
+284ddc  orr  hdr, r3, r2<<8           ; hdr = (frame[2]<<8)|frame[3]  (big-endian u16)
+284de4  cmp  hdr,#0xffff ; beq SKIP   ; header 0xffff  -> frame dropped
+284df0  cmp  hdr,#0      ; beq SKIP   ; header 0x0000  -> frame dropped
+284df8  bl   <decode>                 ; else: frame is processed
+```
+A frame whose **header at `[2..3]` is `0x0000` or `0xffff` is silently dropped** —
+which is exactly our all-zero / all-`0xff` stub frames. **To make any frame decode,
+the slave must present a header at `[2..3]` that is neither 0 nor 0xffff.** The
+parser also requires the frame pointer to be **4-byte aligned** and length ≥ an
+expected size, or it `__cxa_throw`s.
+
+### Frame structure (from the parser + decoder `FUN_00282630`)
+- `[2..3]`  u16 big-endian **frame header / type id** (the routing gate; stored to
+  the receiver at `+0x94`).
+- `[0x62]`  u16 compared against a value computed over the previous frame
+  (`FUN_0028259c` → `0x3f7f4`, a byte-swapped hash). Equal vs not-equal only
+  **selects which decoder path runs** (`FUN_002841e4` vs the header decoder) — it is
+  a change-detector, **not a checksum gate** the slave must satisfy.
+- `this+0x88` u16 = previous-frame marker (`0xffff` on the very first frame → the
+  first-frame init path).
+
+### Control-bit offsets decoded by `FUN_00282630`
+```
+[0x10] bit2   -> event arg A        [0x20] bit2   -> event arg B
+[0x12] bit3   -> gate               [0x12] & 0x88 == 0x88 -> allocate a 388-byte event
+[0x13] bit2   -> event              [0x13] bit3   -> event
+```
+These are per-control press/flag bits (more decoders — `FUN_002841e4`,
+`FUN_00286074`, `FUN_0028613c` — cover the rest of the surface; full map TBD).
+
+### What the slave must now emit (updated recipe)
+1. A valid **header `[2..3]`** (non-zero, non-0xffff) so the frame routes — slave
+   bytes `[5..6]`. Exact per-type header values still to be enumerated (the real
+   panel's frame-type ids).
+2. The control bit for the target button (menu = rbp `buf[0x1b]` bit0 = slave
+   `[0x1e]`, from earlier RE) set once, in an otherwise-steady frame.
+3. For E-7206: the per-deck **auth-OK status** byte (still to be located; it rides
+   the same frame, panel-reported — see the handshake section).
+Open items: enumerate the real **header type-ids**, the **auth-OK byte/bit**, and the
+`[0x10]/[0x12]/[0x13]/[0x20]…` → physical-control map.
