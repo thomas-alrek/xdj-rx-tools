@@ -99,15 +99,12 @@ sed -i "/^cd \/root\/pioneer/a\\echo 1 > /proc/sys/kernel/print-fatal-signals 2>
 # is not blocked when no DHCP server answers.) Linking to rekordbox is then
 # enabled from the LINK menu in the app (needs the panel buttons).
 sed -i "/^mkdir -p \/root\/gui/a\\ifconfig lo 127.0.0.1 up 2>/dev/null; udhcpc -b -i eth0 -t 3 -T 1 2>/dev/null \&" "$A"
-# Remove the one Vivante GAL DirectFB gfxdriver so DirectFB software-renders the
-# UI without needing /dev/galcore. This was the workaround from when the stock
-# galcore path hung; galcore now fully initialises on the default QEMU path
-# (/dev/galcore exists — see docs/emulator-status.md / docs/gpu2d-handover.md), so
-# this removal is no longer required to boot. It is kept for now because the idle
-# UI software-renders identically and the hardware GPU-2D blit path still has an
-# open gui_task crash; restoring this gfxdriver to blit through galcore is the
-# next step. This is the single compromise vs. a byte-for-byte rootfs.
-rm -f tree/usr/lib/directfb-1.4-0/gfxdrivers/libdirectfb_gal.so
+# The Vivante GAL DirectFB gfxdriver (libdirectfb_gal.so) is kept intact: this is
+# now a byte-for-byte rootfs. The driver used to be removed as a workaround for
+# the galcore boot hang, but galcore now fully initialises on the default QEMU
+# path (/dev/galcore exists — see docs/emulator-status.md / docs/gpu2d-handover.md),
+# so DirectFB blits through the real galcore device as it does on hardware.
+# (Was: rm -f tree/usr/lib/directfb-1.4-0/gfxdrivers/libdirectfb_gal.so)
 
 mke2fs -q -t ext4 -O ^metadata_csum,^64bit,^orphan_file,^metadata_csum_seed \
        -b 1024 -d tree -F p1.ext4 150000
