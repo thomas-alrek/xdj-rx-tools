@@ -749,3 +749,45 @@ Needs one of:
    may be compensating for the i.MX ECSPI delivering MISO bytes big-endian within each
    word; if so the slave's byte placement needs a matching swap. Unverifiable without a
    working decode signal — resolve once #1/#2 gives one.
+
+## Handshake question answered + SubRxFormat frame class (2026-11-05, live memory)
+
+Using the guest shell (root, `/dev/console` = rbp stdout) and reading rbp's memory
+via `/proc/<pid>/mem` (`dd bs=4 skip=$((addr/4)) count=N | hexdump -e ...`), two
+things are now settled:
+
+### The StaticInfomation handshake does NOT gate buttons
+Read the StaticInfomation struct at `0x0123e050` in the live `rbp_solo` (pid 2323):
+**all zeros**, including the `__cxa_guard` byte `0x0123e050`. So the object was
+**never initialized** — it is a *lazy* cache built only when the VERSION-INFO screen
+or the debug console is opened (both read `/tmp/smdj.rev`). It is not on the panel
+read/decode path. So a missing StaticInfomation is **not** why buttons don't work.
+(`/tmp/smdj.rev` = `--.--`, `/tmp/smdj2.rev` = `--.-- [4206:4195:]` — placeholder
+system/sub firmware revision strings rbp writes; `smdj` = the board code.)
+
+### The MISO frame format is class `ui::SubRxFormat`
+RTTI + assertion strings (`0x427328`+) name its accessors, which map 1:1 to the
+parser's section decoders:
+- `getCrcAdress()`  → the CRC field (`[0x62]`; coverage = first 96 bytes). **Confirms
+  the CRC model again**: the format's size method returns 100, the coverage method
+  returns start+96.
+- `refFmtData()`    → frame `+0x04`
+- `refCommonData()` → frame `+0x14`  (global buttons live here: `[0x1a]`,`[0x1b]`)
+- `tMixerData()`    → frame `+0x24` / `+0x34`  (per-deck, decoder `FUN_00282800`, r3=1/2)
+- `refOtherData()`  → frame `+0x44`  (decoder `FUN_00282a98`)
+
+### MOSI (rbp→panel) protocol
+Constant 100-byte frame, three `02 aa <reg> <val>` sub-commands per burst at offsets
+0/32/36 (block sizes 32/4/64). No request/response handshake — rbp streams it from
+early boot. Its tail holds rbp **pointers** (`0x0035c9f0`, `0x0035ca08`), so the TX
+format differs from the RX (no CRC at `[0x62]`); can't validate the RX CRC against it.
+
+### Where this leaves buttons
+CRC implemented and re-confirmed; frames flow at ~140/s; handshake ruled out. Buttons
+still show no *visible* effect, but MENU/global buttons may simply have no visible
+effect on an empty deck. Definitive next tests (both now feasible with `/proc/mem`):
+1. **Auth-status byte** — RE the per-deck decoder `FUN_00282800` (frame `+0x24`) to
+   find the E-7206 auth bit; set it "fail" and confirm E-7206 *persists* (vs the known
+   auto-clear) = proof frames are processed.
+2. **Receiver frame counter** — locate the live `PanelComReciever` object and watch
+   its `+0x8c` counter / `+0x88` marker increment = proof frames are accepted.
