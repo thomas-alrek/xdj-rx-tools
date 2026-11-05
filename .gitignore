@@ -16,3 +16,7 @@ venv/
 
 # macOS
 .DS_Store
+
+# USB test images (large; place your own rekordbox-formatted image here)
+test/usb/*.img
+test/usb/*.dmg

@@ -56,6 +56,20 @@ if [ "$NIC" != "user" ] && [ "$(uname)" = "Darwin" ] && [ "$(id -u)" != "0" ]; t
   echo "net: '$NIC' needs root on macOS (vmnet) — re-run with sudo, or unset XDJNIC for user-mode NAT" >&2
 fi
 
+# Optional USB mass-storage (a rekordbox-formatted disk image). Cold-plug only:
+# the EHCI hotplug path leaves the port connected-but-not-enabled, so the stick
+# must be present at boot to enumerate. Enable with XDJUSB=path/to/image.img.
+# NOTE: rbp currently crashes rendering rekordbox USB content (stubbed GPU 2D
+# path) -- see docs/emulator-status.md feature D -- so this is for bring-up, not
+# yet a working browse.
+USB_ARGS=()
+if [ -n "${XDJUSB:-}" ]; then
+  [ -f "$XDJUSB" ] || { echo "XDJUSB=$XDJUSB not found" >&2; exit 1; }
+  USB_ARGS=(-drive if=none,id=usbstick,file="$XDJUSB",format=raw
+            -device usb-storage,bus=usb-bus.0,drive=usbstick,id=xdjusb)
+  echo "usb: attaching $XDJUSB as usb-storage on usb-bus.0 (cold-plug)" >&2
+fi
+
 # sabresd console is ttymxc0 = serial 0 -> wire it to this terminal (Ctrl-A X quits).
 exec "$QEMU" -M sabrelite -smp "$SMP" -m 256 -no-reboot \
   -name "Pioneer XDJ-RX" \
@@ -65,4 +79,5 @@ exec "$QEMU" -M sabrelite -smp "$SMP" -m 256 -no-reboot \
   -device loader,file="$Q/tramp.bin",addr=0x10000000,cpu-num=0 \
   -drive if=none,id=xdjsd,file="$SD",format=raw \
   -nic "$NIC" \
+  "${USB_ARGS[@]}" \
   -serial mon:stdio -serial null
