@@ -39,7 +39,7 @@
 +/*
 + * XDJ-RX: hand the kernel a GPT timer tick to unblock the bus-frequency DVFS
 + * settling wait (see hw/arm/fsl-imx6.c).  A no-op unless the machine armed it
-+ * on the XDJ_GPU2D full-stock-galcore boot path.
++ * on the full-galcore boot path (the default; disabled by XDJ_GPU2D_OFF=1).
 + */
 +void xdj_dvfs_gpt_kick(void);
  

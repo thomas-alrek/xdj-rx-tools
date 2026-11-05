@@ -13,22 +13,26 @@ Splash (32bpp) + main UI (16bpp RGB565) render; dynamic bpp scanout reads the IP
 display stride. Launch: `qemu/watch.sh`. Uses `nand.img` (the GAL
 DirectFB gfxdriver removed so DirectFB software-renders). Committed.
 
-## ✅ A. galcore / Vivante GPU — resolved by shipping nand.img
-The built-in galcore (Vivante) driver probes at boot and fails `-22` (no real GPU),
-which is harmless: `nand.img` has the one DirectFB GAL gfxdriver
-(`libdirectfb_gal.so`) removed, so the UI software-renders without `/dev/galcore`
-(the GPU is only used for an unreached `g2d_blit`). The baseline GPU register stub
-(patch 02) just makes that `-22` clean rather than a hang.
+## ✅ A. galcore / Vivante GPU — fully initialises (default path)
+The built-in galcore (Vivante) driver now fully initialises on the default boot path:
+the QEMU GPU stub (patch 02) + GC355 VG core + DVFS GPT kick (patch 05) carry it through
+init, so `/dev/galcore` exists and boot reaches `#### Application Start!! ###` (details
+below). Note `nand.img` still has the one DirectFB GAL gfxdriver (`libdirectfb_gal.so`)
+removed — the workaround from when galcore hung — so DirectFB *itself* still
+software-renders the idle UI; restoring that gfxdriver to blit through the now-working
+galcore is the next step (see `docs/gpu2d-handover.md`).
 
-**Why not a byte-for-byte rootfs?** Making galcore fully initialise needs the
-`XDJ_GPU2D=1` path (patch 02 makes the 2D core report a real GC320 so galcore derives
-`gcvHARDWARE_2D` and clears `-22`). That path is **WIP and still hangs**; the default
-boot (no flag) is byte-identical and ships the gfxdriver-removed image, so nothing is
-lost visually in the idle UI.
+**The full-galcore path is now the DEFAULT (and only) boot path.** Making galcore fully
+initialise needs patch 02's GC320 2D identity (so galcore derives `gcvHARDWARE_2D` and
+clears `-22`) plus the mapped GC355 VG core and the DVFS GPT kick. That path is now
+**always on** and boots to the live UI on `-smp 1` (the launch default); the old
+software-render behaviour is reachable only as a regression escape hatch
+(`XDJ_GPU2D_OFF=1`: 2D slot reports GC2000, galcore fails `-22` and fast-aborts). The
+remaining open work is the real dual-core `-smp 2` config — see `docs/gpu2d-handover.md`.
 
-Progress on the `XDJ_GPU2D` path (session 4) — the galcore **boot hang is SOLVED**;
-galcore now runs its full init and the firmware boots to `#### Application Start!! ###`
-with the flag set. Three nested blockers were found and cleared:
+The galcore **boot hang is SOLVED** (session 4); galcore runs its full init and the
+firmware boots to `#### Application Start!! ###`. Three nested blockers were found and
+cleared:
 1. **i.MX6 bus-frequency DVFS settling wait (SOLVED).** Enabling the GPU clocks makes
    galcore call `set_high_bus_freq`, which steps the ARM/DDR clocks with CPU IRQs
    masked then busy-polls `GICC_HPPIR` for a settling tick. Under emulation the
@@ -36,7 +40,8 @@ with the flag set. Three nested blockers were found and cleared:
    pending and the poll spins forever (proved at the hang via gdb: no enabled IRQ
    pending → HPPIR stays `0x3ff`). **Fix: `imx_gpt_kick()`** (patch 05) raises the GPT
    OF1 interrupt (GIC ID 87) from the CCM clock-step register writes (patch 05 hooks
-   `imx6_ccm_write` on CCSR/CACRR/CGPR; patch 02 arms it only under `XDJ_GPU2D`).
+   `imx6_ccm_write` on CCSR/CACRR/CGPR; patch 02 arms it on the full-galcore path,
+   now the default).
 2. **Idle-loop feedback (benign side-effect).** The GPT kick also wakes the CPU-idle
    WFI, whose `imx6q_enter_wait` runs its own bus-freq DVFS → a busy idle↔busfreq loop.
    It does not block progress (galcore's init still completes); it only burns host CPU.
@@ -49,12 +54,12 @@ with the flag set. Three nested blockers were found and cleared:
    (`gckOS_ReadRegisterEx` core 2, regs 0x004/0x000) read the unmapped region, got 0,
    and spun forever (the "idle"/"clock-running" bits never set) — found by walking the
    blocked init thread's stack (PID 1, `tasks_off=0xb8`) to `gckOS_Delay` inside the
-   poll. **Fix: map a GC355 VG stub at `0x02204000`** (patch 02, gated `XDJ_GPU2D`),
+   poll. **Fix: map a GC355 VG stub at `0x02204000`** (patch 02, on the default path),
    reusing the idle/clock-reporting stub ops. With it, galcore's core init completes and
    boot runs through to Application Start.
 
-**SOLVED (Part 2): galcore fully initialises — `/dev/galcore` exists.** With
-`XDJ_GPU2D=1` the firmware now boots to `#### Application Start!! ###` with no `-22`,
+**SOLVED (Part 2): galcore fully initialises — `/dev/galcore` exists.** On the default
+path the firmware now boots to `#### Application Start!! ###` with no `-22`,
 no MMU/AXI error and no oops; a guest shell confirms `crw-rw-rw- 199,0 /dev/galcore`,
 and a framebuffer screendump shows the Pioneer DJ / rekordbox boot splash
 (`docs/img/galcore-boot-splash.png`). The `-22` and the crashes after it were traced

@@ -100,10 +100,13 @@ sed -i "/^cd \/root\/pioneer/a\\echo 1 > /proc/sys/kernel/print-fatal-signals 2>
 # enabled from the LINK menu in the app (needs the panel buttons).
 sed -i "/^mkdir -p \/root\/gui/a\\ifconfig lo 127.0.0.1 up 2>/dev/null; udhcpc -b -i eth0 -t 3 -T 1 2>/dev/null \&" "$A"
 # Remove the one Vivante GAL DirectFB gfxdriver so DirectFB software-renders the
-# UI without needing /dev/galcore. QEMU does not model the i.MX6 GPU bus-freq
-# DVFS, so the stock galcore path cannot complete (see docs/emulator-status.md);
-# the GPU is only used for an unreached g2d_blit, so the UI is identical. This is
-# the single compromise vs. a byte-for-byte rootfs.
+# UI without needing /dev/galcore. This was the workaround from when the stock
+# galcore path hung; galcore now fully initialises on the default QEMU path
+# (/dev/galcore exists — see docs/emulator-status.md / docs/gpu2d-handover.md), so
+# this removal is no longer required to boot. It is kept for now because the idle
+# UI software-renders identically and the hardware GPU-2D blit path still has an
+# open gui_task crash; restoring this gfxdriver to blit through galcore is the
+# next step. This is the single compromise vs. a byte-for-byte rootfs.
 rm -f tree/usr/lib/directfb-1.4-0/gfxdrivers/libdirectfb_gal.so
 
 mke2fs -q -t ext4 -O ^metadata_csum,^64bit,^orphan_file,^metadata_csum_seed \
