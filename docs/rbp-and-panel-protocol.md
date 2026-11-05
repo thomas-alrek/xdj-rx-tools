@@ -101,8 +101,23 @@ patch 03; the Subucom SSI slave is the XDJ-RX panel MCU.)
 - Binary patching of rbp is possible but is a firmware modification; keep QEMU-side
   and kernel/driver approaches first.
 
+### Concrete details recovered so far
+
+- `PanelComController` ctor is `FUN_0021a4ac` (rbp vaddr). It embeds a **`SubTxData`
+  TX buffer of 24 bytes (`0x18`)** (`memset(this+0x6c, 0, 0x18)`) and asserts that
+  buffer is 4-byte aligned. SPI is full-duplex, so the **RX frame is very likely
+  also 24 bytes** exchanged per transfer (TX app→MCU LED/state ⇄ RX MCU→app control
+  state). Config bytes set in the ctor: `+0x5e = 0x42`, `+0x5d = 6`, `+0x5f = 0`
+  (likely a frame/command header — confirm against the SPI transfer length).
+- On first construction it registers **4 periodic panel tasks** via `new`(0x68) +
+  `FUN_0002be28(obj, id, 1, 100, 0, 0x1e)` with ids `0xa2,0xa3,0xa4,0xa5` (panel
+  poll/refresh timers; `100`/`0x1e` look like periods).
+
 ## Open follow-ups
 - Decompile the concrete `SubRxFormat` subclass → exact RX frame byte layout
-  (section offsets, sizes, which bytes/bits = which button/jog/fader) and the XOR.
-- Decompile `PanelComPeerLinux` SPI transfer + the `StaticInfomation` handshake.
+  (section offsets, which bytes/bits = which button/jog/fader) and the XOR position
+  (`getCrcAdress`). Confirm the RX frame size (24 vs a header+payload) from the
+  `PanelComPeerLinux` SPI_IOC_MESSAGE transfer length.
+- Decompile `PanelComPeerLinux` SPI transfer + the `StaticInfomation` handshake
+  (this is what the QEMU Subucom SSI slave must satisfy for full stock boot).
 - Map `playengine_Player` decoder selection (for FLAC).
