@@ -52,6 +52,25 @@ Until one lands, the UI path is **nand-nogal** (galcore `-22` fast-fails harmles
 The `XDJ_GPU2D=1` gate (patch 02) clears `-22` and advances the boot to exactly this
 DVFS point; the GPU command submission is fully modelled (2D MMU regs 0x400–0x40c =
 0x18400000, FE cmd-buf reg 0x654 = a `WAIT 200; LINK→self` idle loop, kick reg 0x658).
+
+**Option A progress (2026-11-05, patch 04 `imx_gpt_kick` + CACRR trap in patch 02):**
+delivering the settling tick works — trapping the CCM `CACRR` (0x020c4010) write (the
+bus-freq clock step) and calling `imx_gpt_kick()` (force a GPT OF1 interrupt) clears
+the settling wait, and the stock boot now advances **past** the first DVFS point
+(verified via gdb: the busfreq WFI/poll at 0x803dc2ac/0x803de134 no longer blocks).
+**But it then retry-loops** in the clk/busfreq framework (PCs cycle 0x807a3xxx clk ⇄
+`FUN_803dc064` PLL-config ⇄ 0x803f0bxx; busfreq state `DAT_80d12848` frozen at 0x3f).
+Root cause of the loop: **QEMU models no MMDC** (DDR controller, phys 0x021b0000), so
+the actual DDR frequency transition the bus-freq performs never takes effect / passes
+its verification, and the clk framework keeps retrying. So finishing stock boot via
+(A) now means **modelling the i.MX6 MMDC + DDR DVFS transition**, not just the tick —
+a substantial undertaking. Secondary issue this exposed: under wall-clock TCG the long
+IRQ-masked bus-freq lets the GPT accumulate large real-time, so the kick's tick makes
+the kernel process a huge time delta → `hrtimer: interrupt took …` storm → the guest
+can't catch up to real time. `-icount` fixes the storm (virtual time = instructions)
+but is much slower and does not resolve the MMDC retry-loop. Net: the `imx_gpt_kick`
+mechanism is correct and committed (gated), but full stock boot is blocked on the
+MMDC/DVFS model — reassess (A) scope vs. (B)/(C) before investing further.
 **RE tooling that cracked it:** QEMU `-gdb tcp::<port>` + raw-RSP Python client
 (halt/`g`/`m`/`M`, multi-CPU via `Hg<n>`), kernel VA→phys page-table walk
 (swapper_pg_dir VA 0x80004000), and **Ghidra via REA on a 160 KB region ELF**
