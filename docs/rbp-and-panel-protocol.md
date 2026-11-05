@@ -704,3 +704,48 @@ assume buttons decode yet.**
 
 The slave header change is RE-backed but unverified; it lives in the (gitignored)
 build tree, not in `qemu/patches`, pending a working runtime probe.
+
+## THE REAL GATE: a CRC-16 on every frame (fully RE'd, 2026-11-05)
+
+The header gate was a red herring for *decoding*. Re-reading the parser
+`FUN_00284d44`, **decoding only happens when a per-frame CRC matches** — otherwise
+the frame is stored but nothing decodes (the header path calls a `bx lr` no-op).
+
+- **Algorithm:** `FUN_0028259c` → `0x3f7f4` is a table-driven **CRC-16/X-25**
+  (poly `0x1021`, reflected **`0x8408`** — confirmed from the table-gen constant at
+  `0x3f9e8`; init `0xFFFF`; refin/refout; xorout `0xFFFF`).
+- **Coverage:** the length method `0x2859b8` returns `frame_ptr + 96`, so the CRC is
+  over the **first 96 bytes** (rbp `[0..0x5f]`), with **each 32-bit word byte-swapped
+  first** (`FUN_0028259c` `rev`s each word before hashing).
+- **Field:** compared to the little-endian halfword at rbp `[0x62]` (`ldrh [r1,#98]`).
+- **Match path** (`0x284f28`) runs the section decoders on frame offsets
+  `+4/+0x14/+0x24/+0x34/+0x44` (`FUN_002841e4`, `FUN_00282800`, `FUN_00282a98`) vs the
+  previous frame at `this[0x90]` — this is where buttons (incl. the global-button
+  byte `[0x1b]`) decode. **No header check on this path.**
+
+So our stub's `frame[0x62]=0` never matched → zero decoding, ever. **Implemented the
+CRC in the `xdj-subucom` slave** (build tree): build the frame in rbp coords, CRC the
+byte-swapped first 96 bytes, write it to `[0x62]`, shift +3 onto MISO.
+
+### Confirmed by SUBUCOM_TRACE
+- **The poll thread reads continuously after settle: ~140 frames/sec** (56,200 MOSI
+  bytes in 4 s). Frames flow; the parser runs ~140×/sec.
+- Therefore the **QEMU gdbstub breakpoints are non-functional here** — a breakpoint on
+  a function hit 140×/sec never triggered (tooling dead, not code idle). No in-process
+  probe is available; verification must be via the framebuffer.
+- rbp's **MOSI** is a structured write stream: 4-byte words `02 aa <reg> <val>`
+  (e.g. `02 aa 1a b0`, `02 aa 1b 08`) — rbp writing panel registers (LEDs/display).
+
+### Verification gap + next steps
+Could not yet *visually* confirm decode: the **MENU button has no visible effect on an
+empty "Not Loaded" deck**, so a menu inject on a settled UI shows no change either way.
+Needs one of:
+1. A control with a **guaranteed visible effect** (toggles an on-screen indicator) to
+   inject instead of MENU — map the event codes (`0x204`, `0x209`, `0x20a`, `0x4488`)
+   to actions via the event router `FUN_0028cea4`.
+2. The **auth-status byte**: set it to "fail" and confirm E-7206 *persists* (vs the
+   known auto-clear) — definitive proof frames are processed, and the handshake goal.
+3. **Risk to verify:** the ECSPI 32-bit burst byte-order. The parser's per-word `rev`
+   may be compensating for the i.MX ECSPI delivering MISO bytes big-endian within each
+   word; if so the slave's byte placement needs a matching swap. Unverifiable without a
+   working decode signal — resolve once #1/#2 gives one.
