@@ -27,9 +27,15 @@ path works via sd-nogal.
 
 ## 🔶 B. Ethernet → Pro DJ Link
 FEC is modeled; `-nic user,id=net0` attaches and the FEC driver loads
-("fec_enet_mii_bus: probed"). But at idle the firmware doesn't bring up `eth0` or
-emit Pro DJ Link (empty pcap). Next: find what triggers eth0/Link (media loaded?
-Link enabled?); for real-LAN DJ-Link broadcast use a vmnet bridge (sudo on macOS).
+("fec_enet_mii_bus: probed"). The firmware runs a **DHCP server** (`udhcpd`, pool
+**192.168.0.100–120** on `eth0`) — the classic Pro-DJ-Link setup where the player
+hands out IPs on its link subnet. But `eth0` is **not** brought up at boot: the
+`/etc/rc.d/init.d/network` script only configures it when `SYSCFG_IFACE0=y`
+/ `IPADDR0` is set in `rc.conf`, and they are not — so **rbp controls the Link
+network** (brings up eth0 + starts the Link protocol), gated on enabling Link / a
+linked device, which we can't trigger yet without working panel buttons. Next: RE
+rbp's Link handler (`LnkHand`) to find the eth0/Link trigger, or drive it via the
+panel once injection works; for real-LAN DJ-Link broadcast use a vmnet bridge.
 
 ## 🔶 D. 2× USB passthrough (= the original exFAT goal)
 USB **is** modeled (ChipIdea, 4 controllers → `usb-bus.0..3`; firmware brings up
@@ -46,8 +52,12 @@ descriptor. Two leads:
    (unmodeled). The firmware's USB flow may expect that hub; a drive belongs on a
    USB2512B downstream port, not the EHCI root. Options: model/attach a `usb-hub`,
    or (if the hub config is I2C) model the USB2512B on I2C.
-2. Debug why enumeration doesn't proceed though the root port is enabled (control-
-   transfer / async-schedule on the ChipIdea EHCI; no error logged either).
+2. Debug why enumeration doesn't proceed though the root port is enabled: **both
+   cold- and clean hot-plug** (`device_add` after boot) leave PORTSC connected but
+   produce **no** "new USB device" and **no** error — so khubd isn't running the
+   descriptor read. Suspect the ChipIdea EHCI port-change interrupt / async-schedule
+   isn't driving khubd (the controller starts and the root hub works, so it's a
+   port-change-notify or control-transfer issue specific to this EHCI).
 **exFAT itself:** the 3.0.35 kernel has vfat/msdos/**ntfs** but **no exFAT and no
 FUSE** — so the old "fuse-exfat" plan won't work; exFAT needs an out-of-tree kernel
 module (e.g. exfat-nofuse) built against this kernel + a mount rule. (Test images:
