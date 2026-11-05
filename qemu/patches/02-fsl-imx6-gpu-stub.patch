@@ -18,12 +18,10 @@
  
  #define IMX6_ESDHC_CAPABILITIES     0x057834b4
  
-@@ -105,11 +109,659 @@
-     object_initialize_child(obj, "pcie", &s->pcie, TYPE_DESIGNWARE_PCIE_HOST);
-     object_initialize_child(obj, "pcie4-msi-irq", &s->pcie4_msi_irq,
+@@ -107,9 +111,657 @@
                              TYPE_OR_IRQ);
-+}
-+
+ }
+ 
 +/*
 + * Minimal Vivante GPU (GC2000 3D / GC320 2D) register stub.
 + *
@@ -423,7 +421,7 @@
 +        xdj_crc16_tab[i] = c;
 +    }
 +    xdj_crc16_ready = 1;
- }
++}
 +static uint16_t xdj_crc16(const uint8_t *d, int n)
 +{
 +    uint16_t crc = 0xffff;
@@ -436,7 +434,7 @@
 +    }
 +    return (uint16_t)~crc;
 +}
- 
++
 +/*
 + * Called by the ECSPI (imx_spi_flush_txfifo) at the start of every SPI burst so
 + * the panel's SubRxData frame is presented byte-aligned on MISO. We build the
@@ -678,34 +676,11 @@
      FslIMX6State *s = FSL_IMX6(dev);
      uint16_t i;
      qemu_irq irq;
-@@ -303,6 +955,23 @@
-                                  &error_abort);
-         object_property_set_bool(OBJECT(&s->gpio[i]), "has-upper-pin-irq",
-                                  true, &error_abort);
-+        /*
-+         * XDJ-RX: the two USB-storage "device present" detect lines idle HIGH
-+         * (external pull-up; pulled LOW only when a USB drive is inserted), so
-+         * reset them high. Without this they read 0 ("USB present"); rbp's
-+         * UsbStorageManager then tries to push an initial USB state to the
-+         * front-panel MCU during UI init -- before the panel poll thread has
-+         * been started -- and blocks there forever, so the panel (buttons/jogs)
-+         * never comes up. deck1 = GPIO4_IO30 (gpiodrv id 126/0x7e), deck2 =
-+         * GPIO7_IO12 (id 204/0xcc).
-+         */
-+        if (i == 3) {        /* GPIO4: USB-detect deck1 (GPIO4_IO30) */
-+            object_property_set_uint(OBJECT(&s->gpio[i]), "psr-reset",
-+                                     1u << 30, &error_abort);
-+        } else if (i == 6) { /* GPIO7: USB-detect deck2 (GPIO7_IO12) */
-+            object_property_set_uint(OBJECT(&s->gpio[i]), "psr-reset",
-+                                     1u << 12, &error_abort);
-+        }
-         if (!sysbus_realize(SYS_BUS_DEVICE(&s->gpio[i]), errp)) {
-             return;
-         }
-@@ -473,6 +1142,141 @@
+@@ -472,7 +1124,142 @@
+      */
      create_unimplemented_device("pcie-phy", FSL_IMX6_PCIe_ADDR,
                                  FSL_IMX6_PCIe_SIZE);
- 
++
 +    /* Vivante GPU register stubs (3D + 2D) so galcore init completes.
 +     * Each core reports its own identity + IRQ.  The 3D core (GC2000) always
 +     * reports a 3D part.  The 2D core defaults to the old behaviour (reports
@@ -728,7 +703,7 @@
 +                              FSL_IMX6_GPU_3D_SIZE);
 +        memory_region_add_subregion(get_system_memory(), FSL_IMX6_GPU_3D_ADDR,
 +                                    &gpu3d_stub);
-+
+ 
 +        gpu2d_core = (XdjGpuCore){
 +            .irq      = gpu2d_full ?
 +                        qdev_get_gpio_in(gic, FSL_IMX6_R2D_IRQ) : NULL,
@@ -844,7 +819,7 @@
      /* ROM memory */
      if (!memory_region_init_rom(&s->rom, OBJECT(dev), "imx6.rom",
                                  FSL_IMX6_ROM_SIZE, errp)) {
-@@ -502,6 +1306,10 @@
+@@ -502,6 +1289,10 @@
                               &s->ocram, 0, FSL_IMX6_OCRAM_ALIAS_SIZE);
      memory_region_add_subregion(get_system_memory(), FSL_IMX6_OCRAM_ALIAS_ADDR,
                                  &s->ocram_alias);
