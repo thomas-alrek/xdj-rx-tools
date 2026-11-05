@@ -26,8 +26,9 @@ which is harmless: `nand.img` has the one DirectFB GAL gfxdriver
 boot (no flag) is byte-identical and ships the gfxdriver-removed image, so nothing is
 lost visually in the idle UI.
 
-Progress on the `XDJ_GPU2D` path (session 4) — three nested blockers, first two
-understood:
+Progress on the `XDJ_GPU2D` path (session 4) — the galcore **boot hang is SOLVED**;
+galcore now runs its full init and the firmware boots to `#### Application Start!! ###`
+with the flag set. Three nested blockers were found and cleared:
 1. **i.MX6 bus-frequency DVFS settling wait (SOLVED).** Enabling the GPU clocks makes
    galcore call `set_high_bus_freq`, which steps the ARM/DDR clocks with CPU IRQs
    masked then busy-polls `GICC_HPPIR` for a settling tick. Under emulation the
@@ -35,20 +36,33 @@ understood:
    pending and the poll spins forever (proved at the hang via gdb: no enabled IRQ
    pending → HPPIR stays `0x3ff`). **Fix: `imx_gpt_kick()`** (patch 05) raises the GPT
    OF1 interrupt (GIC ID 87) from the CCM clock-step register writes (patch 05 hooks
-   `imx6_ccm_write` on CCSR/CACRR/CGPR; patch 02 arms it only under `XDJ_GPU2D`). The
-   guest then advances out of the busfreq spin into galcore.
-2. **Idle-loop feedback (understood, not a galcore loop).** Past the DVFS, a validated
-   backtrace shows the CPU is in the **idle loop** (`cpu_idle` → `imx6q_enter_wait`),
-   which runs its own bus-freq DVFS each iteration; the GPT kick that releases that
-   DVFS also wakes the idle WFI → a busy idle↔busfreq loop (~950k/s). A cleaner fix —
-   overlaying `GICC_HPPIR` to fall through *without* raising a real IRQ — doesn't work:
-   QEMU's A9 GIC CPU-interface is mapped inside the a9mpcore container and a
-   system-memory overlay reaches debug reads but not guest GIC accesses.
-3. **galcore's real init wait (OPEN — the actual blocker).** The idle loop runs because
-   galcore's init thread is **blocked/sleeping** on a post-DVFS wait inside
-   `gckGALDEVICE_Construct`. It is *not* a GPU-IRQ wait (galcore never enables IRQ
-   41/42) and *not* a register poll (89 GPU accesses total). Pinning this wait is the
-   next step. The DVFS-kick experiment is kept gated (patches 02 + 05), not reverted.
+   `imx6_ccm_write` on CCSR/CACRR/CGPR; patch 02 arms it only under `XDJ_GPU2D`).
+2. **Idle-loop feedback (benign side-effect).** The GPT kick also wakes the CPU-idle
+   WFI, whose `imx6q_enter_wait` runs its own bus-freq DVFS → a busy idle↔busfreq loop.
+   It does not block progress (galcore's init still completes); it only burns host CPU.
+   A `GICC_HPPIR` read-overlay would avoid it but doesn't reach guest GIC accesses under
+   QEMU's a9mpcore mapping, so the kick is kept as-is.
+3. **The GC355 OpenVG core (SOLVED — the real hang).** The deadlock that masked
+   everything else was galcore's **VG core** init: i.MX6 has a *third* Vivante core,
+   the GC355 OpenVG engine at `0x02204000` (`gcvCORE_VG`, core index 2), which QEMU did
+   not map. galcore enumerates and initialises all three cores; its VG clock/idle poll
+   (`gckOS_ReadRegisterEx` core 2, regs 0x004/0x000) read the unmapped region, got 0,
+   and spun forever (the "idle"/"clock-running" bits never set) — found by walking the
+   blocked init thread's stack (PID 1, `tasks_off=0xb8`) to `gckOS_Delay` inside the
+   poll. **Fix: map a GC355 VG stub at `0x02204000`** (patch 02, gated `XDJ_GPU2D`),
+   reusing the idle/clock-reporting stub ops. With it, galcore's core init completes and
+   boot runs through to Application Start.
+
+**Remaining (true "Part 2"): galcore still probe-fails `-22`.** With the hang gone, the
+real galcore verdict is visible: `gckGALDEVICE_Construct` returns `-EINVAL` because all
+three per-core hardware objects come back null (`[dev+0x4]/+0x8/+0xc` all 0; checked at
+`0x8067abd0`). Each core's construct submits an init command to the FE (regs
+0x654/0x658 = a `WAIT;LINK` idle loop) and waits for the GPU to execute it, which never
+happens (no real GPU, and the completion IRQ 41/42 is never enabled at the GIC). So the
+firmware still falls back to the software path (`-22`, gfxdriver-removed image) and
+`/dev/galcore` is absent — the GPU-2D blit path is still unreached. Closing this means
+modelling GPU command-completion (execute/ack the FE command buffer and signal
+completion) so each core's construct succeeds.
 
 RE tooling: QEMU `-gdb` + a raw-RSP python client (halt+read; breakpoints are
 non-functional here), kernel ELF wrapped at base `0x80008000` for objdump, a validated

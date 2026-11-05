@@ -18,12 +18,10 @@
  
  #define IMX6_ESDHC_CAPABILITIES     0x057834b4
  
-@@ -105,11 +109,643 @@
-     object_initialize_child(obj, "pcie", &s->pcie, TYPE_DESIGNWARE_PCIE_HOST);
-     object_initialize_child(obj, "pcie4-msi-irq", &s->pcie4_msi_irq,
+@@ -107,9 +111,641 @@
                              TYPE_OR_IRQ);
-+}
-+
+ }
+ 
 +/*
 + * Minimal Vivante GPU (GC2000 3D / GC320 2D) register stub.
 + *
@@ -265,8 +263,8 @@
 +        pend |= ipu_int_stat[r] & ipu_int_ctrl[r] & IPU_BG_CH_BIT;
 +    }
 +    qemu_set_irq(ipu_sync_irq_line, pend ? 1 : 0);
- }
- 
++}
++
 +/*
 + * One interrupt delivery, ~1 frame after the driver armed it.  Real hardware
 + * raises the sync/EOF IRQ once per frame after the channel is armed; we model
@@ -686,7 +684,7 @@
          if (!sysbus_realize(SYS_BUS_DEVICE(&s->gpio[i]), errp)) {
              return;
          }
-@@ -472,7 +1125,99 @@
+@@ -472,7 +1125,121 @@
       */
      create_unimplemented_device("pcie-phy", FSL_IMX6_PCIe_ADDR,
                                  FSL_IMX6_PCIe_SIZE);
@@ -701,7 +699,7 @@
 +    {
 +        static XdjGpuCore gpu3d_core, gpu2d_core;
 +        bool gpu2d_full = getenv("XDJ_GPU2D") != NULL;
- 
++
 +        gpu3d_core = (XdjGpuCore){
 +            .irq      = qdev_get_gpio_in(gic, FSL_IMX6_GPU3D_IRQ),
 +            .model    = 0x00002000u,  /* GC2000 */
@@ -730,7 +728,7 @@
 +                timer_new_ns(QEMU_CLOCK_VIRTUAL, imx6_gpu_fe_fire, &gpu2d_core);
 +            gpu3d_core.sibling_irq = gpu2d_core.irq;
 +            gpu2d_core.sibling_irq = gpu3d_core.irq;
-+
+ 
 +            /* Deliver the bus-freq DVFS settling tick from the CCM clock-step
 +             * register writes (see xdj_dvfs_gpt_kick / imx6_ccm.c). */
 +            xdj_dvfs_gpt = &s->gpt;
@@ -740,6 +738,28 @@
 +                              FSL_IMX6_GPU_2D_SIZE);
 +        memory_region_add_subregion(get_system_memory(), FSL_IMX6_GPU_2D_ADDR,
 +                                    &gpu2d_stub);
++
++        /*
++         * i.MX6 also has a third Vivante core: the GC355 OpenVG engine
++         * ("gcvCORE_VG" = core index 2) at 0x02204000, which QEMU does not map.
++         * galcore enumerates and initialises all three cores; its VG clock/idle
++         * poll (gckOS_ReadRegisterEx core 2) spins forever reading an unmapped
++         * region (returns 0, the "idle"/"clock running" bits never set).  Give
++         * the VG core the same idle/clock-reporting stub + a GC355 identity so
++         * that init completes too.  Only on the XDJ_GPU2D full-stock path.
++         */
++        if (gpu2d_full) {
++            static XdjGpuCore gpuvg_core;
++            static MemoryRegion gpuvg_stub;
++            gpuvg_core = (XdjGpuCore){
++                .model    = 0x00000355u,  /* GC355 (OpenVG) */
++                .revision = 0x00001216u,
++            };
++            memory_region_init_io(&gpuvg_stub, OBJECT(dev), &imx6_gpu_stub_ops,
++                                  &gpuvg_core, "imx6.gpuvg-stub", 0x4000);
++            memory_region_add_subregion(get_system_memory(), 0x02204000,
++                                        &gpuvg_stub);
++        }
 +    }
 +
 +    /*
@@ -786,7 +806,7 @@
      /* ROM memory */
      if (!memory_region_init_rom(&s->rom, OBJECT(dev), "imx6.rom",
                                  FSL_IMX6_ROM_SIZE, errp)) {
-@@ -502,6 +1247,10 @@
+@@ -502,6 +1269,10 @@
                               &s->ocram, 0, FSL_IMX6_OCRAM_ALIAS_SIZE);
      memory_region_add_subregion(get_system_memory(), FSL_IMX6_OCRAM_ALIAS_ADDR,
                                  &s->ocram_alias);
