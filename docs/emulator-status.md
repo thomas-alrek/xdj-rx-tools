@@ -35,17 +35,20 @@ visually. RE tooling used: QEMU `-gdb` + a raw-RSP python client, kernel VA→ph
 page-table walk, and Ghidra (REA) on a sliced region ELF (the full 13 MB kernel times
 out Ghidra's import).
 
-## 🔶 B. Ethernet → Pro DJ Link
-FEC is modeled; `-nic user,id=net0` attaches and the FEC driver loads
-("fec_enet_mii_bus: probed"). The firmware runs a **DHCP server** (`udhcpd`, pool
-**192.168.0.100–120** on `eth0`) — the classic Pro-DJ-Link setup where the player
-hands out IPs on its link subnet. But `eth0` is **not** brought up at boot: the
-`/etc/rc.d/init.d/network` script only configures it when `SYSCFG_IFACE0=y`
-/ `IPADDR0` is set in `rc.conf`, and they are not — so **rbp controls the Link
-network** (brings up eth0 + starts the Link protocol), gated on enabling Link / a
-linked device, which we can't trigger yet without working panel buttons. Next: RE
-rbp's Link handler (`LnkHand`) to find the eth0/Link trigger, or drive it via the
-panel once injection works; for real-LAN DJ-Link broadcast use a vmnet bridge.
+## 🔶 B. Ethernet → rekordbox LAN link
+FEC is modeled and `eth0` now **comes up on the LAN**. The firmware's
+`/etc/rc.d/init.d/network` only configures eth0 when `rc.conf` sets
+`SYSCFG_IFACE0=y`, and the apl_start boot path never runs it — so build-nand.sh
+injects `ifconfig lo up; udhcpc -b -i eth0 … &` into apl_start (DHCP client,
+backgrounded so it can't block the UI). `watch.sh` attaches a QEMU nic to the FEC,
+**defaulting to `vmnet-bridged`** so the device is a normal host on your LAN (user
+goal: a **rekordbox PC on the same LAN pulls/serves library over the network**);
+falls back to user-mode NAT when not root (vmnet needs root for the unsigned qemu).
+`run.sh` builds unprivileged and elevates only the launch. **Verified:** eth0 gets
+a DHCP lease and the UI still boots. Remaining: actually enabling the rekordbox
+link is a **menu action in rbp** (needs panel buttons — feature C), and rbp's link
+handler is `LnkHand` / the `(rekordbox)` code. The device is NOT a player-to-player
+Pro-DJ-Link master here; the target is the rekordbox app library link.
 
 ## 🔶 D. 2× USB passthrough (= the original exFAT goal)
 USB **is** modeled (ChipIdea, 4 controllers → `usb-bus.0..3`; firmware brings up

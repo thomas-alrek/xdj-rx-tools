@@ -128,11 +128,46 @@ patch 03; the Subucom SSI slave is the XDJ-RX panel MCU.)
 - (Note: Ghidra doesn't auto-disassemble these vtable-referenced targets — reach
   them via `objdump -d --start-address=` on the rbp ELF, base `0x8000`.)
 
-## Open follow-ups
-- Decompile the concrete `SubRxFormat` subclass → exact RX frame byte layout
-  (section offsets, which bytes/bits = which button/jog/fader) and the XOR position
-  (`getCrcAdress`). Confirm the RX frame size (24 vs a header+payload) from the
-  `PanelComPeerLinux` SPI_IOC_MESSAGE transfer length.
-- Decompile `PanelComPeerLinux` SPI transfer + the `StaticInfomation` handshake
-  (this is what the QEMU Subucom SSI slave must satisfy for full stock boot).
+### RX decode architecture (recovered 2026-11-05)
+
+The decode is three layers; to **inject a button** the QEMU SSI slave must
+synthesize a valid `SubRxData` frame, and rbp then walks it:
+
+1. **Per-section decoders** — `FUN_00222188`'s callers `0x220314 / 0x220514 /
+   0x220780 / 0x220818` (plus `0xd534c / 0xd5520 / 0x208d18`). One per SubRxData
+   section (Common/Fmt/Other/Mixer). Each reads the section bytes, diffs vs. the
+   previous frame, and for every changed control calls the event dispatcher. **These
+   hold the exact byte/bit → control map — decompile them next.**
+2. **Event dispatcher** `FUN_00222188(ctlr, deckIdx, evtType, value, extra)` —
+   `evtType` is a small enum: **1 = key/button down** (→ key handler `FUN_0028cc18`
+   → observers; also `FUN_00271c7c`), **2/3 = toggle / press-state** (stores at
+   `+0x67 / +0x65`, fires `0x2000`-flagged observers), **4 = aux byte pair**
+   (`+0x69/+0x6b`), **5 = a global toggle** (→ `FUN_002ac1d4(deck,4,0x65,…)`),
+   **0 = release**. `deckIdx` selects deck 0/1 via `(deckIdx-1)&1`.
+3. **Key handler** `FUN_0028cc18` → iterates observer lists (`+0x7c/+0x84`,
+   `+0x10c/+0x114`, `+0x118/+0x120`, each observer's vtable `+0xC`) → decks via
+   `FUN_002ac1d4(deck,index,100,0x7f)`.
+
+Decoded control structs (RTTI in rbp): `PcControlKeyData` (buttons),
+`PcControlJogData`, `PcControlTempoSliderData`, `PcControlDeckSelectData`,
+`PcControlPadData`, `PcControlBfxRotaryData`, `PcControlLongPressData`,
+`PcControlLedData`, `PcControlKeyServer`. SubRxData accessors: `refCommonData` /
+`refFmtData` / `refOtherData` / `tMixerData` / `getCrcAdress` / `xor` (RTTI
+`N2ui14panel_protocol9SubRxDataE` @0x4272a8).
+
+### Plan to implement button injection (next task)
+1. Decompile the four section decoders (above) → exact byte offset + bit for each
+   button/jog/fader, and the frame header + `getCrcAdress`/`xor` checksum.
+2. Confirm the raw 24-byte frame from `PanelComPeerLinux`'s `SPI_IOC_MESSAGE`
+   transfer and the `StaticInfomation` boot handshake rbp expects.
+3. In QEMU (`hw/arm/fsl-imx6.c` `xdj_subucom_transfer`, currently returns `0xff`):
+   drive a real `SubRxData` state block on MISO (handshake + idle), and expose an
+   injection path (keymap via the display, a monitor command, or a control file)
+   that flips button bits/jog deltas in that block. This stays firmware-stock.
+4. This also unlocks **rekordbox LAN link** (feature B) — enabling it is a menu
+   action that needs these buttons (`LnkHand` / `(rekordbox)` in rbp).
+
+## Other open follow-ups
+- Decompile `PanelComPeerLinux` SPI transfer + `StaticInfomation` handshake
+  (what the QEMU Subucom SSI slave must satisfy).
 - Map `playengine_Player` decoder selection (for FLAC).
