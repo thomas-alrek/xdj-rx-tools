@@ -34,6 +34,26 @@ done
 [ -f "$SD" ] || { echo "no nand image: $SD  (run qemu/build-nand.sh)" >&2; exit 1; }
 SMP="${XDJSMP:-1}"            # single-core (fast) by default; XDJSMP=2 for dual-core
 DISPLAY_OPT="${XDJDISPLAY:-cocoa,zoom-to-fit=on,zoom-interpolation=on}"
+# Network backend attached to the i.MX6 FEC (eth0). The firmware runs a DHCP
+# client on eth0 at boot (see qemu/build-nand.sh), so with a bridged nic the
+# device becomes a normal host on your LAN and a rekordbox PC on the same LAN can
+# reach it for library LINK. Bridged is the default -- but macOS vmnet needs root
+# for an unsigned qemu, so without privileges we fall back to user-mode NAT (the
+# UI still works, just not on the real LAN). Run bridged with:
+#     sudo qemu/watch.sh            # bridges to your default-route interface
+# Override explicitly with XDJNIC=... (e.g. vmnet-bridged,ifname=en1 for Wi-Fi,
+# or on Linux a tap into a bridge). rekordbox LINK is then enabled from the app's
+# LINK menu (needs the panel buttons).
+if [ -n "${XDJNIC:-}" ]; then
+  NIC="$XDJNIC"
+elif [ "$(uname)" = "Darwin" ] && [ "$(id -u)" = "0" ]; then
+  IFN="$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}')"
+  NIC="vmnet-bridged,ifname=${IFN:-en0}"
+  echo "net: bridging eth0 to host ${IFN:-en0} (vmnet) — device will be on your LAN" >&2
+else
+  NIC="user"
+  [ "$(uname)" = "Darwin" ] && echo "net: eth0 on user-mode NAT (not your LAN). For rekordbox LAN link: sudo qemu/watch.sh" >&2
+fi
 
 # sabresd console is ttymxc0 = serial 0 -> wire it to this terminal (Ctrl-A X quits).
 exec "$QEMU" -M sabrelite -smp "$SMP" -m 256 -no-reboot \
@@ -43,4 +63,5 @@ exec "$QEMU" -M sabrelite -smp "$SMP" -m 256 -no-reboot \
   -device loader,file="$Q/atags.bin",addr=0x10000100,force-raw=on \
   -device loader,file="$Q/tramp.bin",addr=0x10000000,cpu-num=0 \
   -drive if=none,id=xdjsd,file="$SD",format=raw \
+  -nic "$NIC" \
   -serial mon:stdio -serial null

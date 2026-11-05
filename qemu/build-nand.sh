@@ -35,7 +35,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ISO=build/XDJRX.iso
 Q=build/qemu
-PY="${PYTHON:-python3}"
+# Host python for the ISO extraction (needs pycdlib). Prefer the repo venv that
+# run.sh / the other tools use, so deps are available without polluting the system.
+if [ -n "${PYTHON:-}" ]; then PY="$PYTHON"
+elif [ -x build/.venv/bin/python3 ]; then PY="build/.venv/bin/python3"
+else PY="python3"; fi
 
 [ -f "$ISO" ] || { echo "need $ISO — run: python3 xdjrx_upd.py decrypt XDJRX.UPD -o $ISO" >&2; exit 1; }
 command -v docker >/dev/null || { echo "need docker" >&2; exit 1; }
@@ -86,8 +90,17 @@ sed -i "/^mkdir -p \/root\/gui/a\\mount -t ext4 -o ro /dev/mmcblk0p2 /root/gui 2
 # Log the faulting PC/registers to the console if the app crashes (debug aid; the
 # app binary is untouched). Injected right after apl_start cds into its dir.
 sed -i "/^cd \/root\/pioneer/a\\echo 1 > /proc/sys/kernel/print-fatal-signals 2>/dev/null" "$A"
+# Bring up the network. The firmware /etc/rc.d/init.d/network only configures
+# eth0 when rc.conf sets SYSCFG_IFACE0=y, which the apl_start boot path never
+# runs -- so loopback and eth0 come up down. Bring loopback up and run a DHCP
+# client on eth0 so, when the emulator uses a bridged nic (XDJNIC=vmnet-bridged...,
+# see qemu/watch.sh), the device becomes a normal host on your LAN and a rekordbox
+# PC on the same LAN can reach it. (-b backgrounds after the first attempt so boot
+# is not blocked when no DHCP server answers.) Linking to rekordbox is then
+# enabled from the LINK menu in the app (needs the panel buttons).
+sed -i "/^mkdir -p \/root\/gui/a\\ifconfig lo 127.0.0.1 up 2>/dev/null; udhcpc -b -i eth0 -t 3 -T 1 2>/dev/null \&" "$A"
 # Remove the one Vivante GAL DirectFB gfxdriver so DirectFB software-renders the
-# UI without needing /dev/galcore. QEMU does not model the i.MX6 GPU's bus-freq
+# UI without needing /dev/galcore. QEMU does not model the i.MX6 GPU bus-freq
 # DVFS, so the stock galcore path cannot complete (see docs/emulator-status.md);
 # the GPU is only used for an unreached g2d_blit, so the UI is identical. This is
 # the single compromise vs. a byte-for-byte rootfs.
