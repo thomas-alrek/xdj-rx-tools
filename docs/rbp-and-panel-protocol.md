@@ -328,3 +328,33 @@ or the `StaticInfomation` bootstrap). Once that precondition is satisfied (or th
 timer forced to start), the poll reads `/dev/subucom_spi1.0` (24-byte frames) and
 the `xdj-subucom` SSI slave can answer with StaticInfomation + button frames — and
 the same path lights up the `button` debug command too.
+
+### ROOT CAUSE (definitive): rbp never starts the panel poll thread
+
+Corrected mechanism + confirmation via gdbstub:
+
+- The real panel poll is **not** the `MemorandomTimer` — it's an **epoll-based
+  run-loop thread**, `PanelComPeerLinux::run()` = **`FUN_00281d24`**. That loop
+  `epoll_ctl`s each channel fd (`/dev/subucom_spi1.0`), then **reads the SPI only
+  when `epoll_wait` reports `POLLIN`** (via `FUN_00281c78`); a timeout branch does
+  not read.
+- With a **hardware breakpoint on `FUN_00281d24` set before boot** (`-S` + `Z1`),
+  rbp **fully boots (reaches Application Start) but never once enters the run
+  loop** in 160 s. So the panel **poll thread is never spawned** — rbp constructs
+  the whole panel stack (peer + receiver + controller, `setReceiver` done) but
+  never calls `startThread`. (The peer TX `FUN_00281650` and the loop body
+  `0x281e64` also never fire — consistent.)
+- The panel `start`/`startThread` is **event-driven and not in the UI-init path**
+  (`FUN_00245098` only constructs); the triggering event never occurs under
+  emulation. This is why rbp never opens/reads `/dev/subucom_spi1.0`, and why the
+  `button` debug command's dispatch has no live panel behind it.
+
+**Fix is multi-part** (for the responsive SPI path):
+1. **Start the poll thread** — find + satisfy the start trigger, or force-start it
+   (a small rbp patch / injected hook, bakeable into the image).
+2. **Make the device report `POLLIN`** — the epoll loop only reads on data-ready;
+   model the subucom data-ready signal in QEMU (or make the driver always-readable)
+   so `epoll_wait` wakes. (A plain blocking `read()` already clocks the SSI slave —
+   proven by the `dd` test — so only the readiness/notify path is missing.)
+3. **Answer with valid 24-byte frames** from the `xdj-subucom` SSI slave
+   (StaticInfomation handshake + button/jog/fader frames).
