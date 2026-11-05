@@ -167,6 +167,47 @@ Decoded control structs (RTTI in rbp): `PcControlKeyData` (buttons),
 4. This also unlocks **rekordbox LAN link** (feature B) — enabling it is a menu
    action that needs these buttons (`LnkHand` / `(rekordbox)` in rbp).
 
+## Physical control surface (labels, to tag the decoded byte-map)
+
+Target vocabulary for the decode: every `(evtType, deckIdx, index)` /
+`(section, byte, bit)` the section decoders produce maps to one of these real
+panel controls. Grouped by how they likely appear in the protocol — **buttons**
+(digital on/off → Key/Common bit flags, evtType 1/2) vs **continuous** (analog →
+Fmt/Mixer bytes) vs **jog** (Other section).
+
+### Per-deck (DECK 1 = left, DECK 2 = right; symmetric)
+- Transport buttons: `PLAY/PAUSE`, `CUE`, `DIRECTION/REV`, `SLIP`, `JOG MODE
+  (VINYL)`, `BEAT SYNC: SYNC`, `BEAT SYNC: MASTER`, `MASTER TEMPO`, `TEMPO RANGE
+  (±6/10/16/WIDE)`.
+- Loop/cue buttons: `IN/4BEAT`, `OUT`, `RELOOP/EXIT`, `CUE/LOOP CALL ◄ (1/2X)`,
+  `CUE/LOOP CALL ► (2X)`, `DELETE`, `MEMORY`.
+- Search buttons: `TRACK SEARCH ◄◄`, `TRACK SEARCH ►►`, `SEARCH ◄◄`, `SEARCH ►►`.
+- Performance pads + mode buttons: `HOT CUE`, `AUTO BEAT LOOP`, `LOOP SLICE`,
+  `SHIFT`, and pads `A (1/16)`, `B (2/8)`, `C (4/4)`, `D (8/2)` (4 per deck).
+- Continuous: `JOG WHEEL` (platter, touch + rotation → Other/jog), `VINYL SPEED
+  ADJUST` knob, `TEMPO` slider (fader).
+
+### Center mixer
+- Buttons: `BROWSE`, `TAG LIST`, `INFO`, `MENU/UTILITY`, `BACK`, `TAG
+  TRACK/REMOVE`, rotary-selector **push** (+ turn = encoder), `LOAD ◄`, `LOAD ►`,
+  `SOUND COLOR FX: NOISE / GATE·COMP / CRUSH / FILTER`, `BEAT EFFECTS: BEAT ◄ /
+  BEAT ► / TAP(AUTO) / ON·OFF`, `HEADPHONES CUE CH1`, `HEADPHONES CUE CH2`.
+- Switches: `DECK1 ↔ PHONO1/LINE1`, `DECK2 ↔ PHONO2/LINE2`, `CROSS FADER CURVE`.
+- Continuous: `TRIM` ×2, EQ/ISO `HI/MID/LOW` ×2, `COLOR` ×2, channel faders
+  `CH1`/`CH2`, `CROSSFADER`, `HEADPHONES MIXING`, `HEADPHONES LEVEL`, BEAT-EFFECTS
+  effect-select + channel-select (`MIC/CF1/1/2/CF2/MASTER`) + `TIME` + `LEVEL/
+  DEPTH`, `MASTER LEVEL`, `BOOTH MONITOR`.
+
+### Top panel
+- Source/select buttons: `rekordbox`, `MIDI`, `USB1`, `USB2`, `QUANTIZE`,
+  `DECK1/2`, `TIME MODE (AUTO CUE)`, `MASTER REC (WAKE UP)`, `TRACK MARK`,
+  `USB1 STOP`, `USB2 STOP`.
+- MIC: `MIC OFF/ON/TALK OVER` switch; continuous `MIC1 LEVEL`, `MIC2 LEVEL`, mic
+  EQ `HI`, mic EQ `LOW`.
+
+(`rekordbox`, `MIDI`, `USB1/2`, `LINK` select the player mode — `rekordbox` +
+`LnkHand` is the rekordbox LAN-link path, feature B.)
+
 ## Other open follow-ups
 - Decompile `PanelComPeerLinux` SPI transfer + `StaticInfomation` handshake
   (what the QEMU Subucom SSI slave must satisfy).
