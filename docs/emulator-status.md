@@ -35,9 +35,19 @@ Link enabled?); for real-LAN DJ-Link broadcast use a vmnet bridge (sudo on macOS
 USB **is** modeled (ChipIdea, 4 controllers → `usb-bus.0..3`; firmware brings up
 hosts `fsl-ehci.0` @0x02184000=`usb-bus.0` and `fsl-ehci.1` @0x02184200=`usb-bus.1`).
 A FAT32 `usb-storage` attaches on the QEMU side (`info usb`: *Device 0.2, Port 1,
-480 Mb/s, QEMU USB MSD*) but the fsl-ehci **never raises a connect**, so the kernel
-doesn't enumerate it (cold- and hot-plug both fail). Next: debug the ChipIdea/EHCI
-PORTSC connect / port-power / PHY path (QEMU i.MX6 USB host is rarely exercised).
+480 Mb/s, QEMU USB MSD*) and the **EHCI PORTSC correctly reflects it** — reading
+`0x02184184` gives `0x00001005` = CCS=1 (connected) + PED=1 (enabled) + PP=1
+(powered). So this is **NOT a QEMU model bug**; the controller sees the device and
+enables the port, but the kernel then doesn't emit "new USB device" / read the
+descriptor. Two leads:
+1. **Real topology has a hub**: the firmware logs `register_usbhub_USB2512B` +
+   `attach_usbhub` at late boot — a Microchip **USB2512B** 2-port hub sits between
+   the i.MX6 host and the two front ports (USB1/USB2), likely configured over I2C
+   (unmodeled). The firmware's USB flow may expect that hub; a drive belongs on a
+   USB2512B downstream port, not the EHCI root. Options: model/attach a `usb-hub`,
+   or (if the hub config is I2C) model the USB2512B on I2C.
+2. Debug why enumeration doesn't proceed though the root port is enabled (control-
+   transfer / async-schedule on the ChipIdea EHCI; no error logged either).
 **exFAT itself:** the 3.0.35 kernel has vfat/msdos/**ntfs** but **no exFAT and no
 FUSE** — so the old "fuse-exfat" plan won't work; exFAT needs an out-of-tree kernel
 module (e.g. exfat-nofuse) built against this kernel + a mount rule. (Test images:
