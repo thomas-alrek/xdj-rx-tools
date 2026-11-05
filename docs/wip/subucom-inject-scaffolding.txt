@@ -1,0 +1,74 @@
+# WIP: QEMU xdj-subucom frame-injection scaffolding (not yet a working button)
+# Apply on top of patches 01-04. Buttons blocked by the panel auth handshake +
+# frame header/type routing (see docs/rbp-and-panel-protocol.md).
+### --- hw/ssi/imx_spi.c: reset slave frame pos per spi_message ---
+# In imx_spi_flush_txfifo(), before the 'while (!fifo32_is_empty...)' loop, call:
+#   { extern void __attribute__((weak)) xdj_subucom_frame_start(void);
+#     if (xdj_subucom_frame_start) xdj_subucom_frame_start(); }
+### --- hw/arm/fsl-imx6.c: xdj_subucom slave ---
+struct XdjSubucom {
+    SSIPeripheral parent_obj;
+    uint32_t idx;         /* total MOSI byte counter (trace only) */
+    uint32_t pos;         /* byte position within the current SPI burst */
+    int      press;       /* >0: menu-press injection countdown */
+    uint8_t  frame[128];  /* SubRxData frame presented on MISO this burst */
+};
+
+static XdjSubucom *g_xdj_subucom;
+
+/*
+ * Called by the ECSPI (imx_spi_flush_txfifo) at the start of every SPI burst so
+ * the panel's SubRxData frame is presented byte-aligned on MISO -- the firmware
+ * reads fixed offsets out of it (global buttons = frame[0x1b], bit0 = MENU, etc.
+ * -- see docs/rbp-and-panel-protocol.md). Baseline is an all-idle frame (every
+ * control released); `touch /tmp/subucom_menu` injects one menu-button press.
+ */
+void xdj_subucom_frame_start(void);
+void xdj_subucom_frame_start(void)
+{
+    XdjSubucom *s = g_xdj_subucom;
+
+    if (!s) {
+        return;
+    }
+    if (getenv("SUBUCOM_BURST") && s->pos) {
+        fprintf(stderr, "SUBUCOM msg_size=%u\n", s->pos);
+    }
+    s->pos = 0;
+
+    if (s->press == 0 && access("/tmp/subucom_menu", F_OK) == 0) {
+        s->press = 30;              /* ~hold for a few frames, then release */
+        remove("/tmp/subucom_menu");
+    }
+
+    memset(s->frame, 0, sizeof(s->frame));
+    if (s->press > 0) {
+        /*
+         * rbp's read() drops the first 3 MISO bytes (clocked out during the
+         * command prefix), so the firmware sees this frame shifted by -3:
+         * rbp_buf[j] == slave frame[j+3]. The global-button byte is rbp_buf[0x1b]
+         * (bit0 = MENU), i.e. slave frame[0x1b + 3] = frame[0x1e].
+         */
+        if (s->press > 8) {
+            s->frame[0x1e] = 0x01;  /* MENU held down (global buttons, bit 0) */
+        }                           /* else: released -> generates the up event */
+        s->press--;
+    }
+}
+
+static uint32_t xdj_subucom_transfer(SSIPeripheral *dev, uint32_t val)
+{
+    XdjSubucom *s = XDJ_SUBUCOM(dev);
+    uint8_t miso;
+
+    if (getenv("SUBUCOM_TRACE")) {
+        fprintf(stderr, "SUBUCOM [%5u] mosi=%02x\n",
+                s->idx, (unsigned)(val & 0xff));
+    }
+    s->idx++;
+    miso = (s->pos < sizeof(s->frame)) ? s->frame[s->pos] : 0x00;
+    s->pos++;
+    return miso;
+}
+
+static void xdj_subucom_realize(SSIPeripheral *dev, Error **errp)
