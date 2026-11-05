@@ -668,3 +668,39 @@ These are per-control press/flag bits (more decoders — `FUN_002841e4`,
    the same frame, panel-reported — see the handshake section).
 Open items: enumerate the real **header type-ids**, the **auth-OK byte/bit**, and the
 `[0x10]/[0x12]/[0x13]/[0x20]…` → physical-control map.
+
+## Empirical test of the header fix — INCONCLUSIVE (2026-11-05)
+
+Applied the header fix to the `xdj-subucom` slave (every frame carries a non-zero
+header at slave `[5..6]` = rbp `[2..3]` = `0x0100`, plus the menu bit at `[0x1e]`),
+rebuilt QEMU, and tested on a live boot. **Result: not verified working — do not
+assume buttons decode yet.**
+
+- **Visual, gdb-free (valid):** with a *proven-stable* baseline (two identical frames
+  2 s apart), the first menu inject coincided with DECK1's `E-7206 AUTH CHIP ERROR`
+  clearing to `Not Loaded.`. But that error **auto-clears on its own** during boot
+  (seen on an earlier instance with no inject), so this is **confounded**, not proof.
+  A second menu inject on the already-settled `Not Loaded.` screen produced **no
+  visible change**. So on a settled UI, the menu inject has no observable effect.
+- **gdb confirmation (failed/unreliable):** attempted hardware breakpoints on the
+  parser (`0x284d44`), the global-button decoder (`0x2832b8`/`0x283394`) and even a
+  kernel positive-control (`0x803eefd8`) via the QEMU gdbstub. **None triggered**, and
+  the stub's run-control wedged the VM (resumable only via the monitor `cont`). So the
+  gdbstub breakpoints are non-functional in this setup — there is currently **no valid
+  in-process confirmation** either way.
+
+### Likely remaining issues (reliable, static next steps)
+1. **`frame[0x62]` may be a required field, not just a change-detector.** In the parser
+   first-frame path (`0x284e2c`), `FUN_0028259c` computes a value and the decoder
+   `FUN_00282630` runs only if it **equals `frame[0x62]`** (`284e7c cmp; 284e80 bne`).
+   Our stub leaves `frame[0x62]=0`; if the computed value isn't 0, decode is skipped.
+   RE `FUN_0028259c` (→ `0x3f7f4`) to learn what `frame[0x62]` must hold.
+2. **Real header type-id.** `0x0100` is a guess; the parser→decoder dispatch
+   (`FUN_00282604` vs `FUN_002841e4` vs `FUN_00282630`, and how `0x2832b8` is reached)
+   may select the decoder by header/path. Trace it to get the true button-frame id.
+3. **Confirm the poll thread still reads after settle** (SUBUCOM_TRACE) — the kernel
+   positive-control not firing *might* mean reads pause once idle (or just the broken
+   breakpoints). Relaunch with `SUBUCOM_TRACE=1` to check frames still flow.
+
+The slave header change is RE-backed but unverified; it lives in the (gitignored)
+build tree, not in `qemu/patches`, pending a working runtime probe.
