@@ -59,14 +59,22 @@ shell, which now works since boot completes). The `-22` chain was fully traced w
 Ghidra (on a sliced region ELF — the full 13 MB kernel times out Ghidra's import):
 `gckGALDEVICE_Construct` builds three cores (3D/2D/VG). The 2D-type check the earlier
 notes described *passes* — GC320 (chipModel 0x320) correctly derives hardware type 2.
-The failure is the **VG (GC355) core construct**: its identify path
-(`gckVGHARDWARE_Construct`) uniquely calls `request_irq` for the VG interrupt (the 3D/2D
-cores poll and never request theirs — the GIC shows GPU IRQ 41/42 permanently
-disabled). That `request_irq` fails under emulation, so the VG construct returns an
-error that propagates up to `-22`. The firmware therefore still falls back to the
-software path and the GPU-2D blit path is unreached. Closing this means making the VG
-core's interrupt setup succeed (wire/validate the VG IRQ, or make galcore treat the VG
-core as absent) — then each core's construct succeeds and `/dev/galcore` appears.
+The failure is the **VG (GC355) core construct** (the third core, `gcvCORE_VG`): it
+constructs via `gckVGHARDWARE` and fails somewhere in its post-identify chain (the
+command-queue allocations / VG-specific init that follow reading the chip id), so the
+construct returns an error that propagates up to `-22`. (The exact failing call is not
+pinned — galcore prints nothing, gdb breakpoints don't work here, and the construct is a
+sub-100ms transient; `kthread_create` of the "Vivante Kernel Thread" was ruled out as it
+normally succeeds.) The firmware therefore still falls back to the software path and the
+GPU-2D blit path is unreached.
+
+Skipping the VG core from the boot cmdline does **not** work: galcore exposes module
+params (`registerMemBaseVG` etc.) but takes the VG core from the platform device
+resource, so `galcore.registerMemBaseVG=0` is ignored and it still constructs (and
+fails on) the VG core. Closing this means modelling the GC355 VG construct enough to
+succeed, or a kernel/platform change to drop the VG core — both deeper than the hang
+fix. `/dev/galcore` stays absent until then (confirmed from the guest shell, which now
+works since boot completes).
 
 RE tooling: QEMU `-gdb` + a raw-RSP python client (halt+read; breakpoints are
 non-functional here), kernel ELF wrapped at base `0x80008000` for objdump, a validated
