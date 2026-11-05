@@ -18,7 +18,7 @@
  
  #define IMX6_ESDHC_CAPABILITIES     0x057834b4
  
-@@ -105,11 +109,499 @@
+@@ -105,11 +109,537 @@
      object_initialize_child(obj, "pcie", &s->pcie, TYPE_DESIGNWARE_PCIE_HOST);
      object_initialize_child(obj, "pcie4-msi-irq", &s->pcie4_msi_irq,
                              TYPE_OR_IRQ);
@@ -137,6 +137,44 @@
 +static const MemoryRegionOps imx6_gpu_stub_ops = {
 +    .read = imx6_gpu_stub_read,
 +    .write = imx6_gpu_stub_write,
++    .endianness = DEVICE_NATIVE_ENDIAN,
++    .valid = { .min_access_size = 4, .max_access_size = 4 },
++};
++
++/*
++ * XDJ-RX: CCM CACRR (ARM clock-root divider) write trap for the bus-freq DVFS.
++ *
++ * Enabling the GPU makes the firmware raise the bus frequency, and the i.MX6
++ * bus-frequency DVFS does an ARM-clock / DDR frequency change (writing CACRR,
++ * CCM 0x020c4000 + 0x10) with CPU interrupts masked, then waits for the next
++ * timer tick as a settling delay (single-core busy-polls GICC_HPPIR; SMP does
++ * WFI).  The kernel runs the GPT one-shot and does not reprogram it inside that
++ * masked window, so under emulation no tick arrives and the DVFS hangs.  We trap
++ * the CACRR write and hand the kernel a GPT tick (imx_gpt_kick) so the settling
++ * completes.  CACRR resets to 0 and QEMU's CCM clock model does not use it, so a
++ * self-contained shadow is identical to the CCM's own behaviour.  Installed only
++ * on the XDJ_GPU2D full-stock-boot path, so the default path is unaffected.
++ */
++static uint32_t xdj_cacrr_shadow;
++static IMXGPTState *xdj_dvfs_gpt;
++
++static uint64_t xdj_cacrr_read(void *opaque, hwaddr off, unsigned size)
++{
++    return xdj_cacrr_shadow;
++}
++
++static void xdj_cacrr_write(void *opaque, hwaddr off, uint64_t val,
++                            unsigned size)
++{
++    xdj_cacrr_shadow = (uint32_t)val;
++    if (xdj_dvfs_gpt) {
++        imx_gpt_kick(xdj_dvfs_gpt);
++    }
++}
++
++static const MemoryRegionOps xdj_cacrr_ops = {
++    .read = xdj_cacrr_read,
++    .write = xdj_cacrr_write,
 +    .endianness = DEVICE_NATIVE_ENDIAN,
 +    .valid = { .min_access_size = 4, .max_access_size = 4 },
 +};
@@ -317,8 +355,8 @@
 +        ipu_sync_update_irq();
 +        ipu_irq_arm();    /* driver cleared before a new wait: deliver one frame */
 +    }
- }
- 
++}
++
 +static const MemoryRegionOps ipu_cm_ops = {
 +    .read = ipu_cm_read,
 +    .write = ipu_cm_write,
@@ -505,8 +543,8 @@
 +    }
 +    qemu_console_update(xdj_fb_con, 0, 0, XDJ_FB_WIDTH, XDJ_FB_HEIGHT);
 +    return true;
-+}
-+
+ }
+ 
 +static const GraphicHwOps xdj_fb_ops = {
 +    .gfx_update = xdj_fb_gfx_update,
 +};
@@ -518,10 +556,11 @@
      FslIMX6State *s = FSL_IMX6(dev);
      uint16_t i;
      qemu_irq irq;
-@@ -473,6 +965,94 @@
+@@ -472,7 +1002,107 @@
+      */
      create_unimplemented_device("pcie-phy", FSL_IMX6_PCIe_ADDR,
                                  FSL_IMX6_PCIe_SIZE);
- 
++
 +    /* Vivante GPU register stubs (3D + 2D) so galcore init completes.
 +     * Each core reports its own identity + IRQ.  The 3D core (GC2000) always
 +     * reports a 3D part.  The 2D core defaults to the old behaviour (reports
@@ -532,7 +571,7 @@
 +    {
 +        static XdjGpuCore gpu3d_core, gpu2d_core;
 +        bool gpu2d_full = getenv("XDJ_GPU2D") != NULL;
-+
+ 
 +        gpu3d_core = (XdjGpuCore){
 +            .irq      = qdev_get_gpio_in(gic, FSL_IMX6_GPU3D_IRQ),
 +            .model    = 0x00002000u,  /* GC2000 */
@@ -561,6 +600,18 @@
 +                timer_new_ns(QEMU_CLOCK_VIRTUAL, imx6_gpu_fe_fire, &gpu2d_core);
 +            gpu3d_core.sibling_irq = gpu2d_core.irq;
 +            gpu2d_core.sibling_irq = gpu3d_core.irq;
++
++            /* Trap CCM CACRR writes to deliver the bus-freq DVFS settling tick
++             * (see xdj_cacrr_ops). Overlaps the CCM at higher priority. */
++            {
++                static MemoryRegion cacrr_trap;
++                xdj_dvfs_gpt = &s->gpt;
++                memory_region_init_io(&cacrr_trap, OBJECT(dev), &xdj_cacrr_ops,
++                                      NULL, "xdj.ccm-cacrr-dvfs", 4);
++                memory_region_add_subregion_overlap(get_system_memory(),
++                                                    FSL_IMX6_CCM_ADDR + 0x10,
++                                                    &cacrr_trap, 10);
++            }
 +        }
 +        memory_region_init_io(&gpu2d_stub, OBJECT(dev), &imx6_gpu_stub_ops,
 +                              &gpu2d_core, "imx6.gpu2d-stub",
@@ -613,7 +664,7 @@
      /* ROM memory */
      if (!memory_region_init_rom(&s->rom, OBJECT(dev), "imx6.rom",
                                  FSL_IMX6_ROM_SIZE, errp)) {
-@@ -502,6 +1082,10 @@
+@@ -502,6 +1132,10 @@
                               &s->ocram, 0, FSL_IMX6_OCRAM_ALIAS_SIZE);
      memory_region_add_subregion(get_system_memory(), FSL_IMX6_OCRAM_ALIAS_ADDR,
                                  &s->ocram_alias);
