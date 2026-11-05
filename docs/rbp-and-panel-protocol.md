@@ -478,3 +478,54 @@ frame (memcmp vs. the previous buffer). To make a control register:
   `button` table above — menu = 0x20a, play = 0x4101, …).
 Note: the debug-console `button` command does **not** reach the UI even with the
 panel live — only the real SPI frame path does.
+
+---
+
+## SPI command protocol — RE progress & plan (buttons + handshake)
+
+With the panel alive (poll thread running), this is the remaining work to make
+controls actually register. Entry points mapped so far:
+
+**Wire shape.** The Subucom is a **continuously-clocked streaming** SPI device, not
+a request/response one. `SUBUCOM_TRACE=1` shows ~12M+ byte transfers, the vast
+majority **MOSI = 0x00** (rbp clocking to read the MISO stream), with occasional
+command bursts beginning `02 a8 ..`. The kernel `subucom_spi` driver (built-in; no
+source in tree) does the streaming + frames the MISO bytes into SubRxData packets;
+rbp's `read(/dev/subucom_spi1.0, buf, 100)` returns one framed packet.
+
+**rbp read/decode path (all confirmed):**
+- `FUN_00281d24` run loop → on POLLIN → `FUN_00281c78`: `read()`s the channel,
+  `memcmp`s against the previous buffer, and **only on a CHANGED frame** calls the
+  receiver `onData` = `peer[0x98]->vtable[2]`.
+- `onData` thunk **`0x285158`** (channel-id guard) → real parser **`FUN_00284d44`**
+  `(receiver, buf, N)`. The parser does C++ event-queue management and reads the
+  frame header at `buf[2]/buf[3]`; it builds **event structs** and routes each via
+  the event router **`FUN_0028cea4`**.
+- Event struct layout (from `FUN_0028cea4`): **code @ +8 (u16)**, **player @ +10
+  (u8)**, **flags @ +0xb (u8; low nibble 0 = press)**. Codes = the `button <type>`
+  table above (menu = `0x20a`, play = `0x4101`, quant = `0x4488`, …).
+- The per-field sub-decoders (buttons/jogs/faders/deck-split: `FUN_0028830c`,
+  `FUN_002899e8`, `FUN_00289f14`, `FUN_002886f4`, …) live at `0x284xxx-0x289xxx`,
+  a range **Ghidra under-analyzed** (REA maps those VAs as file offsets) — use
+  `objdump` to read them.
+
+**StaticInfomation handshake.** rbp is NOT currently stuck on it (no "StaticInfomation
+is not completed. retry..." after the fix), so it likely does not block button input,
+only version/MAC display. Confirm separately.
+
+**Slave today.** `xdj_subucom_transfer` (patch 02) returns constant `0xff`, so the
+MISO stream never framing-syncs and never changes → zero events.
+
+**Two viable approaches to finish:**
+1. **Kernel-driver route (gets the framing for free):** objdump the built-in
+   `subucom_spi` driver out of `vmlinux.bin` (wrap at 0x80008000) to learn the MISO
+   framing (sync/length) + what a SubRxData packet looks like, then make the slave
+   stream valid packets and inject a changed one for a press.
+2. **Empirical route:** add a frame-inject hook to `xdj_subucom` (return bytes from a
+   control file for one read burst), boot, breakpoint `FUN_0028cea4` via the gdbstub,
+   and vary the injected frame until the router reports code 0x20a (menu) — mapping
+   raw bytes → events directly, no assembly slog.
+
+Recommended: (1) to nail the driver framing, then (2) to validate a menu press on
+screen. NOTE the debug-console `button` path does not reach the UI — only real SPI
+frames do.
