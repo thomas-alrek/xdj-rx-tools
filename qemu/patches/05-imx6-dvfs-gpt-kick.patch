@@ -1,0 +1,71 @@
+--- a/hw/timer/imx_gpt.c
++++ b/hw/timer/imx_gpt.c
+@@ -171,6 +171,18 @@
+     } else {
+         qemu_irq_lower(s->irq);
+     }
++}
++
++/*
++ * XDJ-RX: deliver an immediate output-compare-1 interrupt (a timer "tick") to
++ * unblock the i.MX6 bus-frequency DVFS settling wait.  Sets OF1 and raises the
++ * line exactly as the GPT does for a real compare; the kernel's handler clears
++ * SR, dropping the line.  See hw/arm/fsl-imx6.c (xdj_dvfs_gpt_kick).
++ */
++void imx_gpt_kick(IMXGPTState *s)
++{
++    s->sr |= GPT_SR_OF1;
++    imx_gpt_update_int(s);
+ }
+ 
+ static uint32_t imx_gpt_update_count(IMXGPTState *s)
+--- a/include/hw/timer/imx_gpt.h
++++ b/include/hw/timer/imx_gpt.h
+@@ -120,4 +120,7 @@
+     const IMXClk *clocks;
+ };
+ 
++/* XDJ-RX: deliver an immediate OF1 tick to unblock the bus-freq DVFS wait. */
++void imx_gpt_kick(IMXGPTState *s);
++
+ #endif /* IMX_GPT_H */
+--- a/hw/misc/imx6_ccm.c
++++ b/hw/misc/imx6_ccm.c
+@@ -499,6 +499,13 @@
+ 
+     return (uint64_t)value;
+ }
++
++/*
++ * XDJ-RX: hand the kernel a GPT timer tick to unblock the bus-frequency DVFS
++ * settling wait (see hw/arm/fsl-imx6.c).  A no-op unless the machine armed it
++ * on the XDJ_GPU2D full-stock-galcore boot path.
++ */
++void xdj_dvfs_gpt_kick(void);
+ 
+ static void imx6_ccm_write(void *opaque, hwaddr offset, uint64_t value,
+                            unsigned size)
+@@ -513,6 +520,23 @@
+      * cannot be written to.
+      */
+     s->ccm[index] = (uint32_t)value;
++
++    /*
++     * The bus-frequency DVFS steps the ARM/AHB/DDR clocks by writing these
++     * registers with CPU interrupts masked, then busy-polls GICC_HPPIR for the
++     * next timer tick as a settling delay.  That poll deadlocks under emulation
++     * (the one-shot GPT is not reprogrammed in the masked window), so deliver
++     * the awaited tick on each clock-step write that precedes a settling wait.
++     */
++    switch (index) {
++    case CCM_CCSR:      /* clock switcher (step/pll2 bypass)       */
++    case CCM_CACRR:     /* ARM clock root divider                  */
++    case CCM_CGPR:      /* INT_MEM_CLK_LPM DDR handshake enable     */
++        xdj_dvfs_gpt_kick();
++        break;
++    default:
++        break;
++    }
+ }
+ 
+ static uint64_t imx6_analog_read(void *opaque, hwaddr offset, unsigned size)

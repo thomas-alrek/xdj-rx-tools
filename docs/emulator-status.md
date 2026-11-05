@@ -20,20 +20,41 @@ which is harmless: `nand.img` has the one DirectFB GAL gfxdriver
 (the GPU is only used for an unreached `g2d_blit`). The baseline GPU register stub
 (patch 02) just makes that `-22` clean rather than a hang.
 
-**Why not a byte-for-byte rootfs?** Making galcore fully initialise is blocked by a
-feature QEMU does not model. Deep RE (the `-22` was root-caused and cleared; boot then
-hangs) showed the real blocker is **not galcore** but the **i.MX6 bus-frequency DVFS**
-it triggers once the GPU clocks are enabled: `set_high_bus_freq` does an ARM-clock /
-DDR frequency change with CPU IRQs masked, waits for a settling timer tick, and — even
-once that tick is delivered — **retry-loops in the clk framework because QEMU models no
-MMDC** (DDR controller, phys 0x021b0000), so the DDR frequency transition never
-completes/verifies. Closing it would mean modelling the i.MX6 MMDC + DDR DVFS, a
-substantial undertaking, so the experiment was removed (it lives in git history:
-commits for the 2D-core identity + `imx_gpt_kick` + CCM CACRR trap) and we ship the
-gfxdriver-removed image. The GPU does no work in the idle UI, so nothing is lost
-visually. RE tooling used: QEMU `-gdb` + a raw-RSP python client, kernel VA→phys
-page-table walk, and Ghidra (REA) on a sliced region ELF (the full 13 MB kernel times
-out Ghidra's import).
+**Why not a byte-for-byte rootfs?** Making galcore fully initialise needs the
+`XDJ_GPU2D=1` path (patch 02 makes the 2D core report a real GC320 so galcore derives
+`gcvHARDWARE_2D` and clears `-22`). That path is **WIP and still hangs**; the default
+boot (no flag) is byte-identical and ships the gfxdriver-removed image, so nothing is
+lost visually in the idle UI.
+
+Progress on the `XDJ_GPU2D` path (session 4) — three nested blockers, first two
+understood:
+1. **i.MX6 bus-frequency DVFS settling wait (SOLVED).** Enabling the GPU clocks makes
+   galcore call `set_high_bus_freq`, which steps the ARM/DDR clocks with CPU IRQs
+   masked then busy-polls `GICC_HPPIR` for a settling tick. Under emulation the
+   one-shot GPT clockevent isn't reprogrammed in that masked window, so nothing goes
+   pending and the poll spins forever (proved at the hang via gdb: no enabled IRQ
+   pending → HPPIR stays `0x3ff`). **Fix: `imx_gpt_kick()`** (patch 05) raises the GPT
+   OF1 interrupt (GIC ID 87) from the CCM clock-step register writes (patch 05 hooks
+   `imx6_ccm_write` on CCSR/CACRR/CGPR; patch 02 arms it only under `XDJ_GPU2D`). The
+   guest then advances out of the busfreq spin into galcore.
+2. **Idle-loop feedback (understood, not a galcore loop).** Past the DVFS, a validated
+   backtrace shows the CPU is in the **idle loop** (`cpu_idle` → `imx6q_enter_wait`),
+   which runs its own bus-freq DVFS each iteration; the GPT kick that releases that
+   DVFS also wakes the idle WFI → a busy idle↔busfreq loop (~950k/s). A cleaner fix —
+   overlaying `GICC_HPPIR` to fall through *without* raising a real IRQ — doesn't work:
+   QEMU's A9 GIC CPU-interface is mapped inside the a9mpcore container and a
+   system-memory overlay reaches debug reads but not guest GIC accesses.
+3. **galcore's real init wait (OPEN — the actual blocker).** The idle loop runs because
+   galcore's init thread is **blocked/sleeping** on a post-DVFS wait inside
+   `gckGALDEVICE_Construct`. It is *not* a GPU-IRQ wait (galcore never enables IRQ
+   41/42) and *not* a register poll (89 GPU accesses total). Pinning this wait is the
+   next step. The DVFS-kick experiment is kept gated (patches 02 + 05), not reverted.
+
+RE tooling: QEMU `-gdb` + a raw-RSP python client (halt+read; breakpoints are
+non-functional here), kernel ELF wrapped at base `0x80008000` for objdump, a validated
+frame-pointerless backtrace (stack words whose `[addr-4]` is a `bl`/`blx`), and a
+statistical PC profiler. Ghidra (REA) on a sliced region ELF (the full 13 MB kernel
+times out Ghidra's import).
 
 ## 🔶 B. Ethernet → rekordbox LAN link
 FEC is modeled and `eth0` now **comes up on the LAN**. The firmware's
