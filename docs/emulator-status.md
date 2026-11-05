@@ -70,8 +70,11 @@ Not started. Need to model the i.MX6 audio path (SSI/codec) + `-audiodev`.
 
 ## ⬜ F. FLAC playback
 rbp decodes **MP3 (libmpg123), AAC, M4A, AIFF, WAV — no FLAC** (two decoder slots
-`PLAYER_DECODER_0/1`). Add a FLAC decoder + register it in `playengine_Player`'s
-format/decoder selection. (Device feature; modifies firmware.)
+`PLAYER_DECODER_0/1`). The codecs are **dlopen'd** (e.g. `libmpg123.so.0` with
+`mpg123_*` resolved by name, not a static PLT symbol), so the player has a
+format→codec-lib factory. Adding FLAC = ship a FLAC codec lib + register it in that
+factory's format map (follow-up: locate the dlopen/format-map factory in
+`playengine_Player`). (Device feature; modifies firmware.)
 
 ## 🔶 C / G. Controls → app + rbp structure
 Documented in `docs/rbp-and-panel-protocol.md`: control surface (buttons/jogs/
