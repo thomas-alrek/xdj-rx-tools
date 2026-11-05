@@ -53,28 +53,32 @@ with the flag set. Three nested blockers were found and cleared:
    reusing the idle/clock-reporting stub ops. With it, galcore's core init completes and
    boot runs through to Application Start.
 
-**Remaining (true "Part 2"): galcore still probe-fails `-22`.** With the hang gone, the
-real galcore verdict is visible (and `/dev/galcore` is absent — confirmed from a guest
-shell, which now works since boot completes). The `-22` chain was fully traced with
-Ghidra (on a sliced region ELF — the full 13 MB kernel times out Ghidra's import):
-`gckGALDEVICE_Construct` builds three cores (3D/2D/VG). The 2D-type check the earlier
-notes described *passes* — GC320 (chipModel 0x320) correctly derives hardware type 2.
-The failure is the **VG (GC355) core construct** (the third core, `gcvCORE_VG`): it
-constructs via `gckVGHARDWARE` and fails somewhere in its post-identify chain (the
-command-queue allocations / VG-specific init that follow reading the chip id), so the
-construct returns an error that propagates up to `-22`. (The exact failing call is not
-pinned — galcore prints nothing, gdb breakpoints don't work here, and the construct is a
-sub-100ms transient; `kthread_create` of the "Vivante Kernel Thread" was ruled out as it
-normally succeeds.) The firmware therefore still falls back to the software path and the
-GPU-2D blit path is unreached.
+**SOLVED (Part 2): galcore fully initialises — `/dev/galcore` exists.** With
+`XDJ_GPU2D=1` the firmware now boots to `#### Application Start!! ###` with no `-22`,
+no MMU/AXI error and no oops; a guest shell confirms `crw-rw-rw- 199,0 /dev/galcore`,
+and a framebuffer screendump shows the Pioneer DJ / rekordbox boot splash
+(`docs/img/galcore-boot-splash.png`). The `-22` and the crashes after it were traced
+with Ghidra (on a sliced region ELF — the full 13 MB kernel times out Ghidra's import)
+and with gdb hardware breakpoints (which *do* work here — the old "breakpoints
+non-functional" note was wrong). `gckGALDEVICE_Construct` builds three cores (3D/2D/VG);
+the 2D-type check passes (GC320 derives type 2), and the real blockers were all in the
+**GC355 VG (OpenVG) core**, fixed in the GPU stub (patch 02):
+- **VG construct `-13` (gcvSTATUS_NOT_SUPPORTED):** `FUN_806919a0` requires VG
+  chipFeatures (0x01c) **bit 28** set (it derives `(chipFeatures & 0x1fffffff) >> 28`
+  and rejects the core if zero). The stub now reports VG features with that bit.
+- **"AXI BUS ERROR" / "MMU Exception!":** `AQIntrAcknowledge` (0x010) was returning
+  `0xffffffff`, whose bits 31/30 are the AXI-error / MMU-exception flags. Masked off.
+- **Command-completion hang + "Vivante Kernel" NULL oops:** the VG core has its own GIC
+  line (`V2D_IRQ` = ID 43), which galcore `request_irq`s and then blocks in
+  `gckOS_WaitSignal`. The stub now wires that IRQ and, on the VG command kick (DMA
+  control 0x504, not the interrupt-enable 0x014), raises it and reports **only** the
+  submitted completion event (event 30, from the command's `0x0E01` load of `0x5e`) in
+  0x010 — signalling all 30 events made the event handler dereference unallocated event
+  structs.
 
-Skipping the VG core from the boot cmdline does **not** work: galcore exposes module
-params (`registerMemBaseVG` etc.) but takes the VG core from the platform device
-resource, so `galcore.registerMemBaseVG=0` is ignored and it still constructs (and
-fails on) the VG core. Closing this means modelling the GC355 VG construct enough to
-succeed, or a kernel/platform change to drop the VG core — both deeper than the hang
-fix. `/dev/galcore` stays absent until then (confirmed from the guest shell, which now
-works since boot completes).
+So the GPU-2D path is now live and dynamic blits have a real `/dev/galcore` to go
+through. Under `-smp 2` (the real dual-core config) galcore also fully inits (no -22, no
+crash, 2 CPUs up); a separate **userspace udev-coldplug hang** remains on that path.
 
 RE tooling: QEMU `-gdb` + a raw-RSP python client (halt+read; breakpoints are
 non-functional here), kernel ELF wrapped at base `0x80008000` for objdump, a validated

@@ -18,10 +18,12 @@
  
  #define IMX6_ESDHC_CAPABILITIES     0x057834b4
  
-@@ -107,9 +111,641 @@
+@@ -105,11 +109,659 @@
+     object_initialize_child(obj, "pcie", &s->pcie, TYPE_DESIGNWARE_PCIE_HOST);
+     object_initialize_child(obj, "pcie4-msi-irq", &s->pcie4_msi_irq,
                              TYPE_OR_IRQ);
- }
- 
++}
++
 +/*
 + * Minimal Vivante GPU (GC2000 3D / GC320 2D) register stub.
 + *
@@ -42,6 +44,11 @@
 +    qemu_irq irq;       /* this core's GIC line (for faking command completion) */
 +    uint32_t model;     /* chipModel    (0x020): GC2000=0x2000, GC320=0x0320     */
 +    uint32_t revision;  /* chipRevision (0x024)                                  */
++    uint32_t features;  /* chipFeatures (0x01c)                                  */
++    uint32_t events;    /* AQIntrAcknowledge (0x010) bitmap to report once a      */
++                        /* command is kicked (the completion event galcore waits  */
++                        /* on); 0 otherwise so its pre-command status poll is clean*/
++    bool cmd_pending;   /* a command was kicked: report c->events on next 0x010 rd */
 +    uint32_t clkctrl;   /* last AQHiClockControl written                         */
 +    QEMUTimer *fe_timer;/* if set, raise the completion IRQ a short delay after  */
 +                        /* the command kick (so galcore sees it once it is in    */
@@ -117,16 +124,25 @@
 +        /* so _ResetGPU()'s completion check passes.                           */
 +        return c->clkctrl | 0x00030000u;
 +    case 0x004: return 0xffffffffu; /* AQHiIdle          - every module idle  */
-+    case 0x010:                     /* AQIntrAcknowledge - all events complete */
++    case 0x010: {                   /* AQIntrAcknowledge                       */
++        /* Report the submitted command's completion event only after a kick,
++         * and only that event -- signalling events galcore never queued makes
++         * its event handler dereference unallocated event structs (NULL oops in
++         * _EventHandler_Block), and setting the error bits (31=AXI, 30=MMU) on a
++         * pre-command status poll makes it log "AXI BUS ERROR"/"MMU Exception!".
++         * Reading acknowledges: drop the line and clear the pending flag. */
++        uint32_t v = c->cmd_pending ? c->events : 0u;
++        c->cmd_pending = false;
 +        if (c->irq) {
-+            qemu_set_irq(c->irq, 0); /* the ISR read the ack: drop the line    */
++            qemu_set_irq(c->irq, 0);
 +        }
 +        if (c->sibling_irq) {
 +            qemu_set_irq(c->sibling_irq, 0);
 +        }
-+        return 0xffffffffu;
++        return v;
++    }
 +    case 0x018: return 0x00000000u; /* chipIdentity      - take the else path  */
-+    case 0x01c: return 0x00000000u; /* chipFeatures                            */
++    case 0x01c: return c->features; /* chipFeatures                            */
 +    case 0x020: return c->model;    /* chipModel                               */
 +    case 0x024: return c->revision; /* chipRevision                            */
 +    default:    return 0x00000000u;
@@ -146,15 +162,17 @@
 +        c->clkctrl = (uint32_t)val;
 +    }
 +    /*
-+     * galcore enables GPU interrupts (AQIntrEnbl, 0x014) and kicks the command
-+     * front-end (AQFEControl, 0x658) then sleeps until the GPU raises its IRQ.
-+     * No GPU runs here, so raise the IRQ ourselves; the driver's ISR reads
-+     * 0x010 (all events "done") and completes the wait.  This drives both the
-+     * 3D core's init and the 2D core's command-completion wait.
++     * galcore submits a command and sleeps until the GPU raises its completion
++     * IRQ.  No GPU runs here, so raise it ourselves on the command kick -- the
++     * 3D/2D front-end control (AQFEControl, 0x658) and the VG DMA control
++     * (0x504).  (NOT on the interrupt-enable write 0x014: that would fire before
++     * any command/event exists and the handler would process a phantom event.)
++     * The ISR then reads 0x010 and sees the completion event (c->events).
 +     */
-+    if (c->irq && (off == 0x014 || off == 0x658)) {
++    if (c->irq && (off == 0x658 || off == 0x504)) {
++        c->cmd_pending = true;
 +        if (c->fe_timer) {
-+            /* deliver the completion ~200us later, once galcore is polling */
++            /* deliver the completion ~200us later, once galcore is waiting */
 +            timer_mod(c->fe_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
 +                                   NANOSECONDS_PER_SECOND / 5000);
 +        } else {
@@ -405,7 +423,7 @@
 +        xdj_crc16_tab[i] = c;
 +    }
 +    xdj_crc16_ready = 1;
-+}
+ }
 +static uint16_t xdj_crc16(const uint8_t *d, int n)
 +{
 +    uint16_t crc = 0xffff;
@@ -418,7 +436,7 @@
 +    }
 +    return (uint16_t)~crc;
 +}
-+
+ 
 +/*
 + * Called by the ECSPI (imx_spi_flush_txfifo) at the start of every SPI burst so
 + * the panel's SubRxData frame is presented byte-aligned on MISO. We build the
@@ -660,7 +678,7 @@
      FslIMX6State *s = FSL_IMX6(dev);
      uint16_t i;
      qemu_irq irq;
-@@ -303,6 +939,23 @@
+@@ -303,6 +955,23 @@
                                   &error_abort);
          object_property_set_bool(OBJECT(&s->gpio[i]), "has-upper-pin-irq",
                                   true, &error_abort);
@@ -684,11 +702,10 @@
          if (!sysbus_realize(SYS_BUS_DEVICE(&s->gpio[i]), errp)) {
              return;
          }
-@@ -472,7 +1125,121 @@
-      */
+@@ -473,6 +1142,141 @@
      create_unimplemented_device("pcie-phy", FSL_IMX6_PCIe_ADDR,
                                  FSL_IMX6_PCIe_SIZE);
-+
+ 
 +    /* Vivante GPU register stubs (3D + 2D) so galcore init completes.
 +     * Each core reports its own identity + IRQ.  The 3D core (GC2000) always
 +     * reports a 3D part.  The 2D core defaults to the old behaviour (reports
@@ -704,6 +721,7 @@
 +            .irq      = qdev_get_gpio_in(gic, FSL_IMX6_GPU3D_IRQ),
 +            .model    = 0x00002000u,  /* GC2000 */
 +            .revision = 0x00005108u,  /* i.MX6Q GC2000 */
++            .events   = 0x3fffffffu,  /* completion events (no error bits 30/31) */
 +        };
 +        memory_region_init_io(&gpu3d_stub, OBJECT(dev), &imx6_gpu_stub_ops,
 +                              &gpu3d_core, "imx6.gpu3d-stub",
@@ -716,6 +734,7 @@
 +                        qdev_get_gpio_in(gic, FSL_IMX6_R2D_IRQ) : NULL,
 +            .model    = gpu2d_full ? 0x00000320u : 0x00002000u, /* GC320/GC2000 */
 +            .revision = gpu2d_full ? 0x00005007u : 0x00005108u,
++            .events   = 0x3fffffffu,
 +        };
 +        if (gpu2d_full) {
 +            /* Full stock galcore boot: deliver GPU command-completion IRQs from
@@ -728,7 +747,7 @@
 +                timer_new_ns(QEMU_CLOCK_VIRTUAL, imx6_gpu_fe_fire, &gpu2d_core);
 +            gpu3d_core.sibling_irq = gpu2d_core.irq;
 +            gpu2d_core.sibling_irq = gpu3d_core.irq;
- 
++
 +            /* Deliver the bus-freq DVFS settling tick from the CCM clock-step
 +             * register writes (see xdj_dvfs_gpt_kick / imx6_ccm.c). */
 +            xdj_dvfs_gpt = &s->gpt;
@@ -754,11 +773,30 @@
 +            gpuvg_core = (XdjGpuCore){
 +                .model    = 0x00000355u,  /* GC355 (OpenVG) */
 +                .revision = 0x00001216u,
++                /* galcore's VG command-queue setup (gckVGCOMMAND) rejects the
++                 * core with gcvSTATUS_NOT_SUPPORTED (-13 -> probe -22) unless
++                 * chipFeatures bit 28 is set: it derives VG_hw[9] =
++                 * (chipFeatures & 0x1fffffff) >> 28 and requires it non-zero
++                 * (0x806919a0).  Advertise it (plus the other feature bits a
++                 * GC355 reports) so the VG construct completes. */
++                .features = 0xffffffffu,
++                /* The VG init command signals completion event 30 (bit 30):
++                 * its command buffer loads the event register (0x0E01) with
++                 * 0x5e = (event 30 | PE source).  Report exactly that event. */
++                .events   = 0x40000000u,
++                /* The VG core has its own GIC line (V2D/OpenVG = ID 43); galcore
++                 * request_irq()s it and blocks in gckOS_WaitSignal for the VG
++                 * command to complete.  Wire it + a completion timer so the
++                 * command kick raises it (like the 3D/2D cores). */
++                .irq      = qdev_get_gpio_in(gic, FSL_IMX6_V2D_IRQ),
 +            };
++            gpuvg_core.fe_timer =
++                timer_new_ns(QEMU_CLOCK_VIRTUAL, imx6_gpu_fe_fire, &gpuvg_core);
 +            memory_region_init_io(&gpuvg_stub, OBJECT(dev), &imx6_gpu_stub_ops,
-+                                  &gpuvg_core, "imx6.gpuvg-stub", 0x4000);
-+            memory_region_add_subregion(get_system_memory(), 0x02204000,
-+                                        &gpuvg_stub);
++                                  &gpuvg_core, "imx6.gpuvg-stub",
++                                  FSL_IMX6_OPENVG_SIZE);
++            memory_region_add_subregion(get_system_memory(),
++                                        FSL_IMX6_OPENVG_ADDR, &gpuvg_stub);
 +        }
 +    }
 +
@@ -806,7 +844,7 @@
      /* ROM memory */
      if (!memory_region_init_rom(&s->rom, OBJECT(dev), "imx6.rom",
                                  FSL_IMX6_ROM_SIZE, errp)) {
-@@ -502,6 +1269,10 @@
+@@ -502,6 +1306,10 @@
                               &s->ocram, 0, FSL_IMX6_OCRAM_ALIAS_SIZE);
      memory_region_add_subregion(get_system_memory(), FSL_IMX6_OCRAM_ALIAS_ADDR,
                                  &s->ocram_alias);
