@@ -79,5 +79,5 @@ exec "$QEMU" -M sabrelite -smp "$SMP" -m 256 -no-reboot \
   -device loader,file="$Q/tramp.bin",addr=0x10000000,cpu-num=0 \
   -drive if=none,id=xdjsd,file="$SD",format=raw \
   -nic "$NIC" \
-  "${USB_ARGS[@]}" \
+  ${USB_ARGS[@]+"${USB_ARGS[@]}"} \
   -serial mon:stdio -serial null
