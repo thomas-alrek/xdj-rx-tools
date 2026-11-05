@@ -561,3 +561,58 @@ router `FUN_0028cea4` (code@+8/player@+10/flags@+0xb). Fastest way to map it now
 that transport is understood: add a frame-inject hook to `xdj_subucom`, breakpoint
 `FUN_0028cea4` via the gdbstub, and vary the injected frame until it reports menu
 (0x20a). Then baseline-idle frame + a one-shot changed frame = a press on screen.
+
+## Handshake + AUTH CHIP — RE findings (2026-11-05)
+
+Live proof first: booting with a visible window, the deck UI renders and **DECK1
+shows a red `E-7206 AUTH CHIP ERROR`** (DECK2 `Not Loaded.`) transiently during
+boot, then settles to `Not Loaded.` (screenshot: `docs/img/panel-auth-chip-error.png`).
+This confirms rbp opens subucom, the `UiMain` poll thread clocks the slave, and rbp
+evaluates the panel auth on the SPI data — failing on our stub slave.
+
+### The StaticInfomation handshake
+- Class **`ui::StaticInfomation`** (RTTI mangled name `N2ui16StaticInfomationE` @
+  `0x41e200`). Singleton object `DAT_0123e05c` (vtable `0x41e1e0`); its **version
+  halfword is `DAT_0123e054`**, and a 0x40-byte info buffer at `DAT_0123e064`.
+- **Gate:** `DAT_0123e054 == 0xffff` ⇒ rbp logs `"Subucom StaticInfomation is not
+  completed. retry..."` (`0x420dd4`) and does not proceed. The panel must report a
+  non-`0xffff` version word. Referenced by the **" VERSION INFORMATION"** menu-screen
+  builder `FUN_00242538` (SYSTEM/SUB/APL/KERNEL Ver, LANGUAGE, MAC_ADDR).
+- **Version *strings* come from guest files**, not SPI: `FUN_0025a3d4` reads
+  **`/tmp/smdj.rev`** into `DAT_0123e064` (printable bytes only; fallback string
+  `"Can't get version."`), and `FUN_00242538` reads **`/tmp/smdj2.rev`**. On real hw
+  the subucom driver/boot writes these; under emulation they may be absent (cosmetic
+  — the real gate is the `0xffff` version word from the panel).
+- The **real writer** of the version word + per-frame status is the big subucom RX
+  processor **`FUN_002cb8ec`** (non-contiguous, ~55 KB span; writes `DAT_0123e054`
+  at `0x2d8ddc`). This is the next-phase target for the exact static-info frame
+  layout and status-byte offsets.
+
+### AUTH CHIP (E-7206) is panel-reported status, NOT rbp-side crypto
+Decisive for emulation (symmetric-extractable vs asymmetric-unforgeable):
+- The panel reports **per-channel hardware status as bytes** that rbp only
+  *displays*: `FUN_00242538` sets `"[CH1]JOG uCom ERROR!!"` from `param+0x3e` and
+  `"[CH2]JOG uCom ERROR!!"` from `param+0x3f`. The `E-7206 AUTH CHIP ERROR` is the
+  same pattern — **per-deck**, shown in the deck status field.
+- A full string scan finds **no panel-related crypto**: the only `auth` strings in
+  rbp are Wi-Fi (`auth_algs`, WPS) and iPod accessory auth — nothing tied to the
+  subucom/panel. There is no SHA/HMAC/signature-verify on the panel path.
+- **Conclusion:** the auth chip is verified **on the panel MCU**, which reports a
+  pass/fail *status* to rbp over subucom. rbp does **not** run a cryptographic
+  challenge-response and holds **no secret key**. ⇒ The auth is **emulatable with no
+  key**: the slave just needs to present a valid StaticInfomation (version word ≠
+  `0xffff`) and report the **auth-OK status** in the periodic frame. This is the good
+  outcome — no unforgeable private key in the physical panel blocks us.
+
+### Next phase (to clear E-7206 and accept buttons)
+1. RE **`FUN_002cb8ec`** (the subucom RX): extract (a) the StaticInfomation frame
+   bytes that set `DAT_0123e054` ≠ `0xffff`, (b) the per-deck **auth-OK status**
+   byte/bit, (c) the **jog uCom OK** bytes, and (d) the button-event frame header
+   that routes a frame to the global decoder (the earlier "bare frame not routed"
+   gate). Work from the version-word write at `0x2d8ddc` outward to the command
+   dispatch.
+2. Create `/tmp/smdj.rev` + `/tmp/smdj2.rev` in the guest (check `build-nand.sh` /
+   boot) so the version strings are non-empty (cosmetic but clean).
+3. Extend the QEMU `xdj-subucom` slave to stream: valid static-info + auth-OK +
+   idle frame, then one-shot the control bit for a press (scaffolding in
+   `docs/wip/subucom-inject-scaffolding.txt`).
