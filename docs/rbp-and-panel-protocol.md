@@ -358,3 +358,123 @@ Corrected mechanism + confirmation via gdbstub:
    proven by the `dd` test — so only the readiness/notify path is missing.)
 3. **Answer with valid 24-byte frames** from the `xdj-subucom` SSI slave
    (StaticInfomation handshake + button/jog/fader frames).
+
+### Live-process confirmation + exact symbols (2026-11-05)
+
+Attached a gdbstub to a **running** rbp (QEMU monitor `gdbserver tcp::1234`, no
+reboot) and read `/proc/<rbp>/…` and live memory. This upgrades the above from
+"inferred" to "measured":
+
+- **The panel is fully built, the thread just never starts.** Live rbp has **57
+  threads** (`MessageLoop`, `DebugSub`, `Ui_CycleTask`, `Ui_EventTask`, `gui_task`,
+  many `Tot_*`/`DB*`…) but **no `UiMain`** — that is the panel peer's thread name,
+  set in its ctor. The process has **no `/dev/subucom_spi1.0` fd** (only 9
+  `/dev/gpiodrv`) and **0 epoll fds**. So `run()` (`FUN_00281d24`) truly never ran.
+- **Class / symbols.** The peer is **`PanelComPeerLinux`**, a JUCE `Thread` named
+  **"UiMain"**, singleton **`DAT_0124087c`**; ctor **`FUN_00282214`** (the
+  `__cxa_throw` string `"PanelComPeerLinux::PanelComPeerLinux()"` names it, and it
+  passes `"UiMain"` to the Thread base). `run()` is vtable[5] (`0x423658`+0x14) =
+  `FUN_00281d24`.
+- **Build path, all confirmed reached in live memory.** `main()` =
+  **`FUN_0000f7cc`** → UiObjectManager accessor **`FUN_0020dc6c`** (singleton
+  `DAT_0123e16c`) → **`FUN_00245098`** (panel init). Live checks: init guard
+  `DAT_0123e1fe`=3, entry gate byte `[UiObjMgr+0x3c]`=0, and the "bring-up subucom"
+  flag `[0x0123e460]&1`=1 are **all satisfied** (none of these is the gate). Init
+  stores the peer at `UiObjMgr+0x40` and registers **1 channel** (addChannel
+  `FUN_002816c8`) holding `/dev/subucom_spi1.0` — live `peer+0x94` (channel count)
+  = **1**, channel ptr at `peer+0x98`. The controller ctor `FUN_0021a4ac` only
+  *creates* GpioManagers 0xa2-0xa5 with **no callback and no read**, so the panel
+  is **not** GPIO-gated at construction.
+- **`startThread` identified.** JUCE `Thread::startThread` = **`FUN_002f3a04`**
+  (15 callers; `…←createThread wrappers←pthread_create@plt 0xea48`, GOT `0x461c40`).
+  The three init-path starts are `MessageLoop` (in `main()`), the event dispatcher
+  singleton `DAT_0123e580` (`FUN_00249654`), and the **"PDJ Certified"**
+  Pro-DJ-Link thread (`FUN_002868d0`). **None start `UiMain`.** The UiMain start is
+  a later UI-ready event that does not fire under emulation; the exact (indirect)
+  call site is still unpinned.
+- **Addresses for a bake-able fix** (rbp is non-PIE, base 0x8000, so these are
+  absolute VAs): startThread = `0x2f3a04`, peer singleton = `*(DAT_0124087c)`,
+  single-arg call `startThread(peer)`. A binary patch / `LD_PRELOAD` hook that
+  calls `startThread(*(int*)0x0124087c)` once the peer is non-null is the planned
+  step-1 fix (then steps 2-3 above: QEMU POLLIN + 24-byte frames).
+
+> Note: force-starting live via the gdbstub is possible but fiddly — the emulated
+> system sits in the kernel idle loop (pc `0x803dae8c`) almost always, so you must
+> trigger a breakpoint inside rbp (not random interrupts) to get an injection
+> context. The bake-able patch avoids this entirely.
+
+---
+
+## SOLVED (2026-11-05): it was a boot deadlock, fixed QEMU-side
+
+The sections above (panel poll thread "never started") were the intermediate
+picture. The real mechanism, found by walking the **live stuck main thread's
+stack** and confirmed by a runtime experiment, is a **circular deadlock in panel
+init** — and the fix is a QEMU GPIO change, with **no firmware/rbp patch**.
+
+### Mechanism
+
+1. The panel poll thread is started by **`FUN_002818bc`** (PanelComPeerLinux open
+   + start: `open64("/dev/subucom_spi1.0")`, SPI-config ioctls, then `startThread`
+   the epoll loop `FUN_00281d24`). Its only caller is **`FUN_002481ec`**
+   (`UiObjectManager::start`), which `main` runs **only after** panel init
+   `FUN_00245098` returns success.
+2. `FUN_00245098` **never returns.** While building managers it constructs two
+   **`UsbStorageManager`s** (`FUN_0024e834`, decks 1 & 2). Each makes a
+   **`GpioManager`** (`FUN_0002be28`) on a **USB-detect GPIO** — deck1 =
+   **GPIO4_IO30** (gpiodrv id 126 / 0x7e), deck2 = **GPIO7_IO12** (id 204 / 0xcc) —
+   with a callback. The GpioManager ctor **reads the line and fires the callback**
+   with the value.
+3. The callback `FUN_00250020(this,val)` **sends to the panel only when the line
+   reads 0 (LOW)** (`cmp r1,#0; popne` — returns harmlessly when it reads 1/HIGH).
+   The send is `peer->send()` (`FUN_00281554`), which spin-sleeps
+   `while(*(peer+0x88)==0)` — waiting for the poll thread's run loop to set
+   `peer+0x88=1` after it opens the device + builds its epoll (`FUN_00281d24`).
+4. So init talks to the panel → waits for the poll thread → but the poll thread is
+   only started *after* init finishes. **Deadlock.** (Live proof: `main` the only
+   thread in `nanosleep`, subucom fd never opened, no `UiMain` thread, built-flag
+   `UiObjMgr+0x3c`=0.)
+
+QEMU's `imx_gpio_reset` resets every input (`psr`) to **0**, so both USB-detect
+lines read "USB present" → the callback sends → deadlock. On real hardware they
+idle **HIGH** (external pull-up, "no USB at boot"), so the callback doesn't send
+and init completes normally.
+
+### Proof
+
+On the deadlocked process, writing `peer+0x88 = 1`
+(`peer = *(uint*)0x0124087c`) via `/proc/PID/mem` instantly unstuck it:
+`/dev/subucom_spi1.0` opened, the **`UiMain` poll thread started**, epoll came up,
+thread count 57 → 79. This confirmed avoiding the premature send is all that's
+needed.
+
+### Fix — `qemu/patches/04-imx6-usb-detect-gpio.patch`
+
+Pure QEMU, no firmware change (so a **vanilla** `.UPD` still boots the panel, and
+future firmware patches can be tested against stock behaviour):
+
+- `hw/gpio/imx_gpio.c` + `imx_gpio.h`: new `psr-reset` property; `imx_gpio_reset`
+  now does `s->psr = s->psr_reset` (default 0 — unchanged for every other GPIO).
+- `hw/arm/fsl-imx6.c`: sets `psr-reset` on **GPIO4 (bit 30)** and **GPIO7 (bit 12)**
+  so the two USB-detect lines reset HIGH ("no USB").
+
+**Verified on a fresh stock boot:** subucom fd open, `UiMain` thread running, epoll
+up, UI painted (16bpp), and `SUBUCOM_TRACE=1` shows the poll thread actively
+clocking the SSI slave (~300k MOSI bytes). When a USB image is cold-plugged later,
+the same lines should be driven LOW to signal "present".
+
+### Remaining for working buttons (SPI command protocol + handshake)
+
+The `xdj-subucom` SSI slave (patch 02) still returns constant `0xff` on MISO, so no
+`StaticInfomation` handshake and no button/jog/fader frames come back. The reader
+`FUN_00281c78` reads the frame and only dispatches to the receiver on a **changed**
+frame (memcmp vs. the previous buffer). To make a control register:
+- model the TX→RX command protocol (the MOSI stream `02 a8 ..` are rbp's commands/
+  `SubTxData`; the panel answers on MISO),
+- answer the **StaticInfomation** handshake (version etc.) so the panel is "ready",
+- return frames the receiver decodes: the receiver is **`PanelComReciever`**
+  (`FUN_00285384`); its +0x30 sub-object `vtable[2]` parses the frame into
+  `{code, player, flags}` events that **`FUN_0028cea4`** routes (codes per the
+  `button` table above — menu = 0x20a, play = 0x4101, …).
+Note: the debug-console `button` command does **not** reach the UI even with the
+panel live — only the real SPI frame path does.

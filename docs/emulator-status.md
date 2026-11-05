@@ -94,14 +94,23 @@ factory's format map (follow-up: locate the dlopen/format-map factory in
 
 ## 🔶 C / G. Controls → app (panel buttons)
 Control surface (buttons/jogs/faders) comes via the Subucom panel MCU over SPI
-(`/dev/subucom_spi1.0`, 24-byte frames). **The SPI path works** — a guest read
-clocks a 24-byte transfer into the QEMU SSI slave — but **rbp never reads the
-panel**: the poll is gated by a precondition that fails under emulation, so rbp
-leaves the panel disabled (0 SPI frames; no thread blocked on it). See
-`docs/rbp-and-panel-protocol.md` → "Panel input path — empirical findings" for
-the full map and the 4-step plan (pin the read gate → make QEMU pass it + return
-valid 24-byte frames → RE the frame format → key-injection). `/dev/gpiodrv` (9
-discrete lines) is NOT the button path.
+(`/dev/subucom_spi1.0`). **The panel now boots and rbp actively reads it.** The
+root cause of "rbp never reads the panel" was *not* a disabled poll — it was a
+**boot deadlock** in panel init: rbp pushes an initial USB state to the panel
+(triggered by a USB-detect GPIO reading 0) via `peer->send()` *before* the panel
+poll thread exists, and spins forever. QEMU reset every GPIO input to 0 ("USB
+present"); on real hw the USB-detect lines idle HIGH. **Fixed** by
+`qemu/patches/04-imx6-usb-detect-gpio.patch` (reset GPIO4_IO30 / GPIO7_IO12 high —
+no firmware change). Verified on a stock boot: `/dev/subucom_spi1.0` open, the
+`UiMain` poll thread running + epoll up, and `SUBUCOM_TRACE=1` shows it clocking
+the SSI slave (~300k MOSI bytes). Full story + symbols:
+`docs/rbp-and-panel-protocol.md` → "SOLVED".
+
+**Remaining (in progress):** the `xdj-subucom` SSI slave still returns `0xff`, so no
+`StaticInfomation` handshake and no button/jog/fader frames. Next: RE the SPI
+command protocol + handshake and have the slave return decoded frames (the reader
+dispatches only on a *changed* frame). `/dev/gpiodrv` is for discrete lines (incl.
+the USB-detect ones above), not the button data path.
 
 ## RE tooling notes
 - Kernel: link base **0x80008000** (PAGE_OFFSET 0x80000000); wrap `vmlinux.bin` as
