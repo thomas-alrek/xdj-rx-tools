@@ -57,7 +57,9 @@ descriptor. Two leads:
    produce **no** "new USB device" and **no** error — so khubd isn't running the
    descriptor read. Suspect the ChipIdea EHCI port-change interrupt / async-schedule
    isn't driving khubd (the controller starts and the root hub works, so it's a
-   port-change-notify or control-transfer issue specific to this EHCI).
+   port-change-notify or control-transfer issue specific to this EHCI). Ruled out:
+   the USB IRQ wiring is correct (OTG→GIC 43→irq 75, HOST1→GIC 40→irq 72, both
+   matching the kernel's fsl-ehci.{0,1}), so it is not an interrupt-mapping bug.
 **exFAT itself:** the 3.0.35 kernel has vfat/msdos/**ntfs** but **no exFAT and no
 FUSE** — so the old "fuse-exfat" plan won't work; exFAT needs an out-of-tree kernel
 module (e.g. exfat-nofuse) built against this kernel + a mount rule. (Test images:
