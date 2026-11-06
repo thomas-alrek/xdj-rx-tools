@@ -391,3 +391,70 @@ The question to answer: **why does rbp exit/abort within seconds of the first ga
 render?** (A failed assert on a galcore ioctl result is the leading guess — galcore
 "renders" the static UI via the completion stub, but something it returns to rbp is wrong
 enough that rbp aborts shortly after.)
+
+---
+
+## Follow-up 3 (2026-11-06, unattended): rbp does NOT crash — Follow-up 2 was a measurement artifact
+
+**The premise of Follow-up 2 is wrong. rbp does not die.** It renders the deck UI through
+galcore and then keeps running indefinitely as a healthy daemon. The "rbp dies ~seconds
+after rendering" conclusion came entirely from the liveness check `ps | grep -c
+'[r]bp_solo'` returning `0` — but **busybox `ps` with no args lists only processes on the
+current tty**, and rbp is daemonized (`fd/0 → /dev/null`, no controlling terminal, PPid 1),
+so it is *never* in that listing even though it is alive. The same bug was in the earlier
+poller used here.
+
+**Proof (captured live on the running guest):**
+```
+# the BROKEN check (what Follow-up 2 used):
+ps | grep -c '[r]bp_solo'     -> 0          (concluded "dead")
+ps | wc -l                    -> 4          (ps shows only: header, sh, ps, wc — current tty)
+ls -l /proc/$(pidof rbp_solo)/fd/0 -> /dev/null   (no tty => invisible to `ps`)
+# the TRUTH:
+pidof rbp_solo                -> 2398
+cat /proc/2398/stat           -> State S (sleeping)
+ls /proc/2398/task | wc -l    -> 79 threads (UiMain, gui_task, Player:0/1, GpioManager*10, Tot_*, DB*, …)
+awk '{print $14+$15}' /proc/2398/stat  -> utime+stime GROWS ~10 ticks/s (actively running, not wedged)
+```
+rbp was observed **alive with 79 threads at t=162 s, t=625 s, and across a separate boot**,
+and its CPU time keeps accumulating — it is a live, active, idle process waiting for input.
+
+**Also NOT a crash on the USB path.** Cold-plugging `test/usb/rekordbox_test.img`: the
+stick enumerates and mounts (`/dev/sda1 on /media/usb1/sda1 type vfat`, `Attached SCSI
+disk`) and **rbp stays alive (pid 2398, 79 threads)** through the insert + mount + scan.
+The deck framebuffer does not change on insert — expected; you open the browser with the
+BROWSE control, you don't get an automatic screen change.
+
+**Correct liveness check (use this, not `ps | grep`):**
+```
+pidof rbp_solo            # prints the pid if alive, nothing if dead
+cat /proc/$(pidof rbp_solo)/stat | cut -d' ' -f3   # State: S/R=alive, Z=zombie, (empty)=dead
+ls /proc/$(pidof rbp_solo)/task | wc -l            # thread count (~79 when healthy)
+# or:  ps -e 2>/dev/null | grep rbp   (if the ps build supports -e; the plain `ps` does not)
+```
+
+### What this means for Follow-ups 1 & 2
+Both were built on this false "rbp is dead" signal:
+- Follow-up 1's "control press crashes rbp" and Follow-up 2's "rbp dies after rendering"
+  are the **same artifact** — rbp was *already reported dead* (by the broken check) before
+  any trigger, so every trigger looked fatal. It never was.
+- The `user_debug=31` "no fault dump" and "dies even with SUBUCOM_BADCRC" observations are
+  all consistent with the simple truth: **nothing died**, so nothing was printed.
+- My GC320 feature-register fix (`6ae6347`) and the runtime-2D-completion fix (`b413bc9`)
+  stand on their own merits (galcore builds a real 2D feature DB; the deck UI renders
+  through galcore) and do not regress; neither was "fixing a crash," because there is none.
+
+### The REAL remaining gap (not a crash): control feedback doesn't land
+Injecting the one mapped control (MENU = `b 1b 1`) produces **no** framebuffer change over
+10 s of rapid screendumps while rbp stays alive — i.e. the panel frame the QEMU slave
+presents is **not being accepted/decoded** by rbp (or MENU has no visible effect on the
+idle deck screen). This is **feature C** (panel protocol): the control map is still
+incomplete (only MENU's byte/bit is pinned; BROWSE/USB1/transport offsets are the "next
+task" in `docs/rbp-and-panel-protocol.md`), and whether a valid frame is even reaching
+rbp's decoder needs verifying (the earlier "decode confirmed working" rested on the same
+phantom-crash signal). **This is the real work to make the device visibly react** — but it
+is a functional gap, not an rbp crash, and the GPU-2D path is not the blocker.
+
+**Bottom line:** on the default galcore path, `-smp 1`, byte-for-byte rootfs: the firmware
+boots, galcore initialises, the deck UI renders through galcore, USB mounts, and **rbp runs
+healthily and does not crash**. Verify rbp with `pidof`/`/proc`, never `ps | grep`.
