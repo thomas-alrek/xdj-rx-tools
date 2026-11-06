@@ -179,16 +179,37 @@ herring — it auto-clears, and the StaticInfomation handshake is a lazy
 version-screen cache (confirmed uninitialized in rbp's live memory), not on the
 button path. Full protocol: `docs/rbp-and-panel-protocol.md`.
 
-**Remaining:** (1) **wire up the full control map** — RE every section decoder
-(`FUN_002841e4`, `FUN_00282800`, `FUN_00282a98`, the global-button decoder
-`0x2832b8`) into a byte/bit → control → event-code table, and model the whole
-surface in the slave. (2) **GPU-2D render** (feature A/D): dynamic on-screen
-feedback (a moved fader, a loaded track) blits through the stubbed GPU-2D path and
-crashes, so control *effects* aren't yet visible even though decode works — this is
-the same blocker USB track-loading needs solved. Verification tooling: guest shell
-(root, empty pw, `-serial` socket) + `/proc/<pid>/mem` reads
-(`dd bs=4 skip=$((addr/4)) count=N | hexdump -e ...`); the QEMU gdbstub breakpoints
-are non-functional here. `/dev/gpiodrv` is for discrete lines, not the button data.
+**UPDATE (2026-11-06): DECODE NOW TRULY WORKS — the slave frame byte-order was
+wrong; several 2025-11-05 claims above are corrected here.** The real blocker was
+a QEMU-slave byte-order bug: the ECSPI shifts each 32-bit word MSB-first, so
+`rbp_buf[j] = s->frame[(j&~3)+(3-(j&3))]` (a **per-word byte reversal, no linear
+shift**), but the slave used `memcpy(s->frame+3, …)` (bogus +3). That pushed the
+CRC off the 100-byte burst → rbp read CRC=0 → every frame rejected → **zero
+decode**. **Fixed in patch 02** (`s->frame[i]=rbp[(i&~3)+(3-(i&3))]`). Verified
+live (gdb): CRC matches, the handler runs the NORMAL decode path (`this+0x88`
+initialised, frames diffed), and a control change drives the section decoder →
+dispatch. Corrections to above: the "injecting a control crashes rbp" proof was a
+**phantom crash** (a `ps|grep` artifact — rbp is daemonised; use `pidof`), and
+**gdb breakpoints DO work here** (the "non-functional" note was wrong). Full
+detail: `docs/rbp-and-panel-protocol.md` → "FRAME TRANSPORT SOLVED".
+
+**USB mount is crash-free (2026-11-06):** booting with
+`XDJUSB=test/usb/rekordbox_test.img` (cold-plug `usb-storage`), the stick
+enumerates and mounts (`/dev/sda1 → /media/usb1/sda1 vfat`) and rbp stays healthy
+(pid alive, 79 threads) — no crash. The deck screen does not auto-switch on insert
+(expected; you open the browser with BROWSE).
+
+**Remaining:** (1) **Re-derive the control map.** The byte/bit→code map above was
+built while decode was broken and is **unreliable** — e.g. `frame[0x1a..0x1b]`
+(claimed "global buttons") is actually a **16-bit analog** value (its handler
+`FUN_0028411c` emits float code `0x410a`), not buttons. Need to RE each section
+decoder (`FUN_002841e4` Fmt/Common, `FUN_00282800` Mixer, `FUN_00282a98` Other)
+and the event router `FUN_0028cea4` into a verified byte/bit→code table, then find
+the buttons that reach the router (BROWSE, MENU, rotary, LOAD) and confirm a
+visible screen change. (2) Optional: give the idle frame a heartbeat so rbp's
+baseline initialises without needing an injected transition. Verification tooling:
+guest shell (root, empty pw, `-serial` socket), `pidof`/`/proc/<pid>/mem`, and the
+**working** QEMU gdbstub (`-gdb tcp::1234`; resume with gdb `c`, not the monitor).
 
 ## RE tooling notes
 - Kernel: link base **0x80008000** (PAGE_OFFSET 0x80000000); wrap `vmlinux.bin` as

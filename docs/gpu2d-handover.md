@@ -467,3 +467,56 @@ and the GPU-2D path is not the blocker.
 **Bottom line:** on the default galcore path, `-smp 1`, byte-for-byte rootfs: the firmware
 boots, galcore initialises, the deck UI renders through galcore, USB mounts, and **rbp runs
 healthily and does not crash**. Verify rbp with `pidof`/`/proc`, never `ps | grep`.
+
+---
+
+## Follow-up 4 (2026-11-06): PANEL CONTROL DECODE FIXED — frame byte-order was wrong
+
+Follow-up 3's "real remaining gap" (control feedback doesn't land / brute-force
+sweep changed nothing) is **solved**. Root cause: the QEMU `xdj-subucom` slave
+presented the MISO frame with the **wrong byte transform**, so rbp's CRC gate
+never matched and every frame was silently rejected (re-baselined, no events).
+
+### What was actually happening (RE'd against live rbp with gdb)
+1. **The SPI poll is change-gated.** `FUN_00281c78` (PanelComPeerLinux poll)
+   reads 100 bytes into a ping-pong buffer and dispatches `onReceive` **only when
+   the new frame differs from the previous** (`memcmp`). `0x285160` forwards to
+   the real handler `0x284d44` only for `evtType==0`.
+2. **The handler has a hard CRC gate.** `0x284d44` computes CRC-16/X-25 over the
+   first 96 bytes and decodes the SubRxData sections **only if it equals
+   `rbp_buf[0x62]`** (`284dd0 cmp … 284f28 decode`); otherwise it takes the
+   first-frame path (re-baseline, **no events**).
+3. **The byte-order bug.** The ECSPI shifts each 32-bit word MSB-first, so
+   `rbp_buf[j] = s->frame[(j&~3)+(3-(j&3))]` — a **per-word byte reversal, no
+   linear shift**. The slave instead did `memcpy(s->frame+3, rbp, 100)` (a bogus
+   **+3 shift**), which pushed the CRC off the 100-byte burst → rbp read a zero
+   CRC → mismatch → **no control ever decoded.** (The old "kernel drops 3 MISO
+   bytes" note was a misread of the word swap.)
+
+### The fix (patch 02, `xdj_subucom_frame_start`)
+Transmit the logical frame with each 32-bit word byte-reversed:
+`for (i<100) s->frame[i] = rbp[(i&~3)+(3-(i&3))];`. rbp re-reverses on receive
+and its CRC matches. Patch 02 regenerated (reproduces the build tree byte-for-
+byte; patches 04/05 unchanged — verified).
+
+### Verified end-to-end (live rbp, gdb)
+- CRC now **matches** (computed == stored, e.g. idle `0xcbae`), and the handler
+  runs the **NORMAL decode path** — `this+0x88` initialised, frames diffed.
+- A global-button change (`echo "b 1b 1" > /tmp/subucom_ctrl`) drives
+  `section decoder 0x2841e4 → button dispatcher 0x28411c` — the full chain
+  `SPI read → memcmp → onReceive(0) → CRC ok → section diff → control event` is
+  live.
+
+### Not yet done (follow-up — NOT a transport problem)
+- **Visible UI reaction.** Pressing global-button bytes `0x14..0x23` with no
+  track loaded produced no framebuffer change (the event is delivered; the deck
+  screen just doesn't redraw for them in that state). Finding visibly-reacting
+  controls (BROWSE / rotary / LOAD) and re-verifying the byte/bit→code map (the
+  map in `docs/rbp-and-panel-protocol.md` was largely derived while decode was
+  broken) is the next step.
+- **Idle heartbeat.** Dispatch is change-gated and our idle frame is constant, so
+  rbp only sees transitions; consider a cycling counter in a non-control byte so
+  the baseline initialises early and state stays live like real hardware.
+
+Full detail + reproduction: `docs/rbp-and-panel-protocol.md` → "FRAME TRANSPORT
+SOLVED & VERIFIED END-TO-END (2026-11-06)".

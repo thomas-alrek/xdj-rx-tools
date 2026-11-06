@@ -621,8 +621,11 @@ Decisive for emulation (symmetric-extractable vs asymmetric-unforgeable):
 
 Ghidra left `0x284xxx` undefined; `objdump -d --start-address` on the rbp ELF
 disassembles it cleanly. This is the parser rbp runs on each 100-byte MISO frame.
-**All offsets below are in rbp's read-buffer coordinates; the kernel drops 3 MISO
-bytes, so `rbp_buf[j] == slave_frame[j+3]`** (e.g. rbp `[2..3]` = slave `[5..6]`).
+**All offsets below are in rbp's read-buffer coordinates.** (CORRECTION
+2026-11-06: the "kernel drops 3 MISO bytes / `rbp_buf[j]==slave_frame[j+3]`"
+claim here is **WRONG** — the real transform is a per-32-bit-word byte reversal
+with no linear shift. See "FRAME TRANSPORT SOLVED & VERIFIED END-TO-END" at the
+end of this doc.)
 
 ### The frame-routing gate (this was the "bare frame not routed" blocker)
 ```
@@ -643,9 +646,11 @@ expected size, or it `__cxa_throw`s.
 - `[2..3]`  u16 big-endian **frame header / type id** (the routing gate; stored to
   the receiver at `+0x94`).
 - `[0x62]`  u16 compared against a value computed over the previous frame
-  (`FUN_0028259c` → `0x3f7f4`, a byte-swapped hash). Equal vs not-equal only
-  **selects which decoder path runs** (`FUN_002841e4` vs the header decoder) — it is
-  a change-detector, **not a checksum gate** the slave must satisfy.
+  (`FUN_0028259c` → `0x3f7f4`, a byte-swapped hash). (CORRECTION 2026-11-06:
+  this "change-detector, not a checksum gate" reading is **WRONG** — `[0x62]` is
+  a hard CRC-16/X-25 gate; on mismatch the frame is re-baselined and **no events
+  fire**. The slave MUST satisfy it. See the final "FRAME TRANSPORT SOLVED"
+  section.)
 - `this+0x88` u16 = previous-frame marker (`0xffff` on the very first frame → the
   first-frame init path).
 
@@ -725,7 +730,9 @@ the frame is stored but nothing decodes (the header path calls a `bx lr` no-op).
 
 So our stub's `frame[0x62]=0` never matched → zero decoding, ever. **Implemented the
 CRC in the `xdj-subucom` slave** (build tree): build the frame in rbp coords, CRC the
-byte-swapped first 96 bytes, write it to `[0x62]`, shift +3 onto MISO.
+byte-swapped first 96 bytes, write it to `[0x62]`, present on MISO. (CORRECTION
+2026-11-06: "shift +3 onto MISO" was wrong — present each 32-bit word
+byte-reversed, no shift. See the final "FRAME TRANSPORT SOLVED" section.)
 
 ### Confirmed by SUBUCOM_TRACE
 - **The poll thread reads continuously after settle: ~140 frames/sec** (56,200 MOSI
@@ -881,3 +888,98 @@ sec[0x08]=0x448b sec[0x0a]=0x600f sec[0x0c]=0x4403  sec[0x0e]=0x4402
 - To model a control in the slave: set its byte/bit (or LE 16-bit value) in the frame
   built in rbp_buf coords, recompute the CRC, present it; toggle once to fire press,
   clear to fire release. Analog: write the raw 0..1023 value LE at the section offset.
+
+---
+
+## FRAME TRANSPORT SOLVED & VERIFIED END-TO-END (2026-11-06)
+
+This section is **authoritative** and corrects two load-bearing errors in the
+dated sections above (flagged inline there): there is **no "+3 kernel byte
+drop"**, and `[0x62]` **is** a hard CRC gate (not merely a change-detector).
+Verified against a live rbp with gdb (hardware breakpoints + guest-memory reads).
+
+### The two-layer delivery path (both fully RE'd)
+
+1. **SPI poll + change-detection** — `FUN_00281c78` (the `PanelComPeerLinux`
+   poll, called ~140–220×/s). It `read()`s the 100-byte frame into a **ping-pong
+   buffer** (`peer[0x18]`/`peer[0x1c]`, selected by `peer[0x14]&1`), then
+   `memcmp`s the two buffers and **dispatches `onReceive(evtType, frame, 100)`
+   only when the new frame DIFFERS from the previous one.** The forwarder
+   `0x285160` runs the real handler `0x284d44` only for `evtType==0`.
+   - Consequence for emulation: a **constant** frame is never dispatched. Our
+     emulated idle frame is constant, so rbp only "sees" a control at the
+     idle→pressed and pressed→idle **transitions** (which is exactly what a
+     real press/release is). A held-constant value produces one down + one up.
+
+2. **SubRxData parser + CRC gate** — `0x284d44`. On each dispatched frame it
+   computes CRC-16/X-25 over the first 96 bytes (via `FUN_0028259c`) and
+   **branches to the section decoders only if it equals the stored halfword at
+   `rbp_buf[0x62]`** (`284dd0 cmp; 284f28 decode`). On mismatch the frame is
+   treated as "first frame" (`this+0x88==0xffff` path) which just re-baselines
+   and emits **no** events. So a wrong CRC = silent, total loss of control
+   input — which is exactly the bug that made "controls not land".
+
+### The byte-order transform (this was THE bug)
+
+The ECSPI shifts each 32-bit word **MSB-first**, so the wire byte at position
+`p` lands in rbp's logical read buffer `B` at index `(p&~3)+(3-(p&3))` — a
+**per-32-bit-word byte reversal, with NO linear shift**. (This is the very swap
+rbp's CRC routine reverses before hashing, and why the whole protocol is
+word-reversed.) Calibration proved it to the byte: a marker at `s->frame[0x50]`
+landed at `B[0x53]`/`B[0x52]` (symmetric word-pair), and an asymmetric marker
+confirmed the within-word reversal exactly.
+
+The old QEMU slave used `memcpy(s->frame + 3, rbp, 100)` — a **bogus +3 linear
+shift** — which pushed the CRC (at `rbp[0x62]`) to wire index 0x65 → rbp's
+`B[0x62]` read `0` → CRC never matched → every frame rejected → zero control
+decode, while the frame still "changed" enough to look alive. (The earlier
+"kernel drops 3 MISO bytes" note was a misreading of the word swap.)
+
+**Fix (QEMU `xdj-subucom` slave, patch 02):** build the logical frame `rbp[]`
+in rbp_buf coordinates (controls at `0x04/0x14/0x24/0x34/0x44`, CRC at `0x62`),
+then transmit it with each 32-bit word byte-reversed:
+
+```c
+for (i = 0; i < 100; i++)
+    s->frame[i] = rbp[(i & ~3) + (3 - (i & 3))];
+```
+
+rbp re-reverses on receive, recovering `rbp[]` exactly; its CRC over the first
+96 bytes then equals the value we stored at `[0x62]`.
+
+### Verified (live rbp, gdb)
+
+- CRC **matches**: at the compare site rbp's computed CRC == stored (`0xcbae`
+  idle, tracks the data when a control is set); the handler now runs the
+  **NORMAL decode path** (`0x284dd0`→`0x284f28`), not the first-frame path, i.e.
+  `this+0x88` is initialised and frames are being diffed.
+- Control events **dispatch**: injecting the global-button byte `[0x1b]` makes
+  the Common-section decoder `0x2841e4` detect the change and call the button
+  dispatcher `0x28411c` (`LR=0x2842b8`) — the full chain
+  `SPI read → memcmp → onReceive(0) → CRC ok → section diff → control event`
+  is live.
+
+### Still open (follow-up, not a transport problem)
+
+- **Visible UI reaction.** With no track loaded, pressing the global-button
+  bytes `0x14..0x23` produced no framebuffer change (confirmed by sweep) — most
+  buttons don't redraw the deck screen in that state. The event *is* delivered
+  (proven above). Finding controls that visibly change the screen (BROWSE, the
+  rotary, LOAD, …) and re-verifying the **byte/bit→code map** (the map in the
+  sections above was largely derived while decode was broken) is the next step.
+- **Idle frame liveness.** Because dispatch is change-gated and our idle frame
+  is constant, consider giving the idle frame a real MCU-like heartbeat (e.g. a
+  cycling counter in a non-control byte) so rbp's baseline initialises early and
+  state stays "live" the way continuous hardware frames keep it.
+
+### Reproduce / test (headless + gdb)
+
+Scratchpad helpers (session): `launch_v2.sh` (boots `-smp 1` with `-gdb
+tcp::1234`, monitor `/tmp/d_mon4.sock`, serial `/tmp/d_con4.sock`), `catch.py
+<addr…>` (set hw bp, report hits — clears stale bps first), `crcverify.py`
+(reads computed vs stored CRC at the compare sites), `rampmap.py`
+(`SUBUCOM_RAMP=1` + direct buffer read → raw MISO→rbp_buf map), `con4.py`
+(guest shell), `shot4.py` (screendump). Inject a control with
+`echo "b 1b 1" > /tmp/subucom_ctrl` (button) or `echo "a 24 abcd" >` (analog).
+Diagnostics (env): `SUBUCOM_RAMP`, `SUBUCOM_BADCRC`, `SUBUCOM_TRACE`,
+`SUBUCOM_BURST`.
