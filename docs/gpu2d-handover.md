@@ -445,15 +445,24 @@ Both were built on this false "rbp is dead" signal:
   through galcore) and do not regress; neither was "fixing a crash," because there is none.
 
 ### The REAL remaining gap (not a crash): control feedback doesn't land
-Injecting the one mapped control (MENU = `b 1b 1`) produces **no** framebuffer change over
-10 s of rapid screendumps while rbp stays alive — i.e. the panel frame the QEMU slave
-presents is **not being accepted/decoded** by rbp (or MENU has no visible effect on the
-idle deck screen). This is **feature C** (panel protocol): the control map is still
-incomplete (only MENU's byte/bit is pinned; BROWSE/USB1/transport offsets are the "next
-task" in `docs/rbp-and-panel-protocol.md`), and whether a valid frame is even reaching
-rbp's decoder needs verifying (the earlier "decode confirmed working" rested on the same
-phantom-crash signal). **This is the real work to make the device visibly react** — but it
-is a functional gap, not an rbp crash, and the GPU-2D path is not the blocker.
+A **brute-force sweep of all 32 global-button bits** (`b {0x1a..0x1d} {0x01..0x80}` via the
+`/tmp/subucom_ctrl` harness) produced **zero** framebuffer change while rbp stayed alive the
+whole time — i.e. the panel frame the QEMU slave presents is **not being accepted/decoded**
+by rbp. This is **feature C** (panel protocol), and it means the earlier "decode CONFIRMED
+end-to-end" claim is **invalid**: it rested on the same phantom-crash signal ("inject →
+`ps` says rbp gone → therefore the frame was decoded and crashed it"), but rbp never
+crashed, so nothing proves the frame was decoded — and this sweep shows it isn't.
+
+Likely causes to chase (in the QEMU `xdj-subucom` slave, build-tree `hw/arm/fsl-imx6.c`):
+the frame **CRC** (harness uses CRC-16/X-25 over the first 96 bytes with each 32-bit word
+byte-swapped, stored at `[0x62]`), the **+3 MISO alignment** (`s->frame+3 = rbp_buf`), or
+the **byte offsets** of the control sections — any one wrong makes rbp silently reject every
+frame. Verifying needs RE of rbp's decoder (the stripped `rbp` binary was extracted to
+`build/extract/rbp`; the concurrent session called the decoder `FUN_00284d44` but that
+address isn't a function in a fresh Ghidra load — find it via the CRC constant / the
+`[0x62]` store). The control map is also incomplete (only MENU's byte/bit was pinned).
+**This is the real work to make the device visibly react** — a functional gap, not a crash,
+and the GPU-2D path is not the blocker.
 
 **Bottom line:** on the default galcore path, `-smp 1`, byte-for-byte rootfs: the firmware
 boots, galcore initialises, the deck UI renders through galcore, USB mounts, and **rbp runs
