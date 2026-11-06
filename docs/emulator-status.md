@@ -17,10 +17,12 @@ DirectFB gfxdriver removed so DirectFB software-renders). Committed.
 The built-in galcore (Vivante) driver now fully initialises on the default boot path:
 the QEMU GPU stub (patch 02) + GC355 VG core + DVFS GPT kick (patch 05) carry it through
 init, so `/dev/galcore` exists and boot reaches `#### Application Start!! ###` (details
-below). Note `nand.img` still has the one DirectFB GAL gfxdriver (`libdirectfb_gal.so`)
-removed — the workaround from when galcore hung — so DirectFB *itself* still
-software-renders the idle UI; restoring that gfxdriver to blit through the now-working
-galcore is the next step (see `docs/gpu2d-handover.md`).
+below). The rootfs is now byte-for-byte (the DirectFB GAL gfxdriver `libdirectfb_gal.so`
+is kept). **Open issue:** with the gfxdriver present the firmware boots to the splash but
+rbp then hangs in a galcore ioctl on the first runtime 2D blit (no command reaches the
+GPU; galcore's runtime 2D completion handshake is not yet emulated), so the deck UI does
+not render; with the gfxdriver stripped the deck UI renders in ~16 s (software DirectFB).
+Full diagnosis + fix plan in `docs/gpu2d-handover.md` ("Open issue: deck-UI stall").
 
 **The full-galcore path is now the DEFAULT (and only) boot path.** Making galcore fully
 initialise needs patch 02's GC320 2D identity (so galcore derives `gcvHARDWARE_2D` and

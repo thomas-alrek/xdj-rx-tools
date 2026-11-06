@@ -11,13 +11,17 @@ and fast‑aborts).
 
 This emulates the real controller's GPU so the kernel‑side galcore stack comes up like on
 hardware — the device the firmware's dynamic GPU‑2D rendering needs now exists instead of
-crashing on its absence. **Caveat (next step):** `qemu/build-nand.sh` still removes the
-one DirectFB GAL gfxdriver (`libdirectfb_gal.so`), so DirectFB *itself* still
-software‑renders the idle UI. That removal predates this fix (it was the workaround for
-the galcore hang). Now that galcore initialises, the logical next step is to **restore
-the gfxdriver and let DirectFB blit through galcore** — but note the known `gui_task`
-crash on the hardware GPU‑2D blit path (USB browse, see memory `panel-and-usb-bringup`),
-so that is a test, not a given.
+crashing on its absence. The rootfs is now **byte‑for‑byte** (commit keeps
+`libdirectfb_gal.so`; `qemu/build-nand.sh` no longer strips it), so DirectFB blits are
+routed to the real galcore device.
+
+> **⚠ OPEN ISSUE — the deck UI does not render with the gfxdriver present.** With the GAL
+> gfxdriver kept, the firmware boots to the splash and **stays there** (rbp hangs in a
+> galcore ioctl; no deck UI). With the gfxdriver removed, the full deck UI renders in
+> ~16 s (software DirectFB). So the device bring‑up is solved, but **runtime 2D rendering
+> through galcore is not** — see "Open issue: deck‑UI stall" below. Until that's fixed the
+> emulator reaches only the splash on the default path; `XDJ_GPU2D_OFF=1` + the old
+> gfxdriver‑stripped rootfs is the way to get a usable UI.
 
 **It boots on `-smp 1`, which is the launch default (`qemu/watch.sh`).** The real
 hardware is dual‑core, and `-smp 2` is the eventual target, but `-smp 2` still has an
@@ -101,6 +105,58 @@ The single‑core diagnostic tooling is in the session scratchpad (not committed
 (dump PC + current task per CPU at the `-smp 2` hang), `trace_c3.py` / `trace_vg2.py`
 (breakpoint step‑over tracers), `mkelf.py` (ELF‑wrap at 0x80008000), `gc_console.py`
 (guest‑shell expect client).
+
+---
+
+## Open issue: deck‑UI stall (galcore runtime 2D completion)
+
+**Symptom.** With the GAL gfxdriver present (byte‑for‑byte rootfs), the firmware boots to
+the Pioneer/rekordbox splash and never advances to the deck UI. With the gfxdriver
+stripped it reaches the full deck UI in ~16 s. Confirmed by booting both images on a
+clean, uncontended host, `-smp 1`: 18 screendumps over ~2.4 min on the gfxdriver image
+showed **zero** frame change past the splash; the stripped image changed at the 2nd shot.
+
+**Diagnosis (this session, via gdb + QEMU‑monitor sampling + Ghidra on kernel slices).**
+- rbp's UI thread (`UiMain`) enters a galcore ioctl for the first real 2D blit and
+  **blocks**; it is caught on‑CPU only ~1 sample in 40, i.e. it is mostly *sleeping*, not
+  spinning.
+- The GPU register trace (`IMX6_GPU_TRACE=1`) during the stall is **empty** — only the 121
+  boot‑init accesses, then nothing. **No 2D command ever reaches the GPU registers.** So
+  galcore stalls *before* dispatching the blit to hardware, not while polling it.
+- A task walk (`walk2.py`, tasks offset **0xb8**, comm +0x1ec, thread_info cpu_context
+  sp +0x3c / pc +0x40) shows every galcore thread idle‑waiting on a signal: the 3
+  "galcore daemon" per‑core ISR threads at `gckOS_WaitSignal` (`0x8067a048/0b4/120`), and
+  the 2 "Vivante Kernel" command threads in `FUN_80692cf4` — a `while(WaitSignal(sig,
+  INFINITE)) { … }` loop (waiting for work that never arrives).
+- The host's ~50 %+ CPU during the stall is the **swapper/idle `busfreq` DVFS loop**
+  (`0x803cf094`→`0x803dc608`, the documented GPT‑kick side effect) — a *separate, benign*
+  burn, not the blocker (it runs on the stripped image too, which still reaches the UI).
+
+**Conclusion.** galcore *initialises* (device exists, init commands complete via the
+`fe_timer` IRQ on submit), but its **runtime 2D command‑completion handshake is not
+emulated**. rbp's first blit commit stalls — most likely in the commit's "stall / wait
+for previous completion" step, whose completion event the stub didn't account for
+correctly. The stub delivers a fixed event mask (2D `events=0x3fffffff`); galcore's
+runtime path allocates a **rotating event id per commit** (it writes an EVENT command
+`LOAD_STATE 0x0E01, val = eventId|source` into the command buffer, exactly as the VG
+path does with event 30 / `0x5e`), then waits for *that* id. A fixed mask mis‑accounts it.
+
+**Fix plan (QEMU‑side, the real work).** Emulate per‑commit 2D completion properly:
+1. On the 2D command kick (write to `0x654/0x658`), read the submitted command buffer
+   from guest memory (the address galcore programmed), scan it for the trailing EVENT
+   command (`LOAD_STATE` to `0x0E01`), and extract the event id from its value byte.
+2. Deliver **exactly that event** in `AQIntrAcknowledge (0x010)` when the completion IRQ
+   fires — generalising the VG fix (fixed event 30) to the dynamic 2D case, so galcore's
+   `_Event`/signal accounting matches and the commit's stall releases.
+3. Re‑check the init path still completes (don't regress the `-22`/probe fixes), then
+   verify the deck UI renders through galcore and watch for the `gui_task` crash on the
+   heavier USB‑browse blit path.
+
+This is genuine command‑processor emulation (iterative RE + implement + test), materially
+bigger than the init stub. Tooling for it is in the scratchpad: `walk2.py` (task walk +
+sleep pc), `profpc.py` (monitor PC profile/bucket), `catchui.py` (catch a user thread
+on‑CPU + stack), `darm.py` (capstone disasm at a kernel VA), `mkelf.py` (slice→ELF for
+Ghidra via REA, e.g. `galcore.elf` 0x80670000‑0x80710000, `gal_os.elf` 0x803e0000‑0x80408000).
 
 ---
 
