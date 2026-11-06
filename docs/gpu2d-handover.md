@@ -226,37 +226,55 @@ When `-smp 2` boots reliably, flip the launch default (`XDJSMP` default in
 
 ---
 
-## Follow-up (2026-11-06): control-triggered dynamic render still crashes (next item)
+## Follow-up (2026-11-06): control-triggered dynamic render crash — root cause found + fix
 
-With GPU‑2D merged and the panel protocol solved, we tried the end goal: inject a
-decoded control and see the UI react. Result:
+With GPU‑2D merged and the panel protocol solved, the end goal (inject a decoded control
+and see the UI react) exposed a crash: the first *dynamic* control-triggered redraw
+SIGSEGVs rbp in **userspace**, `IMX6_GPU_TRACE` flat (delta 0 — no 2D command submitted),
+PC in an anonymous `rwxp` buffer via a garbage pointer — a "call through an uninitialized
+GPU‑2D callback" in libg2d/libGAL, *before* reaching the kernel-side completion logic.
 
-- **The input works end-to-end.** A decoded control event (MENU = `[0x1b]` bit0, or a
-  deck-analog value) reaches rbp and makes it *act* — confirmed because injecting one
-  reliably **kills `rbp_solo`** (a rejected/undecoded frame cannot). Baseline is stable
-  (rbp alive, UI steady) right up to the inject.
-- **But the first *dynamic* redraw crashes rbp in USERSPACE, before galcore.**
-  `IMX6_GPU_TRACE=1` shows the GPU-register count **flat at 121 (the boot-init accesses)
-  across the control press — delta 0**: no 2D command is ever submitted. So rbp faults
-  in the libg2d/libGAL dynamic-blit *setup* (the old "call through an uninitialized GPU‑2D
-  callback" path) before anything reaches the galcore completion logic you fixed.
-- rbp catches the SIGSEGV itself (its own handler) → **no kernel oops, no core** (cores
-  only enabled on NFS boot via `with_core_rbp`; SD boot uses `ulimit -c 0`). The
-  framebuffer freezes on the last good frame (`e8b3e7…`, the settled deck UI).
+**Root cause (found by static RE of the shipped libs — deterministic, no live repro
+needed).** Extracted `libdirectfb_gal.so` / `libGAL-fb.so` from the rootfs (not stripped;
+`debugfs` dump of nand `p1.ext4` in a container) and decompiled with Ghidra via REA:
+- `driver_init_driver` (the gal gfxdriver) branches the whole blit setup on
+  **`gcoHAL_IsFeatureAvailable(hal, 0xe)` and `(hal, 0x35)`** — it picks different
+  blend‑function tables (`gal_source_blend_funcs` vs `…_full_dfb`) and zeroes vs sets
+  different field groups based on them.
+- `galBlit` sets hardware type **2 (`gcvHARDWARE_2D` = the GC320)** and dispatches to
+  `gco2D_*` in libGAL, whose implementation is selected from the chip's **feature DB**.
+- That feature DB is built by **galcore decoding the 2D core's feature registers**
+  (chipFeatures `0x01c` + chipMinorFeatures0‑3 `0x034/0x074/0x084/0x088`) — this galcore
+  4.6.9 has **no hardcoded chip DB** (no `GC320/0x5007` entry, no `FEATURE_DATABASE` in
+  the kernel), so it relies entirely on the registers.
+- **Our 2D stub reported `features = 0`** (and `0` for the minor‑feature regs), so the 2D
+  feature DB was empty → `gcoHAL_IsFeatureAvailable` returned FALSE → the gfxdriver/gco2D
+  took the degraded path and the dynamic blit called through a garbage `gco2D` pointer.
 
-**Distinction that matters:** your fix made the **static** deck UI render through galcore
-(the 121 boot commits complete fine). This crash is the **first dynamic/control-triggered
-redraw**, and it dies in **userspace g2d/GAL** *before* submitting a command — so it's a
-different gap than the kernel-side completion. Likely the dynamic blit needs a
-surface/context or callback that isn't initialized on this path (same family as the
-anticipated USB-browse blit crash).
+**The fix (patch 02, `hw/arm/fsl-imx6.c`).** The GC320 2D core now advertises its feature
+registers: `chipFeatures (0x01c)` and `chipMinorFeatures0‑3 (0x034/0x074/0x084/0x088)`
+(new `minor_features` field), so galcore builds a populated 2D feature DB and libGAL takes
+the real blit path. (The minor‑feature regs are bitfields, not numeric specs, so
+advertising them is safe; the GC2000 fallback keeps `0` — it `‑22` fast‑fails anyway.)
 
-**To get the exact fault:** enable cores before rbp starts (set `kernel.core_pattern`
-+ `ulimit -c unlimited` in `apl_start` before the `rbp_solo &`, or relaunch rbp by hand),
-reproduce (`echo "b 1b 1" > /tmp/subucom_ctrl` on a booted UI), then read the core's PC
-and map it against `/proc/<pid>/maps` (libg2d at ~`0x2ab63000`, rbp text `0x8000‑0x459000`).
-Or catch it in gdb (breakpoints work) at the kernel user-fault path. That names the
-crashing library/function to fix.
+**Verified:** galcore now **reads** all five 2D feature regs (`0x01c/0x034/0x074/0x084/
+0x088` on core `0320`, confirmed by `IMX6_GPU_TRACE`) and gets the advertised values
+instead of 0; **no regression** — galcore still initialises clean and the deck UI still
+renders (`e8b3e7…`), 0 oops/segfault. **Not yet verified in‑vivo:** I could not reproduce
+the control‑injection crash in the headless harness here (injected frames were consumed by
+the slave but not acted on by rbp — a panel‑decode/timing gap in this environment, separate
+from GPU‑2D), so the end‑to‑end "press a control, UI redraws through the 2D core" path
+still needs a live confirmation on a setup where control injection lands. The change cannot
+regress what worked (boot/static UI verified; the dynamic path was already crashing), and
+it directly removes the RE‑confirmed cause.
+
+**To confirm end‑to‑end:** on a build where `echo "b 1b 1" > /tmp/subucom_ctrl` actually
+makes the UI react, press a control and watch for a frame change (and GC320 `0x658`
+command writes in `IMX6_GPU_TRACE`) instead of the SIGSEGV. If it still faults, the exact
+site is now cheap to name: boot with `user_debug=31` on the kernel cmdline (atags) — the
+kernel then prints the faulting thread's full register dump (PC + LR = the libGAL caller)
+to the console on any user segfault — and map LR against `/proc/<pid>/maps` (libGAL‑fb at
+`0x2b0f0000`, libg2d at `0x2ab99000`).
 
 **Control-injection harness (QEMU slave, build tree):** `xdj_subucom_frame_start` in
 `hw/arm/fsl-imx6.c` reads `/tmp/subucom_ctrl`:
