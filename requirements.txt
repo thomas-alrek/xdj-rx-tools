@@ -6,5 +6,11 @@
 # (the scripts carry PEP 723 inline metadata):  uv run xdjrx_upd.py info XDJRX.UPD
 
 pycryptodome>=3.20   # AES-256-CBC for xdjrx_upd.py (decrypt / pack). 'cryptography' also works.
-pycdlib>=1.14        # cross-platform ISO9660 extraction for 'xdjrx_upd.py extract' (no mounting)
+pycdlib>=1.14        # cross-platform ISO9660 extraction (xdjrx_upd.py extract, qemu_prepare.py, qemu/build-nand.py)
 inflate64>=1.0       # deflate64 unwrap for fetch_key.py (only the GPL-source download path)
+
+# Non-pip system dependency:
+#   qemu/build-nand.py needs e2fsprogs (mke2fs + debugfs) to build the ext4 SD image.
+#   It replaced the old Docker-based build, so Docker is no longer required.
+#     macOS:  brew install e2fsprogs
+#     Debian: sudo apt-get install e2fsprogs

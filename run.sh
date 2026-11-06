@@ -6,7 +6,7 @@
 #   build the patched QEMU → build nand.img → launch.
 #
 # Idempotent: every step is skipped when its output already exists, so re-running
-# just relaunches. Needs: python3, curl, docker (for the nand image), and a C
+# just relaunches. Needs: python3, curl, e2fsprogs (for the nand image), and a C
 # toolchain + Homebrew (build-qemu.sh pulls meson/ninja). macOS or Linux.
 #
 # Networking: by default eth0 is on user-mode NAT, so `./run.sh` just opens the
@@ -68,7 +68,7 @@ fi
 # 5. Build the patched QEMU (GPU stub + framebuffer scanout + SABRE-SD board)
 ls "$Q"/../qemu-src/*/build/qemu-system-arm >/dev/null 2>&1 || { echo "==> building QEMU"; asuser qemu/build-qemu.sh; }
 
-# 6. Build the nand image from the firmware's own rootfs payloads (needs docker)
+# 6. Build the nand image from the firmware's own rootfs payloads (pure Python + e2fsprogs)
 [ -f "$Q/nand.img" ] || { echo "==> building nand.img"; asuser bash qemu/build-nand.sh; }
 
 # 7. Launch. Default: open the live UI window as *you* — user-mode NAT, no

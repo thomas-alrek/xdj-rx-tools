@@ -231,7 +231,7 @@ EFFECTS, BPM/TEMPO). One command does everything from scratch:
 qemu/build-qemu.sh                                         # patched QEMU (once, ~15 min)
 python3 xdjrx_upd.py decrypt XDJRX.UPD -o build/XDJRX.iso  # decrypt firmware
 python3 qemu_prepare.py                                    # kernel boot blobs
-qemu/build-nand.sh                                         # nand image (needs Docker)
+qemu/build-nand.sh                                         # nand image (needs e2fsprogs)
 qemu/watch.sh                                              # live display + serial console
 ```
 

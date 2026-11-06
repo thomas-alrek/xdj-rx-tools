@@ -21,7 +21,7 @@ qemu/build-qemu.sh
 python3 xdjrx_upd.py decrypt XDJRX.UPD -o build/XDJRX.iso
 python3 qemu_prepare.py
 
-# 3. Build the nand image (needs Docker), then boot.
+# 3. Build the nand image (needs e2fsprogs), then boot.
 qemu/build-nand.sh
 qemu/watch.sh                       # live 800x480 window + serial console (the UI)
 XDJDISPLAY=none qemu/watch.sh       # headless/serial only (login: root, no password)
