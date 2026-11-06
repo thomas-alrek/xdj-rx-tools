@@ -223,3 +223,44 @@ When `-smp 2` boots reliably, flip the launch default (`XDJSMP` default in
 - `75b88f6` patch‑02 regeneration fix (stop absorbing patch 04's change)
 - _this session_ — **de‑gate: GPU‑2D galcore is the default/only path, `-smp 1` default**
   (patches 02 + 05 regenerated; `XDJ_GPU2D_OFF=1` escape hatch)
+
+---
+
+## Follow-up (2026-11-06): control-triggered dynamic render still crashes (next item)
+
+With GPU‑2D merged and the panel protocol solved, we tried the end goal: inject a
+decoded control and see the UI react. Result:
+
+- **The input works end-to-end.** A decoded control event (MENU = `[0x1b]` bit0, or a
+  deck-analog value) reaches rbp and makes it *act* — confirmed because injecting one
+  reliably **kills `rbp_solo`** (a rejected/undecoded frame cannot). Baseline is stable
+  (rbp alive, UI steady) right up to the inject.
+- **But the first *dynamic* redraw crashes rbp in USERSPACE, before galcore.**
+  `IMX6_GPU_TRACE=1` shows the GPU-register count **flat at 121 (the boot-init accesses)
+  across the control press — delta 0**: no 2D command is ever submitted. So rbp faults
+  in the libg2d/libGAL dynamic-blit *setup* (the old "call through an uninitialized GPU‑2D
+  callback" path) before anything reaches the galcore completion logic you fixed.
+- rbp catches the SIGSEGV itself (its own handler) → **no kernel oops, no core** (cores
+  only enabled on NFS boot via `with_core_rbp`; SD boot uses `ulimit -c 0`). The
+  framebuffer freezes on the last good frame (`e8b3e7…`, the settled deck UI).
+
+**Distinction that matters:** your fix made the **static** deck UI render through galcore
+(the 121 boot commits complete fine). This crash is the **first dynamic/control-triggered
+redraw**, and it dies in **userspace g2d/GAL** *before* submitting a command — so it's a
+different gap than the kernel-side completion. Likely the dynamic blit needs a
+surface/context or callback that isn't initialized on this path (same family as the
+anticipated USB-browse blit crash).
+
+**To get the exact fault:** enable cores before rbp starts (set `kernel.core_pattern`
++ `ulimit -c unlimited` in `apl_start` before the `rbp_solo &`, or relaunch rbp by hand),
+reproduce (`echo "b 1b 1" > /tmp/subucom_ctrl` on a booted UI), then read the core's PC
+and map it against `/proc/<pid>/maps` (libg2d at ~`0x2ab63000`, rbp text `0x8000‑0x459000`).
+Or catch it in gdb (breakpoints work) at the kernel user-fault path. That names the
+crashing library/function to fix.
+
+**Control-injection harness (QEMU slave, build tree):** `xdj_subucom_frame_start` in
+`hw/arm/fsl-imx6.c` reads `/tmp/subucom_ctrl`:
+`"b <off> <bitmask>"` holds a button (`b 1b 1` = MENU), `"a <off> <value>"` sets a 16-bit
+analog (`a 24 200` = deck1 analog[0]); offsets/values hex. It builds the frame in rbp_buf
+coords and computes the CRC‑16/X‑25 the parser requires. Full control map +
+protocol: `docs/rbp-and-panel-protocol.md`.
