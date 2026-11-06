@@ -282,3 +282,112 @@ to the console on any user segfault — and map LR against `/proc/<pid>/maps` (l
 analog (`a 24 200` = deck1 analog[0]); offsets/values hex. It builds the frame in rbp_buf
 coords and computes the CRC‑16/X‑25 the parser requires. Full control map +
 protocol: `docs/rbp-and-panel-protocol.md`.
+
+---
+
+## Follow-up 2 (2026-11-06, panel session): rbp DIES ~seconds after rendering the UI — the real blocker
+
+The feature-register fix above (commit `6ae6347`) did **not** make control feedback work,
+and in chasing it I found a bigger problem that the earlier "deck UI renders / no crash"
+verification missed:
+
+> **On the default galcore path, `rbp_solo` renders the deck UI successfully and then
+> DIES within a few seconds.** The framebuffer freezes on the correct deck image
+> (`e8b3e7…`), so a screendump looks like success — but the process is gone. It is not
+> surviving to run, so no sustained/dynamic behaviour (control feedback, USB browse) is
+> possible.
+
+### Evidence (lifetime poll, `-smp 1`, default build)
+```
+t~20s:  fb=1cafe709            # boot splash
+t~26s:  RBP=0  fb=e8b3e7ae     # deck UI rendered AND rbp already dead
+t~32..50s: RBP=0 fb=e8b3e7ae   # frozen correct UI, rbp stays dead
+```
+So rbp draws the full deck UI through galcore, then exits between ~20–26 s.
+
+### It is NOT any of these (ruled out this session)
+- **Not the panel / my control injection.** rbp dies the same with the slave feeding
+  *invalid* frames (`SUBUCOM_BADCRC=1` → rbp rejects every frame, no decode). My earlier
+  "the menu/analog press crashes rbp" reports were a **misread**: rbp was already dead
+  (frozen fb) *before* each trigger. The panel decode + CRC + control-inject harness are
+  confirmed working — they're just blocked by this.
+- **Not the feature-register fix.** rbp dies the same with the fix reverted
+  (`XDJ_GPU2D_NOFEAT=1` zeros the GC320 `features`/`minor_features`).
+- **Not a page-fault SIGSEGV.** Booting with `user_debug=31` on the kernel cmdline
+  produces **no kernel fault dump** in `dmesg` or on the console when rbp dies. A real
+  segfault *would* print with `user_debug=31`. So this is **not** the old
+  "garbage gco2D pointer" SIGSEGV — rbp is dying by **SIGABRT/assert or a clean exit()**,
+  silently (no console output, and no core because SD boot uses `ulimit -c 0`).
+
+**Important context (from the user):** the non-GPU path (`XDJ_GPU2D_OFF=1`) does **not**
+boot properly with the GAL gfxdriver present, so it's not a useful comparison. The only
+historically-stable config was the *original* image (GAL gfxdriver **stripped** → pure
+software DirectFB), where rbp ran for minutes and all the panel RE was done against a live
+process. Keeping the gfxdriver (byte-for-byte rootfs) + galcore is where rbp stops
+surviving.
+
+### HOW TO REPRODUCE AND TEST (copy-paste)
+
+Prereqs (build is current):
+```
+cd <repo>
+export PATH="/opt/homebrew/bin:$PATH"
+(cd build/qemu-src/qemu-11.1.0/build && ninja qemu-system-arm)   # QEMU
+# build/qemu/{vmlinux.bin,atags.bin,tramp.bin,nand.img} already present
+```
+
+1) **Launch headless with a monitor + serial socket** (snapshot so the image is safe):
+```
+Q=build/qemu; QEMU=build/qemu-src/qemu-11.1.0/build/qemu-system-arm
+rm -f /tmp/mon.sock /tmp/con.sock
+"$QEMU" -M sabrelite -smp 1 -m 256 -no-reboot -display none \
+  -device loader,file="$Q/vmlinux.bin",addr=0x10008000,force-raw=on \
+  -device loader,file="$Q/atags.bin",addr=0x10000100,force-raw=on \
+  -device loader,file="$Q/tramp.bin",addr=0x10000000,cpu-num=0 \
+  -drive if=none,id=xdjsd,file="$Q/nand.img",format=raw,snapshot=on \
+  -nic user -monitor unix:/tmp/mon.sock,server,nowait \
+  -serial unix:/tmp/con.sock,server,nowait -serial null &
+```
+
+2) **Poll rbp's lifetime** (prove it dies after the UI renders). Two tools:
+   - Framebuffer: connect to `/tmp/mon.sock`, send `screendump /tmp/fb.ppm\n`, hash it.
+   - Process: log in on `/tmp/con.sock` (serial getty, **root / empty password**) and run
+     `ps | grep -c '[r]bp_solo'` → prints `1` while alive, `0` once dead.
+   Poll both every ~6 s from t≈20 s. You will see the fb reach the deck image while the
+   `ps` count drops to **0** within a few seconds. (Scratchpad helpers used here:
+   `shot4.py` = screendump via the monitor socket; `con4.py` = login+run-one-command via
+   the serial socket, using a split marker `printf 'EN''DX_%d' $?` so the echo of the
+   command isn't mistaken for the result.)
+
+3) **Confirm it's not a segfault** — regenerate atags with `user_debug=31` and boot with it:
+```
+python3 - <<'PY'
+import sys; sys.path.insert(0,".")
+import qemu_prepare as q
+open("/tmp/atags_dbg.bin","wb").write(q._atags(q.CMDLINE+" user_debug=31", revision=q.BOARD_REV_SABRESD))
+PY
+# relaunch as in (1) but swap the atags loader to file=/tmp/atags_dbg.bin
+# then in the guest: `dmesg | tail -40` after rbp dies -> NO "unhandled fault / PC is at".
+```
+
+4) **Diagnostic toggles** (env, build tree `hw/arm/fsl-imx6.c`, not committed):
+   - `SUBUCOM_BADCRC=1` — slave corrupts the frame CRC so rbp rejects all panel frames
+     (isolates the panel: rbp still dies → not the panel).
+   - `XDJ_GPU2D_NOFEAT=1` — zeros the GC320 `features`/`minor_features` (reverts the
+     feature fix while keeping galcore on: rbp still dies → not the fix).
+
+### Next step for the GPU session: get the death cause
+It's not a page fault, so `user_debug` won't name it. Options, in order:
+1. **Enable a core**: edit the guest `/root/pioneer/apl_start` (or relaunch rbp by hand)
+   with `ulimit -c unlimited` + `echo /tmp/core.%e.%s > /proc/sys/kernel/core_pattern`
+   before `rbp_solo &`, reproduce, then read the core's **signal** and **PC/LR** and map
+   against `/proc/<pid>/maps` (libGAL-fb `~0x2b0f0000`, libg2d `~0x2ab99000`, rbp text
+   `0x8000–0x459000`).
+2. **gdb** (breakpoints work in this build): breakpoint the kernel's `do_exit` / signal-
+   delivery path, catch `rbp_solo`, read the exit code / signal number and the user PC.
+3. Check whether rbp writes any log file in the guest around the death (`/root/pioneer`,
+   `/tmp`, `/var/log`).
+The question to answer: **why does rbp exit/abort within seconds of the first galcore
+render?** (A failed assert on a galcore ioctl result is the leading guess — galcore
+"renders" the static UI via the completion stub, but something it returns to rbp is wrong
+enough that rbp aborts shortly after.)
