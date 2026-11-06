@@ -15,13 +15,12 @@ crashing on its absence. The rootfs is now **byte‑for‑byte** (commit keeps
 `libdirectfb_gal.so`; `qemu/build-nand.sh` no longer strips it), so DirectFB blits are
 routed to the real galcore device.
 
-> **⚠ OPEN ISSUE — the deck UI does not render with the gfxdriver present.** With the GAL
-> gfxdriver kept, the firmware boots to the splash and **stays there** (rbp hangs in a
-> galcore ioctl; no deck UI). With the gfxdriver removed, the full deck UI renders in
-> ~16 s (software DirectFB). So the device bring‑up is solved, but **runtime 2D rendering
-> through galcore is not** — see "Open issue: deck‑UI stall" below. Until that's fixed the
-> emulator reaches only the splash on the default path; `XDJ_GPU2D_OFF=1` + the old
-> gfxdriver‑stripped rootfs is the way to get a usable UI.
+**The full live deck UI now renders through galcore** (DECK 1/DECK 2, BEAT EFFECTS,
+120 BPM, "Not Loaded.") — pixel‑identical to the software‑render output, no `gui_task`
+crash. This was the last blocker: galcore's **runtime 2D command‑completion** is now
+emulated (the stub parses each submitted command's EVENT id and raises exactly that
+completion, instead of a fixed mask — see "Runtime 2D completion" below). So on the
+default path, vanilla rbp drives galcore all the way to the working UI.
 
 **It boots on `-smp 1`, which is the launch default (`qemu/watch.sh`).** The real
 hardware is dual‑core, and `-smp 2` is the eventual target, but `-smp 2` still has an
@@ -108,13 +107,36 @@ The single‑core diagnostic tooling is in the session scratchpad (not committed
 
 ---
 
-## Open issue: deck‑UI stall (galcore runtime 2D completion)
+## Runtime 2D completion (SOLVED — the deck UI renders through galcore)
 
-**Symptom.** With the GAL gfxdriver present (byte‑for‑byte rootfs), the firmware boots to
-the Pioneer/rekordbox splash and never advances to the deck UI. With the gfxdriver
-stripped it reaches the full deck UI in ~16 s. Confirmed by booting both images on a
-clean, uncontended host, `-smp 1`: 18 screendumps over ~2.4 min on the gfxdriver image
-showed **zero** frame change past the splash; the stripped image changed at the 2nd shot.
+**Was:** with the GAL gfxdriver present (byte‑for‑byte rootfs), the firmware booted to the
+Pioneer/rekordbox splash and never advanced to the deck UI (rbp's `UiMain` hung in a
+galcore ioctl on the first runtime 2D blit). With the gfxdriver stripped it reached the
+deck UI in ~16 s via software DirectFB. **Now fixed:** the deck UI renders through galcore,
+pixel‑identical to software render (same framebuffer md5), no `gui_task` crash.
+
+**The fix (QEMU stub, patch 02 — `xdj_gpu_cmd_event` in `hw/arm/fsl-imx6.c`).** galcore
+ends every submitted command with an EVENT command — a `LOAD_STATE` of one word to the
+AQEventRegister (`0x0E01`) whose value is `(eventId | source)` — then waits for *that*
+event id. Init used a fixed id (so the old fixed `events=0x3fffffff` mask happened to
+work), but **runtime 2D blits allocate a rotating event id per commit**, so the fixed mask
+left the commit's completion stall waiting forever. The stub now, on each 2D command kick
+(`AQFEControl`, `0x658`): takes the command‑buffer address from the preceding
+`AQFEStartAddress` (`0x654`) write — galcore runs the FE **MMU‑off**, so the address
+(e.g. `0x1827a000`, in the GPU‑reserved DRAM above the `0x18000000` framebuffer) is
+directly readable guest memory — reads the buffer (length = `0x658` low‑16 prefetch count
+× 2 words), scans for the EVENT command (`(w>>27)==6 && (w&0xffff)==0x0E01`), extracts the
+event id (`value & 0x1f`), and raises **exactly `1<<id`** on the completion IRQ. If a
+command carries no EVENT command (some init commands), it keeps the default mask. No actual
+pixel blitting is emulated — only completion — yet the UI is pixel‑perfect, so rbp/DirectFB
+do the drawing and use galcore for the command/sync handshake (matches "rbp only blits").
+
+**How it was found.** gdb + QEMU‑monitor PC sampling + Ghidra (REA) on kernel slices:
+`UiMain` was mostly *sleeping* in galcore (caught on‑CPU ~1/40); the GPU trace was empty
+during the stall (no command reached hardware); a task walk showed all galcore
+daemon/Vivante‑Kernel threads idle‑waiting on `gckOS_WaitSignal`; the ~50 % CPU was the
+separate benign swapper busfreq idle loop. That pointed at the completion handshake, and
+the init trace gave the FE registers + the physical (MMU‑off) command‑buffer address.
 
 **Diagnosis (this session, via gdb + QEMU‑monitor sampling + Ghidra on kernel slices).**
 - rbp's UI thread (`UiMain`) enters a galcore ioctl for the first real 2D blit and

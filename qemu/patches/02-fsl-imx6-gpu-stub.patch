@@ -18,7 +18,7 @@
  
  #define IMX6_ESDHC_CAPABILITIES     0x057834b4
  
-@@ -105,11 +109,659 @@
+@@ -105,11 +109,715 @@
      object_initialize_child(obj, "pcie", &s->pcie, TYPE_DESIGNWARE_PCIE_HOST);
      object_initialize_child(obj, "pcie4-msi-irq", &s->pcie4_msi_irq,
                              TYPE_OR_IRQ);
@@ -50,6 +50,10 @@
 +                        /* on); 0 otherwise so its pre-command status poll is clean*/
 +    bool cmd_pending;   /* a command was kicked: report c->events on next 0x010 rd */
 +    uint32_t clkctrl;   /* last AQHiClockControl written                         */
++    uint32_t fe_addr;   /* last AQFEStartAddress (0x654): the command buffer the  */
++                        /* FE will fetch (physical; galcore runs the FE MMU off,  */
++                        /* so it is directly readable guest memory).  Used to     */
++                        /* parse the command's EVENT id (see xdj_gpu_cmd_event).  */
 +    QEMUTimer *fe_timer;/* if set, raise the completion IRQ a short delay after  */
 +                        /* the command kick (so galcore sees it once it is in    */
 +                        /* its GIC poll loop with the IRQ enabled), instead of    */
@@ -149,6 +153,45 @@
 +    }
 +}
 +
++/*
++ * Parse the GPU command buffer the FE is about to fetch to find which completion
++ * event this command signals, so we can raise exactly that event (not a fixed
++ * mask).  galcore ends every submitted command with an EVENT command: a
++ * LOAD_STATE of one word to the AQEventRegister (0x0E01) whose value is
++ * (eventId | source).  Runtime 2D blits allocate a *rotating* event id per
++ * commit and then wait for that specific id; a fixed mask leaves the commit's
++ * stall waiting forever (the deck-UI stall).  Init commands use a fixed id and
++ * worked with the mask -- parsing covers both.
++ *
++ * The FE command word format here is opcode[31:27]=6 (LOAD_STATE), addr[15:0];
++ * so the EVENT command word is (6<<27)|...|0x0E01, i.e. (w>>27)==6 &&
++ * (w&0xffff)==0x0E01, and the next word is the value.  AQFEControl (0x658) low
++ * 16 bits are the prefetch count in 64-bit units.  Returns the event bitmask
++ * (1<<id), or 0 if no EVENT command is found (caller keeps its default mask).
++ */
++static uint32_t xdj_gpu_cmd_event(uint32_t fe_addr, uint32_t ctrl)
++{
++    uint32_t words = (ctrl & 0xffffu) * 2u;   /* 64-bit units -> 32-bit words */
++
++    if (fe_addr == 0) {
++        return 0;
++    }
++    if (words == 0 || words > 1024) {
++        words = 1024;                          /* cap the scan */
++    }
++    for (uint32_t i = 0; i + 1 < words; i++) {
++        uint32_t w = address_space_ldl_le(&address_space_memory, fe_addr + i * 4u,
++                                          MEMTXATTRS_UNSPECIFIED, NULL);
++        if ((w >> 27) == 6u && (w & 0xffffu) == 0x0e01u) {
++            uint32_t v = address_space_ldl_le(&address_space_memory,
++                                              fe_addr + (i + 1) * 4u,
++                                              MEMTXATTRS_UNSPECIFIED, NULL);
++            return 1u << (v & 0x1fu);
++        }
++    }
++    return 0;
++}
++
 +static void imx6_gpu_stub_write(void *opaque, hwaddr off, uint64_t val,
 +                                unsigned size)
 +{
@@ -161,6 +204,9 @@
 +    if (off == 0x000) {
 +        c->clkctrl = (uint32_t)val;
 +    }
++    if (off == 0x654) {
++        c->fe_addr = (uint32_t)val;            /* command buffer the FE will fetch */
++    }
 +    /*
 +     * galcore submits a command and sleeps until the GPU raises its completion
 +     * IRQ.  No GPU runs here, so raise it ourselves on the command kick -- the
@@ -170,6 +216,16 @@
 +     * The ISR then reads 0x010 and sees the completion event (c->events).
 +     */
 +    if (c->irq && (off == 0x658 || off == 0x504)) {
++        if (off == 0x658) {
++            /* Report the exact event this command queued (rotating per commit at
++             * runtime) instead of the fixed mask -- otherwise the blit's
++             * completion stall never releases.  Keep the default mask if the
++             * command carries no EVENT command. */
++            uint32_t ev = xdj_gpu_cmd_event(c->fe_addr, (uint32_t)val);
++            if (ev) {
++                c->events = ev;
++            }
++        }
 +        c->cmd_pending = true;
 +        if (c->fe_timer) {
 +            /* deliver the completion ~200us later, once galcore is waiting */
@@ -678,7 +734,7 @@
      FslIMX6State *s = FSL_IMX6(dev);
      uint16_t i;
      qemu_irq irq;
-@@ -472,7 +1124,149 @@
+@@ -472,7 +1180,149 @@
       */
      create_unimplemented_device("pcie-phy", FSL_IMX6_PCIe_ADDR,
                                  FSL_IMX6_PCIe_SIZE);
@@ -828,7 +884,7 @@
      /* ROM memory */
      if (!memory_region_init_rom(&s->rom, OBJECT(dev), "imx6.rom",
                                  FSL_IMX6_ROM_SIZE, errp)) {
-@@ -502,6 +1296,10 @@
+@@ -502,6 +1352,10 @@
                               &s->ocram, 0, FSL_IMX6_OCRAM_ALIAS_SIZE);
      memory_region_add_subregion(get_system_memory(), FSL_IMX6_OCRAM_ALIAS_ADDR,
                                  &s->ocram_alias);

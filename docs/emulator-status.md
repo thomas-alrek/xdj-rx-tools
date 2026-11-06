@@ -18,11 +18,12 @@ The built-in galcore (Vivante) driver now fully initialises on the default boot 
 the QEMU GPU stub (patch 02) + GC355 VG core + DVFS GPT kick (patch 05) carry it through
 init, so `/dev/galcore` exists and boot reaches `#### Application Start!! ###` (details
 below). The rootfs is now byte-for-byte (the DirectFB GAL gfxdriver `libdirectfb_gal.so`
-is kept). **Open issue:** with the gfxdriver present the firmware boots to the splash but
-rbp then hangs in a galcore ioctl on the first runtime 2D blit (no command reaches the
-GPU; galcore's runtime 2D completion handshake is not yet emulated), so the deck UI does
-not render; with the gfxdriver stripped the deck UI renders in ~16 s (software DirectFB).
-Full diagnosis + fix plan in `docs/gpu2d-handover.md` ("Open issue: deck-UI stall").
+is kept), and **the full live deck UI renders through galcore** (pixel-identical to
+software render, no `gui_task` crash). The last blocker — galcore's runtime 2D
+command-completion — is emulated in patch 02 (`xdj_gpu_cmd_event`): the stub parses each
+submitted command's EVENT id (`LOAD_STATE 0x0E01`) from the command buffer and raises
+exactly that completion event, instead of a fixed mask, so rbp's per-commit blit stalls
+release. Full write-up in `docs/gpu2d-handover.md` ("Runtime 2D completion").
 
 **The full-galcore path is now the DEFAULT (and only) boot path.** Making galcore fully
 initialise needs patch 02's GC320 2D identity (so galcore derives `gcvHARDWARE_2D` and
