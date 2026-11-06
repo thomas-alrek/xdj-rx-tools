@@ -983,3 +983,27 @@ tcp::1234`, monitor `/tmp/d_mon4.sock`, serial `/tmp/d_con4.sock`), `catch.py
 `echo "b 1b 1" > /tmp/subucom_ctrl` (button) or `echo "a 24 abcd" >` (analog).
 Diagnostics (env): `SUBUCOM_RAMP`, `SUBUCOM_BADCRC`, `SUBUCOM_TRACE`,
 `SUBUCOM_BURST`.
+
+### Control-map re-derivation — progress (2026-11-06, same session)
+
+Confirming the old byte/bit→code map is unreliable and mapping the real dispatch:
+- `frame[0x1a..0x1b]` (old map: "global buttons MENU/…") is a **16-bit ANALOG**:
+  its Common-section handler `FUN_0028411c` computes a float and emits code
+  **`0x410a`** — not a button. So the old "[0x1b] bit0 = MENU 0x20a" is wrong.
+- Events are dispatched through the **receiver's observer vtable**: the section
+  decoders call `(*receiver[0x3c])->vtable[8](receiver[0x3c], code, …)`. The
+  `FUN_0028cea4` that older notes called "the event router" is **NOT** on this
+  button path — a breakpoint there never fired for any injected frame byte.
+- Empirical negative result: with the deck idle ("Not Loaded.", USB mounted), a
+  full sweep of frame bytes `0x04..0x5f` (both as buttons `b <off> ff` and as
+  analogs `a <off> 03ff/00ff`) produced **no framebuffer change**. Decode +
+  dispatch are confirmed live, but no single control visibly changes the idle
+  deck screen — likely most need a loaded track / a different screen context, or
+  the real button bytes/codes differ from the old map.
+
+**Next (control map):** trace the observer vtable[8] target from
+`receiver[0x3c]` to the code→action table, enumerate which codes are buttons vs
+analogs per section, and identify navigation controls (BROWSE / MENU / rotary /
+LOAD) by code. A cycling-counter idle heartbeat would also let the baseline
+initialise without an injected transition. BROWSE specifically could not be
+pinned this session — it is the first target once the code→action map is RE'd.
