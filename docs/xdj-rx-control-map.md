@@ -204,3 +204,24 @@ a different module than the browser-key table above. Map the deck page's key han
 its page-switch call (or find the page-manager "current page" pointer and foreground the
 browser page directly) — that, not the panel bit, is what opens BROWSE→LOAD.
 gdb helpers: scratchpad/{gdbcap.py,setflag.py,usbkey.py}.
+
+### Live KeyManager trace — findings (2026-11-09)
+- **`IKeyManager::sendKey` = `FUN_002a47c0`** (confirmed: it throws the literal
+  `"IKeyManager::sendKey"`). The key **code = param_2 (r1)**, u16. It is the receiver
+  observer `vtable[8]` target (`gdbcap` resolved the runtime ptr to 0x2a47c0). This is the
+  real global-key entry — NOT `FUN_00222188`, `0x2832b8`, or `FUN_0028cea4` (all three
+  breakpointed live on panel injects and **never fired** — matching the 2026-11-06 notes).
+- **The old `[0x15]..[0x1b]` "global button" map is wrong.** Via `sendKey` (bp r1):
+  at idle, `sendKey` is **quiet** (no events). But injecting ANY single frame byte
+  `0x04..0x61` as `b <off> ff` yields exactly one global key event, always code
+  **`0x410a`** — never a discrete nav/source code (BROWSE/USB/LOAD/MENU). So the
+  global-section decoder collapses a single-bit frame change into one analog-style
+  `0x410a` event; it does not expose the 16 nav keys as single bits.
+- Implication: the nav/source buttons need a **specific multi-field frame value** (not a
+  lone bit), or route through a different observer. The 16 browser KEYCMD keys
+  (DECK_SELECT…USB/SD/LINK/rekordbox/LOAD/Encoder) have unknown numeric sendKey codes.
+  Next: trace the global-section decoder `FUN_00282a98` to learn how frame bytes map to
+  nav codes and what value yields the USB/BROWSE code; then breakpoint the active deck
+  page's key handler to find its code→page-switch. Convergent open-test ready:
+  scratchpad/browseopen.py (inject a control with a bp on `FUN_000e1334`; it reports if
+  the browser page starts ticking). Helpers: scratchpad/{sendkeymap.py,fullsweep.py}.
