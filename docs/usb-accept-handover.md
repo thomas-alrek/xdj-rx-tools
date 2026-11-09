@@ -15,6 +15,51 @@ doesn't consume/accept the slot event, and make accept reliable. **HARD CONSTRAI
 patch the rbp binary** — vanilla rbp must run so future custom firmware can be tested.
 Kernel/rootfs changes are last resort; QEMU-side fixes preferred.
 
+## 0b. ROOT CAUSE FOUND (2026-11-09, supersedes §4's "find the udev poll loop")
+The accept is a **guest-userspace rendezvous-write race**, not a topology or caution-manager
+bug. Proven by static RE of rbp + the live stock rootfs rules:
+
+- rbp's mount-scanner thread = **`UsbMountManager`** running **`FUN_0024cb38`** (no static
+  callers ⇒ thread entry). Loop: `ev = read_sf_rbp(chan); switch(ev){case 1 "mount": build
+  <mnt>/PIONEER/rekordbox/export.pdb, access(), register lib; …}`.
+- **`read_sf_rbp` = `FUN_00296628`** (perror "read_sf_rbp:poll/n"): `poll()`s a 3-fd set
+  `{fd0,fd1,fd2}` — fd0/fd1 POLLIN (udev_usb1/2 queues), fd2 POLLPRI+lseek0+read (state file).
+  Parses TEXT: `"mount"`→1, `umount`→2, `do_umount`→3, `connect`→4, `disconnect`→5.
+- **The asymmetry:** `connect` → `/proc/udev_usbctn2` is a **persistent state file**
+  (75-usb-caution.rules) re-read every poll ⇒ rbp ALWAYS knows a device is present ⇒ shows
+  **"USB Error"**, never "NO USB". `"mount"` → `/proc/udev_usb2` is written by the stock udev
+  rule `12-usb-memory-auto-mount.rules`:
+  `mount /dev/%k /media/usb2/%k; …/decrypt_autoexec.sh; echo -n "mount /media/usb2/%k" > /proc/udev_usb2`.
+- That proc write is a **BLOCKING RENDEZVOUS — it does not return until a reader reads it**
+  (verified live: a manual `echo` hung the console until Ctrl-C; on a boot where rbp's scanner
+  was live it returned instantly and rbp re-processed it — "PathDecider:: UNMOUNT was not
+  executed before"). On **cold-plug** the device enumerates at t≈0, so udev runs this echo
+  BEFORE rbp's scanner polls; **udev's worker times out and kills the blocked echo ⇒ "mount"
+  lost, fs stays mounted ⇒ "USB Error".** The rare good boot = rbp was polling in time.
+  Explains every symptom (always "USB Error" not "NO USB"; pre-scan; load-sensitive).
+
+### Why post-boot re-plug can't rescue it (and the fix target)
+`device_del`/`device_add` makes FSL Host1 bus-suspend, and QEMU can't resume it — guest floods
+`host1, _is_usbh1_wakeup, invalid wake up`. Disassembled the guest kernel (`vmlinux.bin`,
+`_is_usbh1_wakeup @ 0x803ed770`): it reads **USBNC_base + 0x804, tests bit 31 (OWIR =
+wakeup-interrupt-request)**; if 0 it prints "invalid wake up" and refuses the resume. QEMU's
+i.MX6 models usbphy + chipidea (176-line stub) but **NOT the USBNC non-core block** (USBOH3+0x800),
+so +0x804 reads 0 ⇒ OWIR never set ⇒ Host1 never resumes.
+
+### Fix plan (B, hardware-accurate, chosen): model USBNC OWIR wakeup in QEMU
+Add a USBNC register region at USBOH3+0x800 and set OWIR (bit31 of the per-controller CTRL at
++0x804 for Host1) + raise the USB IRQ when a device attaches to a suspended Host1 with wakeup
+enabled, so the guest's `_is_usbh1_wakeup` passes and resume/enumeration completes. Then launch
+hub-only, boot to rbp, and **insert the stick after rbp is polling** (device_add + drive the
+detect GPIO) — exactly as real hardware does — so the stock udev mount rule + its blocking echo
+run while rbp reads ⇒ deterministic accept. (Rejected alt A: cold-plug a keepalive device on an
+unused hub port so Host1 never suspends — works but less hardware-faithful.)
+Readiness gate for the late insert: poll `/proc/<rbp>/task/<tid>/wchan` for the `UsbMountManager`
+thread == `poll_schedule_timeout`.
+
+NB boot is load-sensitive: `gui_task` SIGSEGV (sig 11, PC ~0x2da5xxxx = stubbed-GPU/DirectFB
+path) crashes rbp before UI when host load is high (seen at host load avg 6+). Keep load low.
+
 ## 1. How to run the emulator
 Build (only if you change a QEMU patch): `qemu/build-qemu.sh` then `qemu/build-nand.sh`.
 The binary is `build/qemu-src/qemu-11.1.0/build/qemu-system-arm`. Exact launch command
