@@ -25,28 +25,7 @@ CTRL = "/tmp/subucom_ctrl"
 MON = "/tmp/d_mon4.sock"
 PPM = "/tmp/xdjpanel_fb.ppm"
 
-_mon_lock = threading.Lock()
-_mon = None  # persistent monitor socket
-
-
-def _mon_connect():
-    global _mon
-    s = socket.socket(socket.AF_UNIX)
-    s.settimeout(2.0)
-    s.connect(MON)
-    time.sleep(0.04)                       # let the banner arrive
-    s.setblocking(False)
-    try:
-        while True:
-            if not s.recv(65536):
-                break
-    except BlockingIOError:
-        pass
-    except Exception:
-        pass
-    s.setblocking(True)
-    s.settimeout(2.0)
-    _mon = s
+_grab_lock = threading.Lock()
 
 
 def _parse_ppm(data):
@@ -81,47 +60,53 @@ def _parse_ppm(data):
 
 
 def grab_raw():
-    """Screendump via the persistent monitor connection; return (w, h, rgb) or None."""
-    global _mon
-    with _mon_lock:
-        for attempt in (0, 1):
+    """Screendump with a FRESH monitor connection each call; return (w, h, rgb) or None.
+
+    A fresh connection (unix connect is sub-millisecond; the screendump itself is the
+    ~18ms cost) avoids the stale-frame trap of a persistent connection: if QEMU was
+    restarted, a held connection can keep returning the last PPM on disk. We delete the
+    PPM first and only read it back if the screendump actually re-creates it, so a dead
+    emulator yields None (the page shows "no QEMU") instead of a frozen old frame.
+    """
+    with _grab_lock:
+        try:
+            os.remove(PPM)
+        except FileNotFoundError:
+            pass
+        try:
+            s = socket.socket(socket.AF_UNIX)
+            s.settimeout(2.0)
+            s.connect(MON)
+            time.sleep(0.02)
+            s.setblocking(False)
             try:
-                if _mon is None:
-                    _mon_connect()
-                try:
-                    os.remove(PPM)
-                except FileNotFoundError:
-                    pass
-                _mon.sendall(('screendump "%s"\n' % PPM).encode())
-                t0 = time.time()
-                sz = -1
-                while time.time() - t0 < 2.0:
-                    if os.path.exists(PPM):
-                        s2 = os.path.getsize(PPM)
-                        if s2 > 1000 and s2 == sz:
-                            break
-                        sz = s2
-                    time.sleep(0.003)
-                # drain the monitor prompt
-                _mon.setblocking(False)
-                try:
-                    while True:
-                        if not _mon.recv(65536):
-                            break
-                except Exception:
-                    pass
-                _mon.setblocking(True)
-                _mon.settimeout(2.0)
-                with open(PPM, "rb") as f:
-                    data = f.read()
-                return _parse_ppm(data)
+                while True:
+                    if not s.recv(65536):
+                        break
             except Exception:
-                try:
-                    _mon.close()
-                except Exception:
-                    pass
-                _mon = None                                 # force reconnect on retry
-        return None
+                pass
+            s.setblocking(True)
+            s.settimeout(2.0)
+            s.sendall(('screendump "%s"\n' % PPM).encode())
+            t0 = time.time()
+            sz = -1
+            while time.time() - t0 < 2.0:
+                if os.path.exists(PPM):
+                    s2 = os.path.getsize(PPM)
+                    if s2 > 1000 and s2 == sz:
+                        break
+                    sz = s2
+                time.sleep(0.003)
+            s.close()
+        except Exception:
+            return None
+        if not os.path.exists(PPM):
+            return None
+        try:
+            with open(PPM, "rb") as f:
+                return _parse_ppm(f.read())
+        except Exception:
+            return None
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
