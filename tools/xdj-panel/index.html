@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XDJ-RX virtual panel</title>
+<style>
+  :root{
+    --bg:#0e1013; --panel:#17191e; --panel2:#1e2127; --edge:#2b2f36;
+    --ink:#e8ebf0; --dim:#9aa3af; --accent:#39b3ff; --ok:#39d98a; --guess:#e0a63a;
+    --red:#e5484d; --deck:#1b1e24;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  h1{font-size:15px;margin:0;letter-spacing:.5px}
+  h2{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);
+     margin:0 0 8px;font-weight:600}
+  .wrap{max-width:1180px;margin:0 auto;padding:14px}
+  .top{display:grid;grid-template-columns:1fr 320px;gap:14px;align-items:start}
+  @media(max-width:760px){.top{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--edge);border-radius:10px;padding:12px}
+  #screen{width:100%;aspect-ratio:800/480;background:#000;border-radius:6px;object-fit:contain;
+    border:1px solid var(--edge)}
+  .screenbar{display:flex;align-items:center;gap:10px;margin-top:8px;color:var(--dim)}
+  .screenbar label{display:flex;align-items:center;gap:6px}
+  #log{height:150px;overflow:auto;background:#0b0d10;border:1px solid var(--edge);
+    border-radius:6px;padding:6px 8px;font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;
+    color:#b9c2cc;white-space:pre-wrap}
+  .row{display:flex;flex-wrap:wrap;gap:8px}
+  .decks{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:12px;margin-top:14px}
+  @media(max-width:900px){.decks{grid-template-columns:1fr}}
+  .deck{background:var(--deck)}
+  .grp{margin-bottom:12px}
+  button.ctl{appearance:none;border:1px solid var(--edge);background:var(--panel2);
+    color:var(--ink);border-radius:7px;padding:9px 8px;font-size:12px;font-weight:600;
+    cursor:pointer;min-width:58px;text-align:center;user-select:none;touch-action:none;
+    transition:transform .02s, background .1s}
+  button.ctl:hover{border-color:#3a414b}
+  button.ctl:active,button.ctl.down{transform:translateY(1px);background:#2a2f37}
+  button.ctl.ok{border-color:#2a6b4f}
+  button.ctl.ok::after{content:"";display:block;height:2px;margin-top:5px;border-radius:2px;background:var(--ok);opacity:.8}
+  button.ctl.guess{border-color:#6b5a2a}
+  button.ctl.guess::after{content:"";display:block;height:2px;margin-top:5px;border-radius:2px;background:var(--guess);opacity:.7}
+  .pads{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+  .fader{display:flex;flex-direction:column;align-items:center;gap:6px}
+  .fader input[type=range]{writing-mode:vertical-lr;direction:rtl;width:26px;height:150px;accent-color:var(--accent)}
+  .hslider input[type=range]{width:100%;accent-color:var(--accent)}
+  .lbl{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
+  .knobrow{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center}
+  .knob input[type=range]{width:100%;accent-color:#7b8794}
+  .legend{display:flex;gap:16px;align-items:center;color:var(--dim);font-size:11px;margin:4px 0 10px}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:5px;vertical-align:middle}
+  .dot.ok{background:var(--ok)} .dot.guess{background:var(--guess)}
+  .bigbtn{background:#222733;border:1px solid var(--edge);color:var(--ink);border-radius:8px;
+    padding:8px 12px;cursor:pointer;font-weight:600}
+  .bigbtn.red{background:#3a1e1f;border-color:#6b2e30;color:#ffb4b6}
+  .probe{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+  @media(max-width:760px){.probe{grid-template-columns:1fr}}
+  .bits{display:grid;grid-template-columns:repeat(8,1fr);gap:5px;margin-top:6px}
+  .bits button{padding:7px 0;font-size:11px}
+  input.hex,select.sel{background:#0b0d10;border:1px solid var(--edge);color:var(--ink);
+    border-radius:6px;padding:6px 8px;font:12px ui-monospace,Menlo,monospace}
+  .mono{font-family:ui-monospace,Menlo,monospace}
+  .note{color:var(--dim);font-size:11px;margin-top:6px}
+  .conn{font-size:11px;padding:3px 8px;border-radius:20px;border:1px solid var(--edge)}
+  .conn.up{color:var(--ok);border-color:#2a6b4f}
+  .conn.down{color:var(--red);border-color:#6b2e30}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <h1>XDJ-RX · virtual panel</h1>
+        <span id="conn" class="conn down">screen: …</span>
+      </div>
+      <img id="screen" alt="QEMU screen">
+      <div class="screenbar">
+        <label><input type="checkbox" id="live" checked> live screen</label>
+        <span id="fps" class="mono"></span>
+        <button class="bigbtn" id="snap">snapshot</button>
+        <button class="bigbtn red" id="relall">release all</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Activity log</h2>
+      <div id="log"></div>
+      <div class="legend" style="margin-top:8px">
+        <span><span class="dot ok"></span>verified</span>
+        <span><span class="dot guess"></span>best-guess</span>
+      </div>
+      <div class="note">One control is active at a time (the harness reads a single
+        control line). Buttons hold while pressed; faders hold at their last position
+        until you move another control or hit “release all”.</div>
+    </div>
+  </div>
+
+  <!-- Browser / global bar -->
+  <div class="card" style="margin-top:14px">
+    <h2>Browser &amp; global</h2>
+    <div class="row">
+      <button class="ctl guess" data-b="16" data-bit="01">BROWSE</button>
+      <button class="ctl guess" data-b="16" data-bit="02">BACK</button>
+      <button class="ctl guess" data-b="16" data-bit="04">TAG LIST</button>
+      <button class="ctl guess" data-b="17" data-bit="01">ROTARY −</button>
+      <button class="ctl guess" data-b="17" data-bit="02">PUSH</button>
+      <button class="ctl guess" data-b="17" data-bit="04">ROTARY +</button>
+      <button class="ctl guess" data-b="18" data-bit="01">LOAD ◄ (D1)</button>
+      <button class="ctl guess" data-b="18" data-bit="02">LOAD ► (D2)</button>
+      <button class="ctl guess" data-b="19" data-bit="01">QUANTIZE</button>
+      <button class="ctl guess" data-b="19" data-bit="02">SLIP</button>
+    </div>
+    <div class="note">Browser/nav controls are unverified guesses — press one and watch
+      the screen; when the browser opens, you’ve found BROWSE. (USB must be mounted.)</div>
+  </div>
+
+  <div class="decks">
+    <!-- DECK 1 -->
+    <div class="card deck">
+      <h2>Deck 1</h2>
+      <div class="grp pads">
+        <button class="ctl guess" data-b="10" data-bit="01">PLAY</button>
+        <button class="ctl guess" data-b="10" data-bit="02">CUE</button>
+        <button class="ctl guess" data-b="10" data-bit="04">SYNC</button>
+        <button class="ctl guess" data-b="10" data-bit="08">SHIFT</button>
+      </div>
+      <div class="grp pads">
+        <button class="ctl guess" data-b="11" data-bit="01">HOT 1</button>
+        <button class="ctl guess" data-b="11" data-bit="02">HOT 2</button>
+        <button class="ctl guess" data-b="11" data-bit="04">HOT 3</button>
+        <button class="ctl guess" data-b="11" data-bit="08">HOT 4</button>
+      </div>
+      <div class="grp pads">
+        <button class="ctl guess" data-b="13" data-bit="01">LOOP IN</button>
+        <button class="ctl guess" data-b="13" data-bit="02">LOOP OUT</button>
+        <button class="ctl guess" data-b="13" data-bit="04">RELOOP</button>
+        <button class="ctl guess" data-b="13" data-bit="08">AUTO</button>
+      </div>
+      <div class="grp row">
+        <button class="ctl guess" data-b="13" data-bit="10">JOG −</button>
+        <button class="ctl guess" data-b="13" data-bit="20">JOG +</button>
+        <button class="ctl ok" data-b="12" data-bit="08">TEMPO RANGE</button>
+      </div>
+      <div class="grp fader">
+        <span class="lbl">Tempo (D1)</span>
+        <input type="range" min="0" max="1023" value="512" data-a="04">
+        <span class="lbl mono" data-val="04">512</span>
+      </div>
+    </div>
+
+    <!-- MIXER + BEAT FX -->
+    <div class="card">
+      <h2>Mixer</h2>
+      <div class="grp" style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div>
+          <div class="knobrow">
+            <div class="knob"><span class="lbl">HI</span><input type="range" min="0" max="1023" value="512" data-a="46"></div>
+            <div class="knob"><span class="lbl">MID</span><input type="range" min="0" max="1023" value="512" data-a="48"></div>
+            <div class="knob"><span class="lbl">LOW</span><input type="range" min="0" max="1023" value="512" data-a="4a"></div>
+          </div>
+          <div class="fader" style="margin-top:10px">
+            <span class="lbl">CH1</span>
+            <input type="range" min="0" max="1023" value="0" data-a="44">
+            <button class="ctl guess" data-b="4c" data-bit="01">CUE 1</button>
+          </div>
+        </div>
+        <div>
+          <div class="knobrow">
+            <div class="knob"><span class="lbl">HI</span><input type="range" min="0" max="1023" value="512" data-a="50"></div>
+            <div class="knob"><span class="lbl">MID</span><input type="range" min="0" max="1023" value="512" data-a="52"></div>
+            <div class="knob"><span class="lbl">LOW</span><input type="range" min="0" max="1023" value="512" data-a="4e"></div>
+          </div>
+          <div class="fader" style="margin-top:10px">
+            <span class="lbl">CH2</span>
+            <input type="range" min="0" max="1023" value="0" data-a="4c">
+            <button class="ctl guess" data-b="4c" data-bit="02">CUE 2</button>
+          </div>
+        </div>
+      </div>
+      <div class="grp hslider">
+        <span class="lbl">Crossfader</span>
+        <input type="range" min="0" max="1023" value="512" data-a="4a">
+      </div>
+
+      <h2 style="margin-top:14px">Beat FX</h2>
+      <div class="grp row">
+        <button class="ctl guess" data-b="5a" data-bit="01">SELECT ◄</button>
+        <button class="ctl guess" data-b="5a" data-bit="04">SELECT ►</button>
+        <button class="ctl guess" data-b="5a" data-bit="20">CH SELECT</button>
+      </div>
+      <div class="grp row">
+        <button class="ctl guess" data-b="56" data-bit="01">BEAT ◄</button>
+        <button class="ctl guess" data-b="56" data-bit="02">BEAT ►</button>
+        <button class="ctl ok" data-b="5b" data-bit="04">ROLL / ON</button>
+        <button class="ctl ok" data-b="5b" data-bit="08">TAP</button>
+      </div>
+      <div class="grp hslider">
+        <span class="lbl">FX level / depth</span>
+        <input type="range" min="0" max="1023" value="512" data-a="54">
+      </div>
+    </div>
+
+    <!-- DECK 2 -->
+    <div class="card deck">
+      <h2>Deck 2</h2>
+      <div class="grp pads">
+        <button class="ctl guess" data-b="20" data-bit="01">PLAY</button>
+        <button class="ctl guess" data-b="20" data-bit="02">CUE</button>
+        <button class="ctl guess" data-b="20" data-bit="04">SYNC</button>
+        <button class="ctl guess" data-b="20" data-bit="08">SHIFT</button>
+      </div>
+      <div class="grp pads">
+        <button class="ctl guess" data-b="21" data-bit="01">HOT 1</button>
+        <button class="ctl guess" data-b="21" data-bit="02">HOT 2</button>
+        <button class="ctl guess" data-b="21" data-bit="04">HOT 3</button>
+        <button class="ctl guess" data-b="21" data-bit="08">HOT 4</button>
+      </div>
+      <div class="grp pads">
+        <button class="ctl guess" data-b="23" data-bit="01">LOOP IN</button>
+        <button class="ctl guess" data-b="23" data-bit="02">LOOP OUT</button>
+        <button class="ctl guess" data-b="23" data-bit="04">RELOOP</button>
+        <button class="ctl guess" data-b="23" data-bit="08">AUTO</button>
+      </div>
+      <div class="grp row">
+        <button class="ctl guess" data-b="23" data-bit="10">JOG −</button>
+        <button class="ctl guess" data-b="23" data-bit="20">JOG +</button>
+        <button class="ctl ok" data-b="22" data-bit="08">TEMPO RANGE</button>
+      </div>
+      <div class="grp fader">
+        <span class="lbl">Tempo (D2)</span>
+        <input type="range" min="0" max="1023" value="512" data-a="14">
+        <span class="lbl mono" data-val="14">512</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- PROBE -->
+  <div class="probe">
+    <div class="card">
+      <h2>Probe — byte bits</h2>
+      <div class="row" style="align-items:center">
+        <span class="lbl">offset</span>
+        <input class="hex" id="pbyte" value="10" size="3">
+        <span class="note">hex frame offset (0x04–0x5f)</span>
+      </div>
+      <div class="bits" id="pbits"></div>
+      <div class="note">Hold each bit and watch the screen. Button bytes:
+        deck1 0x10–0x13, deck2 0x20–0x23, global 0x14–0x1f, beat-fx/other 0x44–0x5f.</div>
+    </div>
+    <div class="card">
+      <h2>Probe — analog &amp; raw</h2>
+      <div class="hslider">
+        <span class="lbl">analog at offset <input class="hex" id="aoff" value="04" size="3"> (16-bit LE)</span>
+        <input type="range" min="0" max="65535" value="512" id="araw">
+        <span class="lbl mono" id="aval">512 (0x0200)</span>
+      </div>
+      <div class="row" style="margin-top:12px;align-items:center">
+        <span class="lbl">raw spec</span>
+        <input class="hex" id="rawspec" value="B 10 01" size="12" style="flex:1">
+        <button class="bigbtn" id="rawhold">hold</button>
+        <button class="bigbtn" id="rawtap">tap</button>
+        <button class="bigbtn red" id="rawrel">release</button>
+      </div>
+      <div class="note">Spec syntax: <span class="mono">B &lt;off&gt; &lt;bit&gt;</span> hold button ·
+        <span class="mono">A &lt;off&gt; &lt;val&gt;</span> hold analog · lowercase = one-shot. Hex.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const logEl = document.getElementById('log');
+function log(msg){
+  const t = new Date().toLocaleTimeString();
+  logEl.textContent = `[${t}] ${msg}\n` + logEl.textContent;
+  if(logEl.textContent.length>6000) logEl.textContent = logEl.textContent.slice(0,6000);
+}
+async function post(path, body){
+  try{ await fetch(path,{method:'POST',body:body||''}); }
+  catch(e){ log('POST '+path+' failed: '+e); }
+}
+function ctrl(spec){ post('/ctrl', spec); log('→ '+spec); }
+function release(){ post('/release'); }
+function releaseAll(){ post('/release'); log('⏹ release all'); }
+
+// ---- buttons: hold while pressed ----
+function wireButton(btn){
+  const off = btn.dataset.b, bit = btn.dataset.bit;
+  const spec = `B ${off} ${bit}`;
+  const down = e=>{ e.preventDefault(); btn.classList.add('down'); ctrl(spec); };
+  const up   = ()=>{ btn.classList.remove('down'); release(); };
+  btn.addEventListener('mousedown',down);
+  btn.addEventListener('touchstart',down,{passive:false});
+  btn.addEventListener('mouseup',up);
+  btn.addEventListener('mouseleave',up);
+  btn.addEventListener('touchend',up);
+  btn.title = spec;
+}
+document.querySelectorAll('button.ctl[data-b]').forEach(wireButton);
+
+// ---- analog sliders: hold at value ----
+function wireSlider(sl){
+  const off = sl.dataset.a;
+  const valspan = document.querySelector(`[data-val="${off}"]`);
+  const send = ()=>{
+    const v = parseInt(sl.value,10);
+    if(valspan) valspan.textContent = v;
+    ctrl(`A ${off} ${v.toString(16)}`);
+  };
+  sl.addEventListener('input', send);
+  sl.title = 'analog @0x'+off;
+}
+document.querySelectorAll('input[type=range][data-a]').forEach(wireSlider);
+
+// ---- probe bit grid ----
+const pbits = document.getElementById('pbits');
+function renderBits(){
+  pbits.innerHTML='';
+  const off = document.getElementById('pbyte').value.trim();
+  [1,2,4,8,16,32,64,128].forEach(b=>{
+    const el = document.createElement('button');
+    el.className='ctl'; el.textContent='0x'+b.toString(16).padStart(2,'0');
+    const spec = `B ${off} ${b.toString(16)}`;
+    const down=e=>{e.preventDefault();el.classList.add('down');ctrl(spec);};
+    const up=()=>{el.classList.remove('down');release();};
+    el.addEventListener('mousedown',down);
+    el.addEventListener('mouseup',up); el.addEventListener('mouseleave',up);
+    pbits.appendChild(el);
+  });
+}
+document.getElementById('pbyte').addEventListener('input',renderBits);
+renderBits();
+
+// ---- probe analog ----
+const araw = document.getElementById('araw'), aval=document.getElementById('aval');
+araw.addEventListener('input',()=>{
+  const v=parseInt(araw.value,10);
+  aval.textContent = v+' (0x'+v.toString(16).padStart(4,'0')+')';
+  ctrl(`A ${document.getElementById('aoff').value.trim()} ${v.toString(16)}`);
+});
+
+// ---- raw ----
+document.getElementById('rawhold').onclick=()=>ctrl(document.getElementById('rawspec').value.trim());
+document.getElementById('rawtap').onclick=()=>{
+  const s=document.getElementById('rawspec').value.trim(); ctrl(s);
+  setTimeout(release,180);
+};
+document.getElementById('rawrel').onclick=releaseAll;
+document.getElementById('relall').onclick=releaseAll;
+
+// ---- live screen ----
+const img=document.getElementById('screen'), conn=document.getElementById('conn'),
+      live=document.getElementById('live'), fps=document.getElementById('fps');
+let lastT=0;
+function refreshScreen(){
+  if(!live.checked) return;
+  const u='/screen?t='+Date.now();
+  const probe=new Image();
+  const t0=performance.now();
+  probe.onload=()=>{ img.src=probe.src; conn.className='conn up'; conn.textContent='screen: live';
+    const dt=performance.now()-t0; fps.textContent=Math.round(dt)+'ms'; };
+  probe.onerror=()=>{ conn.className='conn down'; conn.textContent='screen: no QEMU'; };
+  probe.src=u;
+}
+document.getElementById('snap').onclick=()=>{ const u='/screen?t='+Date.now();
+  img.src=u; log('snapshot'); };
+setInterval(refreshScreen, 900);
+refreshScreen();
+</script>
+</body>
+</html>
