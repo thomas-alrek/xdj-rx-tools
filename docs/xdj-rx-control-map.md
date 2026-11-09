@@ -207,6 +207,33 @@ Traced the legacy `@Ui_BrowseKey` browser path end-to-end in rbp:
    (gdb note: clear ALL stale `Z1` breakpoints between probes — a leftover bp at `sendKey`
    0x2a47c0 makes every `continue` stop there and report its `r1`, which looks like a stuck code.)
 
+### Session 3 (2026-11-09, clean post-USB-fix instance) — more RE, still blocked on frame synthesis
+On a FRESH instance (USB solved, library loaded, NOT harness-degraded):
+- **`FUN_0026ae7c` IS the active library browser** — it fires on injected panel events here, so
+  blocker #1 above ("different implementation") was **a degraded-harness artifact, not real**. The
+  legacy `@Ui_BrowseKey` path drives the on-screen `ARTIST/ALBUM/…` category list.
+- **Encoder event constructor = `FUN_002adfa0`** (builds the 0x24-byte event with code `0x4205`;
+  tempo/buttons use the sibling `FUN_002adee8`). It is **quiet at idle** and fires ONLY for the
+  encoder — so `Z1,2adfa0,4` is a clean encoder-only probe. `FUN_0028411c` (the old "panel
+  receiver" anchor) is actually the **TEMPO-fader** section handler — it hardcodes code `0x410a`;
+  that's why lone-bit injection always collapsed to 0x410a.
+- **Frame decoder = `FUN_0028a7b8`** (REA file-offset `0x282a98`). It emits `0x4205` at the point
+  `piVar12 == &UNK_00427728` via `FUN_002adfa0(ev,0x4205,0x8188000,0,0,0)`, plus a SECOND 0x4205
+  event (flag=1) when the event's `+8 & 0x8000` is set — i.e. the two rotation half-steps/directions.
+- **Control code table @ `0x427700`** (10 × u32): `0x4405 0x440c 0x4403 0x4402 0x420b 0x4206`
+  **`0x4205`**`(@+0x18) 0x4488 0x430c 0x420c`; `0x427728` begins a `PcControlLedData` object
+  (RTTI `N2ui16PcControlLedDataE` @0x427740). Decoder matches frame elements against these.
+- **STILL BLOCKED:** synthesizing the encoder's subucom frame field. `FUN_002adfa0` did NOT fire for
+  any analog `A <off> 0200` injection across rbp off `0x44–0x60`, and `A`/`b` injection into the
+  browser dispatcher collapses to fixed codes (`0x409`/`0x410a`) regardless of offset. The subucom
+  frame is a **structured per-control protocol** (descriptor/code-table + per-element change word
+  `&0x8000` + per-word byte-swap + CRC), NOT a flat byte array — so you can't poke a byte and get the
+  encoder. **Next step to finish:** decode `FUN_0028a7b8`'s pre-line-646 frame→state mapping and
+  `FUN_00286e1c(dev,idx)` to learn the encoder control's exact frame field (offset + signed-counter/
+  quadrature encoding); then extend the QEMU subucom harness to present that field as a changing
+  signed value. Clean probe to confirm once you have a candidate: `Z1,2adfa0,4` must fire with the
+  injection (it's encoder-only), and the on-screen highlight must move ARTIST→ALBUM.
+
 ## ★ BREAKTHROUGH: USB1/USB2 are MAIN-UCOM GPIO keys, NOT subucom (2026-11-09)
 From the **XDJ-RX service manual** (`~/Downloads/da43a7.pdf`, 210pp). The unit has
 **two MCUs**, and the key routing is split:
