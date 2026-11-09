@@ -42,13 +42,20 @@ drives USB1 (GPIO4_IO30), `/tmp/usb2_insert` drives USB2 (GPIO7_IO12) (patch 06)
 The device's hub port must match the GPIO's slot. Observed: hub port 1 (`2-1.1`)
 mounts at `/media/usb2` (→ drive `/tmp/usb2_insert`).
 
-## Still open (the last mile)
-With the drive correctly at `2-1.1` + slot mount, rbp **still** errors before the
-library scanner (`FUN_0024cb38` @ `0x24cf14` never hits). Leading suspect: the
-device enumerates at **full speed** behind the hub (dmesg: `2-1.1: not running at
-top speed; connect to a high speed hub`) — QEMU's chipidea-EHCI reports the port
-full-speed even though it accepted the hub as high-speed. Real slots carry
-high-speed sticks; rbp's `UsbStorageManager` may reject a full-speed slot device.
-Next: get a high-speed enumeration on chipidea, or gdb-trace the exact
-`UsbStorageManager` check that routes to the Caution/"USB Error" state. See
+## RESOLVED (2026-11-09)
+With the drive correctly at `2-1.1` + slot mount **and a genuine `baken` `export.pdb`**,
+rbp **accepts** the device — no "USB Error" modal, and it opens and parses the library.
+Verified live against the guest serial console (`/tmp/d_con4.sock`):
+
+- `screendump` shows the normal deck view (DECK 1/2, "Not Loaded."), **no error modal**.
+- rbp's open fds include `…/PIONEER/rekordbox/export.pdb` (read to offset 126976 of
+  217088) and `…/PIONEER/USBANLZ/USBMNG.DAT` — it registered the USB as a browsable
+  rekordbox source.
+
+The **full-speed** enumeration was a red herring: the kernel logs `2-1.1: not running at
+top speed` but rbp accepts the device anyway. The fix was purely topology + a real
+library (patch 08 hub → `2-1.1` → slot mount `/media/usb2/sda1`). rbp was **not** patched.
+
+Good image: `test/usb/rekordbox_new.img`. **Next gate:** open the media browser to
+browse/LOAD a track — see docs/xdj-rx-control-map.md "Browser page gate". See
 [[usb-error-investigation]].

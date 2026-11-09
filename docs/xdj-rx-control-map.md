@@ -177,12 +177,30 @@ the browser handler names its keys via `@Ui_BrowseKey> KEYCMD <name>` strings. M
 `0x20a` (confirmed). The remaining nav code↔name labels (BROWSE/USB/LOAD vs
 0x204/0x208/0x209/0x401/0x409) need one more RE pass on the key→handler registration.
 
-## ⚠ Current blocker: the browser does not open from panel input
-The global nav codes (`[0x5f]`) **do** reach `IKeyManager::sendKey` (confirmed live),
-and per-bit presses of every nav/encoder bit produce **no on-screen change** — the
-media browser never opens, so there is nothing to scroll/LOAD. Likely cause: rbp has
-**not registered the USB as a browsable rekordbox source** (no USB source indicator on
-the deck), so the deck→browse key is a no-op. Next: verify in-guest that `/media/usb1`
-is mounted with `PIONEER/LIBRARY/PDTL.DB` AND that rbp's media/DB manager scanned+
-registered it (notifyMusicSelect/device registration); if not, that scan/registration is
-the real gate to BROWSE→LOAD, not the control map.
+## ⚠ Current blocker: the browser PAGE is not foregrounded (USB IS registered)
+**Update 2026-11-09:** the old hypothesis ("USB not registered") is DISPROVEN. With the
+patch-08 hub topology + a genuine baken `export.pdb`, rbp **does** register the USB as a
+browsable source and parses `export.pdb` (verified live; see docs/usb-slot-topology.md).
+Yet panel nav presses still open nothing — because the browser is a self-contained,
+**flag-polled page** that only processes keys while it is the foreground/updating page,
+and on the deck screen it is **not ticking**.
+
+### Browser key subsystem (rbp RE, fully mapped)
+- Dispatcher **`FUN_000e1334`**: `for i in 0..15: if flag[i] != 0 then handler[i](&state[i])`.
+  It is a browser-page **virtual** (no direct callers) — called from the page's update()
+  only while the browser page is active.
+- Table at `0x17f3140` (populated by `FUN_000e11a4`): handler ptr at `0x17f3140+0x10*i`,
+  pressed-flag at `handler-4` = `0x17f313c+0x10*i`, per-key state at `handler-0xc`.
+- Source keys call `FUN_000d5fcc(N)`: USB=`0xe0e9c`→`(2)` (flag `0x17f315c`),
+  `0xe0f18`/`0xe0f94`/`0xe1010` = the other three sources (SD/LINK/rekordbox).
+- **Proof it's gated:** writing `0x17f315c=1` via gdb is **never consumed**
+  (flag stays 1); a bp on `FUN_000e1334` **never fires** on the deck screen.
+
+### The real gate (next)
+Opening the browser = the **main-UI page manager** switching the foreground page to the
+browser (so its update()→`FUN_000e1334` starts ticking). That switch is triggered by the
+deck-screen USB1/USB2 key through `IKeyManager`, handled in the **deck/page framework**,
+a different module than the browser-key table above. Map the deck page's key handler and
+its page-switch call (or find the page-manager "current page" pointer and foreground the
+browser page directly) — that, not the panel bit, is what opens BROWSE→LOAD.
+gdb helpers: scratchpad/{gdbcap.py,setflag.py,usbkey.py}.
