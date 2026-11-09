@@ -177,6 +177,60 @@ the browser handler names its keys via `@Ui_BrowseKey> KEYCMD <name>` strings. M
 `0x20a` (confirmed). The remaining nav code↔name labels (BROWSE/USB/LOAD vs
 0x204/0x208/0x209/0x401/0x409) need one more RE pass on the key→handler registration.
 
+## ★ BREAKTHROUGH: USB1/USB2 are MAIN-UCOM GPIO keys, NOT subucom (2026-11-09)
+From the **XDJ-RX service manual** (`~/Downloads/da43a7.pdf`, 210pp). The unit has
+**two MCUs**, and the key routing is split:
+- **EUP UCOM** (= the subucom SSI I inject, `/dev/subucom_spi1.0`): matrix keys incl.
+  `BROWSE, TAG LIST, INFO, MENU, BACK, LOAD1, LOAD2, BROWSE PUSH`, all deck/mixer
+  analog+buttons, jogs. (So BROWSE itself *is* a subucom key.)
+- **MAIN UCOM** (= the i.MX6 reading direct GPIOs via **`/dev/gpiodrv`**): the
+  **`DPNL1` source-select keys `rekordbox, MIDI, USB1, USB2`**, plus `DPNL2 DECK1/2,
+  TIME MODE`, and the jack Phono/Line switches. These are discrete switches
+  (`S5601/2/4`, CN5601) pulled to +5 → **idle HIGH, pressed LOW**.
+
+**This is why no subucom frame bit could ever be USB1/USB2** — they are not in the
+subucom frame at all. All the panel-injection work above applies only to EUP keys.
+
+### gpiodrv mechanism (rbp RE, verified live)
+- `GpioManager` ctor `FUN_0002be28`: `open("/dev/gpiodrv")`, **`lseek(fd, gpio_number)`**
+  (the GPIO number IS the file offset), `read(fd,1)` → 0/1 level, `ioctl(…,0x4004f101,…)`.
+  So each rbp gpiodrv fd's `fdinfo` **`pos`** = the Linux GPIO number it watches.
+- Live, rbp watches 18 GPIOs: `117 118 119 120 126* 134 135 146 149 158 159 160 161
+  162 163 164 165 204*` (*=USB1/USB2 **detect** = GPIO4_IO30/ GPIO7_IO12, driven by
+  patch 06).
+- **`FUN_00274a38`** builds the **8 MAIN-UCOM direct keys** via `FUN_0002be28` with GPIO
+  numbers `0x77,0x78,0x9f,0xa1,0xa0,0x9e,0x95,0x92` = **119,120,159,161,160,158,149,146**
+  (GPIO4_IO23/24, GPIO5_IO31/30/21/18, GPIO6_IO00/01). The 8 keys are {rekordbox, MIDI,
+  USB1, USB2, DECK1/2, TIME MODE, Phono1/Line1 SW, Phono2/Line2 SW}. USB1/USB2 are 2 of
+  these 8 — identify by driving each in QEMU (see below) and watching for the USB browser.
+
+### ✅ CONFIRMED live (2026-11-09): the 4 DPNL1 source keys
+Built a QEMU MAIN-UCOM key hook (drive GPIO N low=pressed via `echo N > /tmp/mainkey`)
+and pressed each candidate. **The browser opens from these GPIO presses** — proving
+USB1/USB2 are the MAIN-UCOM GPIO keys, exactly as the service manual says:
+- **GPIO 158 (GPIO5_IO30) = USB2** → center shows `⇔ NO USB( USB2 )` browse screen.
+- **GPIO 160 (GPIO6_IO00) = USB1** → center shows `⇔ NO USB( USB1 )` browse screen.
+- **GPIO 159 (GPIO5_IO31) = rekordbox**, **GPIO 161 (GPIO6_IO01) = MIDI** (`USB MIDI /
+  MIXER MODE: XDJ-RX / NOT CONNECTED`). The 4 map sequentially to CN5601 pins 7-10
+  (KEY_USB2, KEY_RB, KEY_USB1, KEY_MIDI). Remaining 4 of the 8 (119,120,146,149) =
+  DECK1/2, TIME MODE, 2× jack SW.
+
+So the browser DOES open via the real USB1/USB2 buttons. (The list shows "NO USB" only
+when the library hasn't registered that boot — the separate flaky USB-accept issue; with
+a clean boot + late insert the USB2 list populates.)
+
+### Emulating a MAIN-UCOM key press (the accurate fix)
+GPIO number N → bank `N/32+1`, line `N%32` → QEMU `s->gpio[N/32]`, pin `N%32`. Press =
+drive the input LOW (`qemu_set_irq(qdev_get_gpio_in(gpio_bank, pin), 0)`), release = HIGH,
+exactly as patch 06 does for the detect lines. These lines must idle HIGH at reset (as
+patch 04 does for the detect lines) or rbp sees them stuck-pressed at boot. Next: a QEMU
+hook to drive any of the 8 key GPIOs from a `/tmp` trigger, then press the one that opens
+the browser = USB1/USB2.
+
+## ⚠ (superseded) browser PAGE not foregrounded — only relevant to EUP/BROWSE key
+The notes below concern the EUP-side BROWSE key / in-browser nav; USB1/USB2 open the
+browser via the MAIN-UCOM GPIO path above, which is the user's actual button.
+
 ## ⚠ Current blocker: the browser PAGE is not foregrounded (USB IS registered)
 **Update 2026-11-09:** the old hypothesis ("USB not registered") is DISPROVEN. With the
 patch-08 hub topology + a genuine baken `export.pdb`, rbp **does** register the USB as a

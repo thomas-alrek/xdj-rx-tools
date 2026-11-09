@@ -56,6 +56,16 @@
 #       udev_usbctn slot-connect channels on exactly those paths, so the USB
 #       drive must be placed there. See docs/usb-slot-topology.md.
 #
+#   patches/09-imx6-mainucom-keys.patch
+#       The XDJ-RX's source-select buttons (USB1, USB2, rekordbox, MIDI) and
+#       DECK/TIME/jack keys are NOT subucom (EUP-UCOM) keys -- the service manual
+#       shows they are MAIN-UCOM "direct-input" keys: plain i.MX6 GPIO switches
+#       (idle HIGH, pressed LOW) that rbp reads through /dev/gpiodrv. This adds a
+#       runtime hook: writing a Linux GPIO number to /tmp/mainkey drives that pin
+#       LOW (press); removing the file releases it (HIGH). Confirmed live: GPIO
+#       158 = USB2, 160 = USB1 (press -> the browser opens on that slot), 159 =
+#       rekordbox, 161 = MIDI. See docs/xdj-rx-control-map.md.
+#
 #   patches/03-sabrelite-sabresd-sd.patch
 #       The XDJ-RX firmware's real board is SABRE-SD (MACH_TYPE 3980), which
 #       registers ECSPI2 (bus 1) for the panel MCU + audio codecs, on a

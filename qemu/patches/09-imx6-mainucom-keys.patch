@@ -1,0 +1,77 @@
+--- a/hw/arm/fsl-imx6.c	2026-11-09 20:27:41
++++ b/hw/arm/fsl-imx6.c	2026-11-09 20:27:41
+@@ -561,6 +561,12 @@
+  * insertion at runtime by driving the line LOW (see xdj_subucom_frame_start).
+  */
+ static DeviceState *g_xdj_usb_gpio[2];
++/*
++ * All i.MX6 GPIO bank devices, captured at realize. Used to drive the MAIN-UCOM
++ * "direct-input" key GPIOs (USB1/USB2/rekordbox/MIDI/DECK/TIME, read by rbp via
++ * /dev/gpiodrv) -- see the /tmp/mainkey hook in xdj_subucom_frame_start.
++ */
++static DeviceState *g_xdj_gpio[8];
+ 
+ /*
+  * CRC-16/X-25 (poly 0x1021, reflected 0x8408, init 0xffff, refin/refout, xorout
+@@ -639,8 +645,51 @@
+                 qemu_set_irq(qdev_get_gpio_in(g_xdj_usb_gpio[u], det_pin[u]),
+                              want ? 0 : 1);
+                 usb_present[u] = want;
++            }
++        }
++    }
++    /*
++     * MAIN-UCOM direct-key simulation. The service manual shows USB1/USB2 (and
++     * rekordbox/MIDI/DECK1-2/TIME MODE) are NOT subucom keys -- they are i.MX6
++     * GPIO switches read by rbp via /dev/gpiodrv, idle HIGH / pressed LOW. The 8
++     * such keys are Linux GPIO numbers 119,120,146,149,158,159,160,161
++     * (rbp FUN_00274a38). GPIO N lives on bank s->gpio[N/32], pin N%32.
++     *   echo <gpio> > /tmp/mainkey   -> hold that key pressed (drive LOW)
++     *   rm /tmp/mainkey  (or empty)  -> release (drive HIGH)
++     * All 8 keys are forced HIGH on the first frame to clear their boot-time
++     * reset-low ("pressed") state before rbp's UI acts on them.
++     */
++    {
++        static const int keygpio[8] = {119,120,146,149,158,159,160,161};
++        static int inited, pressed = -1;
++        int want = -1, i;
++        FILE *kf = fopen("/tmp/mainkey", "r");
++        if (kf) {
++            if (fscanf(kf, "%d", &want) != 1) {
++                want = -1;
+             }
++            fclose(kf);
+         }
++        if (!inited) {
++            for (i = 0; i < 8; i++) {
++                int g = keygpio[i];
++                if (g_xdj_gpio[g >> 5]) {
++                    qemu_set_irq(qdev_get_gpio_in(g_xdj_gpio[g >> 5], g & 31), 1);
++                }
++            }
++            inited = 1;
++        }
++        if (want != pressed) {
++            if (pressed >= 0 && pressed < 256 && g_xdj_gpio[pressed >> 5]) {
++                qemu_set_irq(qdev_get_gpio_in(g_xdj_gpio[pressed >> 5],
++                                              pressed & 31), 1);  /* release */
++            }
++            if (want >= 0 && want < 256 && g_xdj_gpio[want >> 5]) {
++                qemu_set_irq(qdev_get_gpio_in(g_xdj_gpio[want >> 5],
++                                              want & 31), 0);      /* press */
++            }
++            pressed = want;
++        }
+     }
+     if (getenv("SUBUCOM_BURST") && s->pos) {
+         fprintf(stderr, "SUBUCOM msg_size=%u\n", s->pos);
+@@ -1163,6 +1212,9 @@
+         } else if (i == 6) { /* GPIO7: USB2 detect (GPIO7_IO12) */
+             g_xdj_usb_gpio[1] = DEVICE(&s->gpio[i]);
+         }
++        if (i < 8) {         /* capture every bank for the MAIN-UCOM key hook */
++            g_xdj_gpio[i] = DEVICE(&s->gpio[i]);
++        }
+ 
+         sysbus_mmio_map(SYS_BUS_DEVICE(&s->gpio[i]), 0, gpio_table[i].addr);
+         sysbus_connect_irq(SYS_BUS_DEVICE(&s->gpio[i]), 0,
