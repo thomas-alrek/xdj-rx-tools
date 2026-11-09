@@ -40,6 +40,8 @@
   .hs.down{background:rgba(57,217,138,.42)!important;border-color:var(--ok)!important}
   .hs.track{background:rgba(57,179,255,.05)}         /* faders show a faint track */
   .hs .fill{position:absolute;background:rgba(57,179,255,.55);pointer-events:none;border-radius:4px}
+  .hs .ctick{position:absolute;left:0;right:0;top:50%;height:2px;margin-top:-1px;
+    background:rgba(255,255,255,.4);pointer-events:none}
   /* calibration */
   body.cal .hs{border-color:rgba(224,166,58,.9);background:rgba(224,166,58,.14);
     color:#1a1407;font-size:8px;cursor:move}
@@ -99,89 +101,131 @@
 // cx,cy = centre %, w,h = size %. type: btn | vfader | hfader | knob.
 // spec: "B off bit" (button) or "A off" (analog) in hex; null = unmapped.
 // grade: ok=verified, guess=unverified, un=unmapped.
-const SCREEN0 = { x:36.5, y:5.4, w:22.5, h:20.3 };
+const SCREEN0 = { x:36.5, y:5.4, w:22.6, h:19.84 };
 const CTRLS0 = [
-  // --- centre / browser-nav ---
-  {id:'browse', label:'BROWSE',  type:'btn', spec:'B 16 01', grade:'guess', cx:39.8, cy:29.5, w:3.6, h:2.4},
-  {id:'taglist',label:'TAG LIST',type:'btn', spec:'B 16 04', grade:'guess', cx:45.3, cy:29.5, w:3.6, h:2.4},
-  {id:'info',   label:'INFO',    type:'btn', spec:null,      grade:'un',    cx:50.8, cy:29.5, w:3.4, h:2.4},
-  {id:'menu',   label:'MENU',    type:'btn', spec:null,      grade:'un',    cx:56.4, cy:29.5, w:3.4, h:2.4},
-  {id:'back',   label:'BACK',    type:'btn', spec:'B 16 02', grade:'guess', cx:47.0, cy:36.4, w:2.6, h:3.0},
-  {id:'tagtrk', label:'TAG TRK', type:'btn', spec:null,      grade:'un',    cx:49.9, cy:36.4, w:2.0, h:3.0},
-  {id:'enc',    label:'PUSH',    type:'btn', spec:'B 17 02', grade:'guess', cx:48.4, cy:45.2, w:4.6, h:7.6, shape:'round'},
-  {id:'encL',   label:'ROT−',    type:'btn', spec:'B 17 01', grade:'guess', cx:45.4, cy:45.2, w:1.5, h:2.4},
-  {id:'encR',   label:'ROT+',    type:'btn', spec:'B 17 04', grade:'guess', cx:51.4, cy:45.2, w:1.5, h:2.4},
-  {id:'loadL',  label:'◄LOAD',   type:'btn', spec:'B 18 01', grade:'guess', cx:44.0, cy:52.0, w:2.2, h:2.6},
-  {id:'loadR',  label:'LOAD►',   type:'btn', spec:'B 18 02', grade:'guess', cx:51.7, cy:52.0, w:2.2, h:2.6},
-  {id:'quant',  label:'QUANTIZE',type:'btn', spec:'B 19 01', grade:'guess', cx:62.9, cy:8.2,  w:3.6, h:2.4},
-  {id:'deck12', label:'DECK1/2', type:'btn', spec:null,      grade:'un',    cx:62.9, cy:12.0, w:3.6, h:2.4},
-  {id:'timemd', label:'TIME MODE',type:'btn',spec:null,      grade:'un',    cx:62.9, cy:16.5, w:3.6, h:2.4},
-  // --- source select (left of screen) ---
-  {id:'src_rb', label:'rekordbox',type:'btn',spec:null,      grade:'un',    cx:34.3, cy:8.6,  w:4.3, h:2.4},
-  {id:'src_midi',label:'MIDI',   type:'btn', spec:null,      grade:'un',    cx:34.3, cy:12.2, w:4.3, h:2.4},
-  {id:'src_usb1',label:'USB1 src',type:'btn',spec:null,      grade:'un',    cx:34.3, cy:16.1, w:4.3, h:2.4},
-  {id:'src_usb2',label:'USB2 src',type:'btn',spec:null,      grade:'un',    cx:34.3, cy:19.9, w:4.3, h:2.4},
-  // --- USB STOP (subucom? to discover) ---
-  {id:'usb1stop',label:'USB1 STOP',type:'btn',spec:null,     grade:'un',    cx:2.7,  cy:21.7, w:3.6, h:2.4},
-  {id:'usb2stop',label:'USB2 STOP',type:'btn',spec:null,     grade:'un',    cx:97.3, cy:21.7, w:3.6, h:2.4},
-  {id:'mrec',   label:'MASTER REC',type:'btn',spec:null,     grade:'un',    cx:87.8, cy:16.3, w:3.4, h:2.4},
-  {id:'tmark',  label:'TRACK MARK',type:'btn',spec:null,     grade:'un',    cx:87.8, cy:21.7, w:3.4, h:2.4},
-  // --- mixer analog ---
-  {id:'eq_hi1', label:'HI1', type:'knob', spec:'A 46', grade:'guess', cx:42.4, cy:40.1, w:3.2, h:3.8, val:512},
-  {id:'eq_mid1',label:'MID1',type:'knob', spec:'A 48', grade:'guess', cx:42.4, cy:47.3, w:3.2, h:3.8, val:512},
-  {id:'eq_low1',label:'LOW1',type:'knob', spec:'A 4a', grade:'guess', cx:42.4, cy:54.6, w:3.2, h:3.8, val:512},
-  {id:'eq_hi2', label:'HI2', type:'knob', spec:'A 50', grade:'guess', cx:54.4, cy:40.1, w:3.2, h:3.8, val:512},
-  {id:'eq_mid2',label:'MID2',type:'knob', spec:'A 52', grade:'guess', cx:54.4, cy:47.3, w:3.2, h:3.8, val:512},
-  {id:'eq_low2',label:'LOW2',type:'knob', spec:'A 4e', grade:'guess', cx:54.4, cy:54.6, w:3.2, h:3.8, val:512},
-  {id:'ch1',    label:'CH1', type:'vfader',spec:'A 44', grade:'guess', cx:41.6, cy:75.3, w:3.0, h:15.0, val:0},
-  {id:'ch2',    label:'CH2', type:'vfader',spec:'A 4c', grade:'guess', cx:55.0, cy:75.3, w:3.0, h:15.0, val:0},
-  {id:'xf',     label:'CROSSFADER',type:'hfader',spec:'A 4a',grade:'guess',cx:47.8, cy:90.8, w:11.0, h:3.4, val:512},
-  {id:'cue1',   label:'CUE1',type:'btn', spec:'B 4c 01', grade:'guess', cx:45.8, cy:83.7, w:2.4, h:2.4},
-  {id:'cue2',   label:'CUE2',type:'btn', spec:'B 4c 02', grade:'guess', cx:50.8, cy:83.7, w:2.4, h:2.4},
-  // --- beat fx ---
-  {id:'beatL',  label:'BEAT◄',type:'btn', spec:'B 56 01', grade:'guess', cx:59.1, cy:42.6, w:2.2, h:2.4},
-  {id:'beatR',  label:'BEAT►',type:'btn', spec:'B 56 02', grade:'guess', cx:61.4, cy:42.6, w:2.2, h:2.4},
-  {id:'fxtap',  label:'TAP', type:'btn', spec:'B 5b 08', grade:'ok',    cx:60.2, cy:48.4, w:3.4, h:4.0, shape:'round'},
-  {id:'fxsel_l',label:'SEL◄',type:'btn', spec:'B 5a 01', grade:'guess', cx:59.1, cy:55.0, w:2.0, h:2.4},
-  {id:'fxsel_r',label:'SEL►',type:'btn', spec:'B 5a 04', grade:'guess', cx:61.4, cy:55.0, w:2.0, h:2.4},
-  {id:'fxch',   label:'CH SEL',type:'btn',spec:'B 5a 20', grade:'guess', cx:60.2, cy:59.2, w:3.6, h:4.4, shape:'round'},
-  {id:'fxlev',  label:'FX LVL',type:'knob',spec:'A 54',  grade:'guess', cx:60.2, cy:74.5, w:3.2, h:3.8, val:512},
-  {id:'fxon',   label:'ON/OFF',type:'btn',spec:'B 5b 04', grade:'ok',    cx:60.2, cy:83.7, w:3.6, h:4.4, shape:'round'},
-  // --- deck 1 ---
-  {id:'d1play', label:'PLAY', type:'btn', spec:'B 10 01', grade:'guess', cx:4.6,  cy:85.4, w:5.0, h:6.4, shape:'round'},
-  {id:'d1cue',  label:'CUE',  type:'btn', spec:'B 10 02', grade:'guess', cx:4.6,  cy:74.9, w:5.0, h:6.4, shape:'round'},
+  {id:'browse', label:'BROWSE', type:'btn', spec:'B 16 01', grade:'guess', cx:40.06, cy:29.21, w:3.6, h:2.4},
+  {id:'taglist', label:'TAG LIST', type:'btn', spec:'B 16 04', grade:'guess', cx:45.7, cy:29.19, w:3.6, h:2.4},
+  {id:'info', label:'INFO', type:'btn', spec:null, grade:'un', cx:51.37, cy:29.15, w:3.4, h:2.4},
+  {id:'menu', label:'MENU', type:'btn', spec:null, grade:'un', cx:57.11, cy:29.18, w:3.4, h:2.4},
+  {id:'back', label:'BACK', type:'btn', spec:'B 16 02', grade:'guess', cx:47.21, cy:36.81, w:2.6, h:3.0},
+  {id:'tagtrk', label:'TAG TRK', type:'btn', spec:null, grade:'un', cx:49.9, cy:36.85, w:2.0, h:3.0},
+  {id:'enc', label:'PUSH', type:'btn', spec:'B 17 02', grade:'guess', cx:48.47, cy:44.85, w:5.2, h:9.0, shape:'round'},
+  {id:'encL', label:'ROT−', type:'btn', spec:'B 17 01', grade:'guess', cx:44.6, cy:45.2, w:2.0, h:3.0},
+  {id:'encR', label:'ROT+', type:'btn', spec:'B 17 04', grade:'guess', cx:52.2, cy:45.2, w:2.0, h:3.0},
+  {id:'loadL', label:'◄LOAD', type:'btn', spec:'B 18 01', grade:'guess', cx:46.82, cy:52.24, w:2.2, h:2.6},
+  {id:'loadR', label:'LOAD►', type:'btn', spec:'B 18 02', grade:'guess', cx:50.31, cy:51.81, w:2.2, h:2.6},
+  {id:'quant', label:'QUANTIZE', type:'btn', spec:'B 19 01', grade:'guess', cx:62.5, cy:8.08, w:3.6, h:2.4},
+  {id:'deck12', label:'DECK1/2', type:'btn', spec:null, grade:'un', cx:62.67, cy:12.03, w:3.6, h:2.4},
+  {id:'timemd', label:'TIME MODE', type:'btn', spec:null, grade:'un', cx:62.67, cy:16.5, w:3.6, h:2.4},
+  {id:'src_rb', label:'rekordbox', type:'btn', spec:null, grade:'un', cx:34.66, cy:7.98, w:4.3, h:2.4},
+  {id:'src_midi', label:'MIDI', type:'btn', spec:null, grade:'un', cx:34.3, cy:12.2, w:4.3, h:2.4},
+  {id:'src_usb1', label:'USB1 src', type:'btn', spec:null, grade:'un', cx:34.45, cy:16.32, w:4.3, h:2.4},
+  {id:'src_usb2', label:'USB2 src', type:'btn', spec:null, grade:'un', cx:34.47, cy:20.84, w:4.3, h:2.4},
+  {id:'usb1stop', label:'USB1 STOP', type:'btn', spec:null, grade:'un', cx:3.7, cy:23.62, w:3.6, h:2.4},
+  {id:'usb2stop', label:'USB2 STOP', type:'btn', spec:null, grade:'un', cx:93.42, cy:23.21, w:3.6, h:2.4},
+  {id:'mrec', label:'MASTER REC', type:'btn', spec:null, grade:'un', cx:88.32, cy:16.93, w:3.4, h:2.4},
+  {id:'tmark', label:'TRACK MARK', type:'btn', spec:null, grade:'un', cx:88.33, cy:23.32, w:3.4, h:2.4},
+  {id:'eq_hi1', label:'HI1', type:'knob', spec:'A 46', grade:'guess', cx:42.82, cy:41.14, w:4.0, h:5.0, val:512},
+  {id:'eq_mid1', label:'MID1', type:'knob', spec:'A 48', grade:'guess', cx:42.72, cy:47.59, w:4.0, h:5.0, val:512},
+  {id:'eq_low1', label:'LOW1', type:'knob', spec:'A 4a', grade:'guess', cx:42.59, cy:54.6, w:4.0, h:5.0, val:512},
+  {id:'eq_hi2', label:'HI2', type:'knob', spec:'A 50', grade:'guess', cx:54.4, cy:40.1, w:4.0, h:5.0, val:512},
+  {id:'eq_mid2', label:'MID2', type:'knob', spec:'A 52', grade:'guess', cx:54.4, cy:47.3, w:4.0, h:5.0, val:512},
+  {id:'eq_low2', label:'LOW2', type:'knob', spec:'A 4e', grade:'guess', cx:54.4, cy:54.6, w:4.0, h:5.0, val:512},
+  {id:'ch1', label:'CH1', type:'vfader', spec:'A 44', grade:'guess', cx:42.69, cy:75.33, w:3.0, h:15.0, val:0},
+  {id:'ch2', label:'CH2', type:'vfader', spec:'A 4c', grade:'guess', cx:54.33, cy:75.01, w:3.0, h:15.0, val:0},
+  {id:'xf', label:'CROSSFADER', type:'hfader', spec:'A 4a', grade:'guess', cx:48.42, cy:89.67, w:11.0, h:3.4, val:512},
+  {id:'cue1', label:'CUE1', type:'btn', spec:'B 4c 01', grade:'guess', cx:35.76, cy:83.6, w:2.4, h:2.4},
+  {id:'cue2', label:'CUE2', type:'btn', spec:'B 4c 02', grade:'guess', cx:38.15, cy:83.67, w:2.4, h:2.4},
+  {id:'beatL', label:'BEAT◄', type:'btn', spec:'B 56 01', grade:'guess', cx:59.1, cy:42.6, w:2.2, h:2.4},
+  {id:'beatR', label:'BEAT►', type:'btn', spec:'B 56 02', grade:'guess', cx:61.4, cy:42.6, w:2.2, h:2.4},
+  {id:'fxtap', label:'TAP', type:'btn', spec:'B 5b 08', grade:'ok', cx:60.21, cy:48.14, w:3.4, h:4.0, shape:'round'},
+  {id:'fxsel', label:'FX SELECT', type:'rotary', spec:null, specUp:'b 5a 04', specDown:'b 5a 01', grade:'guess', cx:60.2, cy:55.0, w:4.4, h:5.5, shape:'round'},
+  {id:'fxch', label:'CH SEL', type:'btn', spec:'B 5a 20', grade:'guess', cx:60.13, cy:61.71, w:3.6, h:4.4, shape:'round'},
+  {id:'fxlev', label:'FX LVL', type:'knob', spec:'A 54', grade:'guess', cx:60.2, cy:74.5, w:4.0, h:5.0, val:512},
+  {id:'fxon', label:'ON/OFF', type:'btn', spec:'B 5b 04', grade:'ok', cx:60.2, cy:83.7, w:3.6, h:4.4, shape:'round'},
+  {id:'d1play', label:'PLAY', type:'btn', spec:'B 10 01', grade:'guess', cx:4.6, cy:85.4, w:5.0, h:6.4, shape:'round'},
+  {id:'d1cue', label:'CUE', type:'btn', spec:'B 10 02', grade:'guess', cx:4.6, cy:74.9, w:5.0, h:6.4, shape:'round'},
   {id:'d1sync', label:'SYNC', type:'btn', spec:'B 10 04', grade:'guess', cx:29.8, cy:46.8, w:2.6, h:3.0},
-  {id:'d1shift',label:'SHIFT',type:'btn', spec:'B 10 08', grade:'guess', cx:22.9, cy:79.6, w:3.2, h:2.6},
-  {id:'d1h1',   label:'HOT1', type:'btn', spec:'B 11 01', grade:'guess', cx:10.8, cy:84.8, w:3.2, h:4.6},
-  {id:'d1h2',   label:'HOT2', type:'btn', spec:'B 11 02', grade:'guess', cx:14.5, cy:84.8, w:3.2, h:4.6},
-  {id:'d1h3',   label:'HOT3', type:'btn', spec:'B 11 04', grade:'guess', cx:18.3, cy:84.8, w:3.2, h:4.6},
-  {id:'d1h4',   label:'HOT4', type:'btn', spec:'B 11 08', grade:'guess', cx:22.1, cy:84.8, w:3.2, h:4.6},
-  {id:'d1in',   label:'IN',   type:'btn', spec:'B 13 01', grade:'guess', cx:3.6,  cy:31.8, w:2.6, h:2.6},
-  {id:'d1out',  label:'OUT',  type:'btn', spec:'B 13 02', grade:'guess', cx:7.1,  cy:31.8, w:2.6, h:2.6},
-  {id:'d1reloop',label:'RELOOP',type:'btn',spec:'B 13 04',grade:'guess', cx:10.8, cy:33.4, w:2.6, h:2.6},
-  {id:'d1auto', label:'AUTO', type:'btn', spec:'B 13 08', grade:'guess', cx:14.6, cy:79.6, w:3.2, h:2.6},
-  {id:'d1jogL', label:'JOG−', type:'btn', spec:'B 13 10', grade:'guess', cx:9.0,  cy:54.8, w:2.4, h:3.0},
-  {id:'d1jogR', label:'JOG+', type:'btn', spec:'B 13 20', grade:'guess', cx:21.0, cy:54.8, w:2.4, h:3.0},
-  {id:'d1slip', label:'SLIP', type:'btn', spec:'B 19 02', grade:'guess', cx:8.3,  cy:41.1, w:2.4, h:2.6},
-  {id:'d1trng', label:'TEMPO RANGE',type:'btn',spec:'B 12 08',grade:'ok', cx:30.9, cy:51.4, w:2.6, h:2.6},
-  {id:'d1tempo',label:'TEMPO1',type:'vfader',spec:'A 04', grade:'guess', cx:30.0, cy:76.2, w:3.0, h:24.0, val:512},
-  // --- deck 2 ---
-  {id:'d2play', label:'PLAY', type:'btn', spec:'B 20 01', grade:'guess', cx:95.4, cy:85.4, w:5.0, h:6.4, shape:'round'},
-  {id:'d2cue',  label:'CUE',  type:'btn', spec:'B 20 02', grade:'guess', cx:95.4, cy:74.9, w:5.0, h:6.4, shape:'round'},
-  {id:'d2sync', label:'SYNC', type:'btn', spec:'B 20 04', grade:'guess', cx:70.2, cy:46.8, w:2.6, h:3.0},
-  {id:'d2shift',label:'SHIFT',type:'btn', spec:'B 20 08', grade:'guess', cx:89.6, cy:79.6, w:3.2, h:2.6},
-  {id:'d2h1',   label:'HOT1', type:'btn', spec:'B 21 01', grade:'guess', cx:77.9, cy:84.8, w:3.2, h:4.6},
-  {id:'d2h2',   label:'HOT2', type:'btn', spec:'B 21 02', grade:'guess', cx:81.7, cy:84.8, w:3.2, h:4.6},
-  {id:'d2h3',   label:'HOT3', type:'btn', spec:'B 21 04', grade:'guess', cx:85.5, cy:84.8, w:3.2, h:4.6},
-  {id:'d2h4',   label:'HOT4', type:'btn', spec:'B 21 08', grade:'guess', cx:89.3, cy:84.8, w:3.2, h:4.6},
-  {id:'d2in',   label:'IN',   type:'btn', spec:'B 23 01', grade:'guess', cx:96.4, cy:31.8, w:2.6, h:2.6},
-  {id:'d2out',  label:'OUT',  type:'btn', spec:'B 23 02', grade:'guess', cx:92.9, cy:31.8, w:2.6, h:2.6},
-  {id:'d2reloop',label:'RELOOP',type:'btn',spec:'B 23 04',grade:'guess', cx:89.3, cy:33.4, w:2.6, h:2.6},
-  {id:'d2auto', label:'AUTO', type:'btn', spec:'B 23 08', grade:'guess', cx:81.3, cy:79.6, w:3.2, h:2.6},
-  {id:'d2jogL', label:'JOG−', type:'btn', spec:'B 23 10', grade:'guess', cx:79.0, cy:54.8, w:2.4, h:3.0},
-  {id:'d2jogR', label:'JOG+', type:'btn', spec:'B 23 20', grade:'guess', cx:91.0, cy:54.8, w:2.4, h:3.0},
-  {id:'d2trng', label:'TEMPO RANGE',type:'btn',spec:'B 22 08',grade:'ok', cx:69.1, cy:51.4, w:2.6, h:2.6},
-  {id:'d2tempo',label:'TEMPO2',type:'vfader',spec:'A 14', grade:'guess', cx:70.0, cy:76.2, w:3.0, h:24.0, val:512},
+  {id:'d1shift', label:'SHIFT', type:'btn', spec:'B 10 08', grade:'guess', cx:23.52, cy:79.71, w:3.2, h:2.6},
+  {id:'d1h1', label:'HOT1', type:'btn', spec:'B 11 01', grade:'guess', cx:10.94, cy:86.01, w:3.2, h:4.6},
+  {id:'d1h2', label:'HOT2', type:'btn', spec:'B 11 02', grade:'guess', cx:15.04, cy:86.11, w:3.2, h:4.6},
+  {id:'d1h3', label:'HOT3', type:'btn', spec:'B 11 04', grade:'guess', cx:19.54, cy:86.02, w:3.2, h:4.6},
+  {id:'d1h4', label:'HOT4', type:'btn', spec:'B 11 08', grade:'guess', cx:23.76, cy:86.16, w:3.2, h:4.6},
+  {id:'d1in', label:'IN', type:'btn', spec:'B 13 01', grade:'guess', cx:3.6, cy:31.8, w:2.6, h:2.6},
+  {id:'d1out', label:'OUT', type:'btn', spec:'B 13 02', grade:'guess', cx:7.1, cy:31.8, w:2.6, h:2.6},
+  {id:'d1reloop', label:'RELOOP', type:'btn', spec:'B 13 04', grade:'guess', cx:11.2, cy:31.91, w:2.6, h:2.6},
+  {id:'d1auto', label:'AUTO', type:'btn', spec:'B 13 08', grade:'guess', cx:15.1, cy:79.6, w:3.2, h:2.6},
+  {id:'d1jog', label:'JOG 1', type:'rotary', spec:null, specUp:'b 13 20', specDown:'b 13 10', grade:'guess', cx:17.12, cy:57.11, w:19.0, h:33.0, shape:'round'},
+  {id:'d1slip', label:'SLIP', type:'btn', spec:'B 19 02', grade:'guess', cx:8.3, cy:41.1, w:2.4, h:2.6},
+  {id:'d1trng', label:'TEMPO RANGE', type:'btn', spec:'B 12 08', grade:'ok', cx:30.77, cy:52.79, w:2.6, h:2.6},
+  {id:'d1tempo', label:'TEMPO1', type:'vfader-c', spec:null, specNeg:'A 04', specPos:'A 0a', grade:'guess', cx:31.0, cy:75.22, w:3.0, h:24.0, val:512},
+  {id:'d2play', label:'PLAY', type:'btn', spec:'B 20 01', grade:'guess', cx:66.92, cy:85.3, w:5.0, h:6.4, shape:'round'},
+  {id:'d2cue', label:'CUE', type:'btn', spec:'B 20 02', grade:'guess', cx:66.99, cy:74.81, w:5.0, h:6.4, shape:'round'},
+  {id:'d2sync', label:'SYNC', type:'btn', spec:'B 20 04', grade:'guess', cx:92.15, cy:46.9, w:2.6, h:3.0},
+  {id:'d2shift', label:'SHIFT', type:'btn', spec:'B 20 08', grade:'guess', cx:86.22, cy:79.73, w:3.2, h:2.6},
+  {id:'d2h1', label:'HOT1', type:'btn', spec:'B 21 01', grade:'guess', cx:73.37, cy:85.92, w:3.2, h:4.6},
+  {id:'d2h2', label:'HOT2', type:'btn', spec:'B 21 02', grade:'guess', cx:77.66, cy:86.08, w:3.2, h:4.6},
+  {id:'d2h3', label:'HOT3', type:'btn', spec:'B 21 04', grade:'guess', cx:81.85, cy:86.0, w:3.2, h:4.6},
+  {id:'d2h4', label:'HOT4', type:'btn', spec:'B 21 08', grade:'guess', cx:86.06, cy:86.32, w:3.2, h:4.6},
+  {id:'d2in', label:'IN', type:'btn', spec:'B 23 01', grade:'guess', cx:66.07, cy:32.03, w:2.6, h:2.6},
+  {id:'d2out', label:'OUT', type:'btn', spec:'B 23 02', grade:'guess', cx:69.49, cy:31.87, w:2.6, h:2.6},
+  {id:'d2reloop', label:'RELOOP', type:'btn', spec:'B 23 04', grade:'guess', cx:73.51, cy:32.0, w:2.6, h:2.6},
+  {id:'d2auto', label:'AUTO', type:'btn', spec:'B 23 08', grade:'guess', cx:77.6, cy:79.85, w:3.2, h:2.6},
+  {id:'d2jog', label:'JOG 2', type:'rotary', spec:null, specUp:'b 23 20', specDown:'b 23 10', grade:'guess', cx:79.9, cy:57.18, w:19.0, h:33.0, shape:'round'},
+  {id:'d2slip', label:'SLIP', type:'btn', spec:null, grade:'un', cx:70.7, cy:41.1, w:2.4, h:2.6},
+  {id:'d2trng', label:'TEMPO RANGE', type:'btn', spec:'B 22 08', grade:'ok', cx:93.44, cy:53.26, w:2.6, h:2.6},
+  {id:'d2tempo', label:'TEMPO2', type:'vfader-c', spec:null, specNeg:'A 14', specPos:'A 1a', grade:'guess', cx:93.38, cy:75.29, w:3.0, h:24.0, val:512},
+  {id:'d1_call_l', label:'CALL◄', type:'btn', spec:null, grade:'un', cx:16.0, cy:32.12, w:2.2, h:2.4},
+  {id:'d2_call_l', label:'CALL◄', type:'btn', spec:null, grade:'un', cx:78.38, cy:32.25, w:2.2, h:2.4},
+  {id:'d1_call_r', label:'CALL►', type:'btn', spec:null, grade:'un', cx:18.53, cy:32.22, w:2.2, h:2.4},
+  {id:'d2_call_r', label:'CALL►', type:'btn', spec:null, grade:'un', cx:81.02, cy:32.32, w:2.2, h:2.4},
+  {id:'d1_delete', label:'DELETE', type:'btn', spec:null, grade:'un', cx:21.62, cy:31.95, w:2.6, h:2.4},
+  {id:'d2_delete', label:'DELETE', type:'btn', spec:null, grade:'un', cx:84.26, cy:31.87, w:2.6, h:2.4},
+  {id:'d1_memory', label:'MEMORY', type:'btn', spec:null, grade:'un', cx:24.59, cy:32.04, w:2.8, h:2.4},
+  {id:'d2_memory', label:'MEMORY', type:'btn', spec:null, grade:'un', cx:87.04, cy:31.99, w:2.8, h:2.4},
+  {id:'d1_vinyladj', label:'VINYL ADJ', type:'knob', spec:null, grade:'un', cx:30.79, cy:32.24, w:3.0, h:3.8, val:512},
+  {id:'d2_vinyladj', label:'VINYL ADJ', type:'knob', spec:null, grade:'un', cx:93.38, cy:32.06, w:3.0, h:3.8, val:512},
+  {id:'d1_tsL', label:'TRK◄', type:'btn', spec:null, grade:'un', cx:2.73, cy:49.52, w:2.2, h:2.4},
+  {id:'d2_tsL', label:'TRK◄', type:'btn', spec:null, grade:'un', cx:65.25, cy:49.7, w:2.2, h:2.4},
+  {id:'d1_tsR', label:'TRK►', type:'btn', spec:null, grade:'un', cx:4.94, cy:49.74, w:2.2, h:2.4},
+  {id:'d2_tsR', label:'TRK►', type:'btn', spec:null, grade:'un', cx:67.75, cy:49.7, w:2.2, h:2.4},
+  {id:'d1_srchL', label:'SRCH◄', type:'btn', spec:null, grade:'un', cx:2.85, cy:56.5, w:2.2, h:2.4},
+  {id:'d2_srchL', label:'SRCH◄', type:'btn', spec:null, grade:'un', cx:65.25, cy:56.5, w:2.2, h:2.4},
+  {id:'d1_srchR', label:'SRCH►', type:'btn', spec:null, grade:'un', cx:5.02, cy:56.55, w:2.2, h:2.4},
+  {id:'d2_srchR', label:'SRCH►', type:'btn', spec:null, grade:'un', cx:67.75, cy:56.5, w:2.2, h:2.4},
+  {id:'d1_rev', label:'REV', type:'btn', spec:null, grade:'un', cx:3.75, cy:41.1, w:2.6, h:2.6},
+  {id:'d2_rev', label:'REV', type:'btn', spec:null, grade:'un', cx:66.15, cy:41.1, w:2.6, h:2.6},
+  {id:'d1_jogmode', label:'JOG MODE', type:'btn', spec:null, grade:'un', cx:30.85, cy:40.2, w:3.0, h:2.6},
+  {id:'d2_jogmode', label:'JOG MODE', type:'btn', spec:null, grade:'un', cx:93.25, cy:40.2, w:3.0, h:2.6},
+  {id:'d1_syncmaster', label:'MASTER', type:'btn', spec:null, grade:'un', cx:32.2, cy:46.84, w:2.4, h:3.0},
+  {id:'d2_syncmaster', label:'MASTER', type:'btn', spec:null, grade:'un', cx:94.8, cy:46.8, w:2.4, h:3.0},
+  {id:'d1_mastertempo', label:'M.TEMPO', type:'btn', spec:null, grade:'un', cx:30.94, cy:58.07, w:2.6, h:2.6},
+  {id:'d2_mastertempo', label:'M.TEMPO', type:'btn', spec:null, grade:'un', cx:93.22, cy:58.33, w:2.6, h:2.6},
+  {id:'d1_hotcuemode', label:'HOT CUE', type:'btn', spec:null, grade:'un', cx:10.75, cy:79.6, w:3.2, h:2.6},
+  {id:'d2_hotcuemode', label:'HOT CUE', type:'btn', spec:null, grade:'un', cx:73.39, cy:79.84, w:3.2, h:2.6},
+  {id:'d1_loopslice', label:'LOOP SLICE', type:'btn', spec:null, grade:'un', cx:19.47, cy:79.76, w:3.4, h:2.6},
+  {id:'d2_loopslice', label:'LOOP SLICE', type:'btn', spec:null, grade:'un', cx:81.87, cy:79.78, w:3.4, h:2.6},
+  {id:'trim1', label:'TRIM1', type:'knob', spec:null, grade:'un', cx:42.76, cy:35.33, w:3.0, h:3.8, val:512},
+  {id:'trim2', label:'TRIM2', type:'knob', spec:null, grade:'un', cx:54.35, cy:35.17, w:3.0, h:3.8, val:512},
+  {id:'color1', label:'COLOR1', type:'knob', spec:null, grade:'un', cx:42.77, cy:62.45, w:3.0, h:3.8, val:512},
+  {id:'color2', label:'COLOR2', type:'knob', spec:null, grade:'un', cx:54.19, cy:62.43, w:3.0, h:3.8, val:512},
+  {id:'scfx_noise', label:'NOISE', type:'btn', spec:null, grade:'un', cx:36.85, cy:50.3, w:3.2, h:2.4},
+  {id:'scfx_gate', label:'GATE', type:'btn', spec:null, grade:'un', cx:36.95, cy:53.88, w:3.2, h:2.4},
+  {id:'scfx_crush', label:'CRUSH', type:'btn', spec:null, grade:'un', cx:36.79, cy:57.52, w:3.2, h:2.4},
+  {id:'scfx_filter', label:'FILTER', type:'btn', spec:null, grade:'un', cx:36.82, cy:61.08, w:3.2, h:2.4},
+  {id:'hp_mix', label:'HP MIX', type:'knob', spec:null, grade:'un', cx:36.88, cy:69.28, w:3.0, h:3.8, val:512},
+  {id:'hp_lvl', label:'HP LVL', type:'knob', spec:null, grade:'un', cx:36.83, cy:76.77, w:3.0, h:3.8, val:512},
+  {id:'xfcurve', label:'XF CURVE', type:'btn', spec:null, grade:'un', cx:48.53, cy:81.69, w:3.0, h:2.2},
+  {id:'fxtime', label:'TIME', type:'knob', spec:null, grade:'un', cx:60.11, cy:69.14, w:3.0, h:3.8, val:512},
+  {id:'booth', label:'BOOTH', type:'knob', spec:null, grade:'un', cx:76.81, cy:20.56, w:3.0, h:3.8, val:512},
+  {id:'masterlvl', label:'MASTER LVL', type:'knob', spec:null, grade:'un', cx:82.41, cy:20.38, w:3.0, h:3.8, val:512},
+  {id:'deck1src', label:'D1 SRC', type:'btn', spec:null, grade:'un', cx:37.96, cy:35.07, w:2.4, h:2.4},
+  {id:'deck2src', label:'D2 SRC', type:'btn', spec:null, grade:'un', cx:58.8, cy:35.04, w:2.4, h:2.4},
+  {id:'mic1', label:'MIC1', type:'knob', spec:null, grade:'un', cx:9.12, cy:20.38, w:3.0, h:3.8, val:512},
+  {id:'mic2', label:'MIC2', type:'knob', spec:null, grade:'un', cx:13.24, cy:20.42, w:3.0, h:3.8, val:512},
+  {id:'miceqhi', label:'MIC HI', type:'knob', spec:null, grade:'un', cx:17.07, cy:20.31, w:3.0, h:3.8, val:512},
+  {id:'miceqlow', label:'MIC LOW', type:'knob', spec:null, grade:'un', cx:21.06, cy:20.54, w:3.0, h:3.8, val:512},
+  {id:'micsw', label:'MIC SW', type:'btn', spec:null, grade:'un', cx:26.74, cy:20.11, w:3.0, h:2.4},
 ];
 
 // ---- state ----------------------------------------------------------------
@@ -208,9 +252,12 @@ function build(){
   Object.values(els).forEach(e=>e.remove());
   for(const c of CTRLS){
     const el=document.createElement('div');
-    el.className='hs '+(c.shape==='round'?'round ':'')+(c.spec?'mapped':'unmapped');
-    el.dataset.id=c.id; el.textContent=c.label; place(el,c); el.title=c.label+(c.spec?('  ['+c.spec+']'):'  (unmapped)');
-    if(c.type==='vfader'||c.type==='hfader'){ el.classList.add('track');
+    const mapped = !!(c.spec||c.specUp||c.specNeg);
+    el.className='hs '+(c.shape==='round'?'round ':'')+(mapped?'mapped':'unmapped');
+    el.dataset.id=c.id; el.textContent=c.label; place(el,c);
+    el.title=c.label+(mapped?('  ['+(c.spec||(c.specUp+' / '+c.specDown))+']'):'  (unmapped)');
+    if(c.type==='vfader'||c.type==='hfader'||c.type==='vfader-c'){ el.classList.add('track');
+      if(c.type==='vfader-c'){ const t=document.createElement('div'); t.className='ctick'; el.appendChild(t); }
       const fill=document.createElement('div'); fill.className='fill'; el.appendChild(fill); el._fill=fill; drawFill(c,el); }
     stage.appendChild(el); els[c.id]=el; wire(el,c);
   }
@@ -218,8 +265,11 @@ function build(){
 }
 function drawFill(c,el){
   const v=(c.val==null?512:c.val)/1023;
-  if(c.type==='vfader'){ el._fill.style.left='30%'; el._fill.style.width='40%';
-    el._fill.style.bottom='0'; el._fill.style.height=(v*100).toFixed(1)+'%'; }
+  if(c.type==='vfader-c'){ // centered pitch fader: handle bar at position (top=−, bottom=+)
+    el._fill.style.left='6%'; el._fill.style.width='88%'; el._fill.style.height='5%';
+    el._fill.style.bottom='auto'; el._fill.style.top='calc('+(v*100).toFixed(1)+'% - 2.5%)'; }
+  else if(c.type==='vfader'){ el._fill.style.left='30%'; el._fill.style.width='40%';
+    el._fill.style.top='auto'; el._fill.style.bottom='0'; el._fill.style.height=(v*100).toFixed(1)+'%'; }
   else { el._fill.style.top='25%'; el._fill.style.height='50%';
     el._fill.style.left='0'; el._fill.style.width=(v*100).toFixed(1)+'%'; }
 }
@@ -244,14 +294,41 @@ function wire(el,c){
     // normal mode
     if(c.type==='btn'){ if(!c.spec){ log('· '+c.label+' — unmapped (no frame code yet)'); return; }
       el.classList.add('down'); ctrl(c.spec); log('▸ '+c.label+'  '+c.spec); }
+    else if(c.type==='rotary'){ // rotary encoder: spin -> one-shot step pulses
+      if(!c.specUp){ log('· '+c.label+' — unmapped'); return; }
+      const r=el.getBoundingClientRect(), cx0=r.left+r.width/2, cy0=r.top+r.height/2;
+      let last=Math.atan2(e.clientY-cy0,e.clientX-cx0), acc=0, lastPulse=0, steps=0;
+      const STEP=0.26;
+      const mv=ev=>{ let a=Math.atan2(ev.clientY-cy0,ev.clientX-cx0), d=a-last;
+        if(d>Math.PI)d-=2*Math.PI; if(d<-Math.PI)d+=2*Math.PI; last=a; acc+=d;
+        const now=performance.now();
+        while(acc>STEP){ acc-=STEP; if(now-lastPulse>35){ ctrl(c.specUp); lastPulse=now; steps++; } }
+        while(acc<-STEP){ acc+=STEP; if(now-lastPulse>35){ ctrl(c.specDown); lastPulse=now; steps--; } } };
+      const up=()=>{ document.removeEventListener('pointermove',mv); document.removeEventListener('pointerup',up);
+        if(steps) log('↻ '+c.label+'  '+(steps>0?'+':'')+steps+' step'+(Math.abs(steps)>1?'s':'')); };
+      document.addEventListener('pointermove',mv); document.addEventListener('pointerup',up);
+    }
+    else if(c.type==='vfader-c'){ // centre-detent pitch fader: complementary dual field
+      const setFromEvent=ev=>{ const r=el.getBoundingClientRect(); const pos=clamp((pt(ev).y-r.top)/r.height,0,1);
+        c.val=Math.round(pos*1023); drawFill(c,el);            // handle follows finger (top=−, bottom=+)
+        const pct=Math.round((pos-0.5)*200);                   // −100…+100 % of selected tempo range
+        const hi=Math.round(pos*1023), lo=1023-hi;             // specPos=hi (+side), specNeg=lo (−side)
+        if(c.specNeg && c.specPos) ctrl(c.specNeg+' '+lo.toString(16)+'\n'+c.specPos+' '+hi.toString(16));
+        el.title=c.label+'  '+(pct>0?'+':'')+pct+'% of range';
+      };
+      setFromEvent(e);
+      const mv=ev=>setFromEvent(ev);
+      const up=()=>{ document.removeEventListener('pointermove',mv); document.removeEventListener('pointerup',up); };
+      document.addEventListener('pointermove',mv); document.addEventListener('pointerup',up);
+    }
     else { // fader/knob: drag sets value
       const setFromEvent=ev=>{ const r=el.getBoundingClientRect(); const q=pt(ev); let v;
         if(c.type==='vfader'){ v=1-(q.y-r.top)/r.height; }
         else if(c.type==='hfader'){ v=(q.x-r.left)/r.width; }
-        else { // knob: vertical drag over the element
-          v=1-(q.y-r.top)/r.height; }
+        else { v=1-(q.y-r.top)/r.height; } // knob: vertical drag
         v=clamp(Math.round(v*1023),0,1023); c.val=v; drawFill(c,el);
         if(c.spec) ctrl(c.spec+' '+v.toString(16));
+        el.title=c.label;
       };
       setFromEvent(e);
       const mv=ev=>setFromEvent(ev);

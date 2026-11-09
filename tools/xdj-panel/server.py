@@ -173,11 +173,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(n).decode("utf-8", "replace") if n else ""
         path = self.path.split("?", 1)[0]
         if path == "/ctrl":
-            spec = body.strip().replace("\n", " ")
-            if spec:
+            # one spec per line; multiple lines = simultaneous holds (e.g. a tempo
+            # fader driving both its complementary frame fields at once).
+            lines = [ln.strip() for ln in body.strip().split("\n") if ln.strip()]
+            if lines:
                 try:
                     with open(CTRL, "w") as f:
-                        f.write(spec + "\n")
+                        f.write("\n".join(lines) + "\n")
                     self._send(200, "text/plain", b"ok")
                 except Exception as e:
                     self._send(500, "text/plain", str(e).encode())
