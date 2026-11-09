@@ -24,6 +24,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(HERE, "assets")
 CAL = os.path.join(ASSETS, "calibration.json")
 CTRL = "/tmp/subucom_ctrl"
+MAINKEY = "/tmp/mainkey"        # MAIN-UCOM direct-key GPIO (USB1/USB2/rekordbox/MIDI)
 MON = "/tmp/d_mon4.sock"
 PPM = "/tmp/xdjpanel_fb.ppm"
 
@@ -188,6 +189,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/release":
             try:
                 os.remove(CTRL)
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                self._send(500, "text/plain", str(e).encode())
+                return
+            self._send(200, "text/plain", b"ok")
+        elif path == "/mainkey":
+            # MAIN-UCOM direct GPIO key: body = Linux GPIO number. The QEMU hook
+            # drives that pin LOW (pressed) while /tmp/mainkey holds the number.
+            g = body.strip()
+            if g.lstrip("-").isdigit():
+                try:
+                    with open(MAINKEY, "w") as f:
+                        f.write(g + "\n")
+                    self._send(200, "text/plain", b"ok")
+                except Exception as e:
+                    self._send(500, "text/plain", str(e).encode())
+            else:
+                self._send(400, "text/plain", b"bad gpio")
+        elif path == "/mainkey_release":
+            try:
+                os.remove(MAINKEY)
             except FileNotFoundError:
                 pass
             except Exception as e:

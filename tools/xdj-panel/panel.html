@@ -117,10 +117,10 @@ const CTRLS0 = [
   {id:'quant', label:'QUANTIZE', type:'btn', spec:'B 19 01', grade:'guess', cx:62.5, cy:8.08, w:3.6, h:2.4},
   {id:'deck12', label:'DECK1/2', type:'btn', spec:null, grade:'un', cx:62.67, cy:12.03, w:3.6, h:2.4},
   {id:'timemd', label:'TIME MODE', type:'btn', spec:null, grade:'un', cx:62.67, cy:16.5, w:3.6, h:2.4},
-  {id:'src_rb', label:'rekordbox', type:'btn', spec:null, grade:'un', cx:34.66, cy:7.98, w:4.3, h:2.4},
-  {id:'src_midi', label:'MIDI', type:'btn', spec:null, grade:'un', cx:34.3, cy:12.2, w:4.3, h:2.4},
-  {id:'src_usb1', label:'USB1 src', type:'btn', spec:null, grade:'un', cx:34.45, cy:16.32, w:4.3, h:2.4},
-  {id:'src_usb2', label:'USB2 src', type:'btn', spec:null, grade:'un', cx:34.47, cy:20.84, w:4.3, h:2.4},
+  {id:'src_rb', label:'rekordbox', type:'btn', gpio:159, grade:'ok', cx:34.66, cy:7.98, w:4.3, h:2.4},
+  {id:'src_midi', label:'MIDI', type:'btn', gpio:161, grade:'ok', cx:34.3, cy:12.2, w:4.3, h:2.4},
+  {id:'src_usb1', label:'USB1 src', type:'btn', gpio:160, grade:'ok', cx:34.45, cy:16.32, w:4.3, h:2.4},
+  {id:'src_usb2', label:'USB2 src', type:'btn', gpio:158, grade:'ok', cx:34.47, cy:20.84, w:4.3, h:2.4},
   {id:'usb1stop', label:'USB1 STOP', type:'btn', spec:null, grade:'un', cx:3.7, cy:23.62, w:3.6, h:2.4},
   {id:'usb2stop', label:'USB2 STOP', type:'btn', spec:null, grade:'un', cx:93.42, cy:23.21, w:3.6, h:2.4},
   {id:'mrec', label:'MASTER REC', type:'btn', spec:null, grade:'un', cx:88.32, cy:16.93, w:3.4, h:2.4},
@@ -241,21 +241,25 @@ function log(m){ const t=new Date().toLocaleTimeString();
 async function post(p,b){ try{ await fetch(p,{method:'POST',body:b||''});}catch(e){ log('POST '+p+' failed'); } }
 function ctrl(spec){ post('/ctrl',spec); }
 function release(){ post('/release'); }
+// MAIN-UCOM direct GPIO keys (USB1/USB2/rekordbox/MIDI) go through a separate
+// channel (/tmp/mainkey) -- they are NOT subucom frame controls.
+function mainkey(n){ post('/mainkey',String(n)); }
+function mainkeyRelease(){ post('/mainkey_release'); }
 
 // ---- build hotspots -------------------------------------------------------
 const els = {};
 function place(el,c){ el.style.left=c.cx+'%'; el.style.top=c.cy+'%';
   el.style.width=c.w+'%'; el.style.height=c.h+'%'; }
-function gradeClass(c){ return c.spec? (c.grade==='ok'?'mapped':'mapped') : 'unmapped'; }
+function gradeClass(c){ return (c.spec||c.gpio)? 'mapped' : 'unmapped'; }
 
 function build(){
   Object.values(els).forEach(e=>e.remove());
   for(const c of CTRLS){
     const el=document.createElement('div');
-    const mapped = !!(c.spec||c.specUp||c.specNeg);
+    const mapped = !!(c.spec||c.specUp||c.specNeg||c.gpio);
     el.className='hs '+(c.shape==='round'?'round ':'')+(mapped?'mapped':'unmapped');
     el.dataset.id=c.id; el.textContent=c.label; place(el,c);
-    el.title=c.label+(mapped?('  ['+(c.spec||(c.specUp+' / '+c.specDown))+']'):'  (unmapped)');
+    el.title=c.label+(mapped?('  ['+(c.spec||(c.gpio?('gpio '+c.gpio):(c.specUp+' / '+c.specDown)))+']'):'  (unmapped)');
     if(c.type==='vfader'||c.type==='hfader'||c.type==='vfader-c'){ el.classList.add('track');
       if(c.type==='vfader-c'){ const t=document.createElement('div'); t.className='ctick'; el.appendChild(t); }
       const fill=document.createElement('div'); fill.className='fill'; el.appendChild(fill); el._fill=fill; drawFill(c,el); }
@@ -292,7 +296,9 @@ function wire(el,c){
       return;
     }
     // normal mode
-    if(c.type==='btn'){ if(!c.spec){ log('· '+c.label+' — unmapped (no frame code yet)'); return; }
+    if(c.type==='btn'){
+      if(c.gpio){ el.classList.add('down'); mainkey(c.gpio); log('▸ '+c.label+'  gpio '+c.gpio+' (MAIN-UCOM)'); return; }
+      if(!c.spec){ log('· '+c.label+' — unmapped (no frame code yet)'); return; }
       el.classList.add('down'); ctrl(c.spec); log('▸ '+c.label+'  '+c.spec); }
     else if(c.type==='rotary'){ // rotary encoder: spin -> one-shot step pulses
       if(!c.specUp){ log('· '+c.label+' — unmapped'); return; }
@@ -338,6 +344,7 @@ function wire(el,c){
     }
   };
   const onUp=()=>{ if(calib) return;
+    if(c.type==='btn' && c.gpio){ el.classList.remove('down'); mainkeyRelease(); return; }
     if(c.type==='btn' && c.spec){ el.classList.remove('down'); release(); } };
   el.addEventListener('pointerdown',onDown);
   el.addEventListener('pointerup',onUp);
