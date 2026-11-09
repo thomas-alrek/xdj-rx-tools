@@ -18,12 +18,19 @@ frame: b/a = one-shot press+release ; B/A = hold while the file exists (release 
 Usage:  python3 tools/xdj-panel/server.py [--port 8765] [--mon /tmp/d_mon4.sock]
 Then open http://127.0.0.1:8765
 """
-import argparse, http.server, socketserver, socket, time, os, threading
+import argparse, http.server, socketserver, socket, time, os, threading, json
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ASSETS = os.path.join(HERE, "assets")
+CAL = os.path.join(ASSETS, "calibration.json")
 CTRL = "/tmp/subucom_ctrl"
 MON = "/tmp/d_mon4.sock"
 PPM = "/tmp/xdjpanel_fb.ppm"
+
+_CTYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+           ".webp": "image/webp", ".json": "application/json; charset=utf-8",
+           ".html": "text/html; charset=utf-8", ".css": "text/css",
+           ".js": "application/javascript"}
 
 _grab_lock = threading.Lock()
 
@@ -122,14 +129,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_file(self, relpath, base=HERE):
+        fp = os.path.normpath(os.path.join(base, relpath.lstrip("/")))
+        if not fp.startswith(os.path.normpath(base) + os.sep) and fp != os.path.normpath(base):
+            self._send(403, "text/plain", b"forbidden")
+            return
+        if not os.path.isfile(fp):
+            self._send(404, "text/plain", b"not found")
+            return
+        ctype = _CTYPES.get(os.path.splitext(fp)[1].lower(), "application/octet-stream")
+        try:
+            with open(fp, "rb") as f:
+                self._send(200, ctype, f.read())
+        except Exception as e:
+            self._send(500, "text/plain", str(e).encode())
+
     def do_GET(self):
         path = self.path.split("?", 1)[0]
-        if path in ("/", "/index.html"):
-            try:
-                with open(os.path.join(HERE, "index.html"), "rb") as f:
-                    self._send(200, "text/html; charset=utf-8", f.read())
-            except Exception as e:
-                self._send(500, "text/plain", str(e).encode())
+        if path in ("/", "/panel.html"):
+            self._send_file("panel.html")
+        elif path in ("/grid", "/index.html"):
+            self._send_file("index.html")
+        elif path.startswith("/assets/"):
+            self._send_file(path[len("/assets/"):], base=ASSETS)
+        elif path == "/cal":
+            if os.path.isfile(CAL):
+                self._send_file("calibration.json", base=ASSETS)
+            else:
+                self._send(404, "application/json", b"{}")
         elif path == "/raw":
             fb = grab_raw()
             if fb:
@@ -165,6 +192,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send(500, "text/plain", str(e).encode())
                 return
             self._send(200, "text/plain", b"ok")
+        elif path == "/savecal":
+            try:
+                json.loads(body)                       # validate
+                os.makedirs(ASSETS, exist_ok=True)
+                with open(CAL, "w") as f:
+                    f.write(body)
+                self._send(200, "text/plain", b"saved")
+            except Exception as e:
+                self._send(400, "text/plain", str(e).encode())
         else:
             self._send(404, "text/plain", b"not found")
 

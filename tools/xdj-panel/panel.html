@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XDJ-RX panel</title>
+<style>
+  :root{ --bg:#0c0e11; --ink:#e8ebf0; --dim:#9aa3af; --ok:#39d98a; --guess:#e0a63a;
+         --red:#e5484d; --accent:#39b3ff; --edge:#2b2f36; --panel:#16181d; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .bar{display:flex;align-items:center;gap:12px;padding:8px 14px;background:var(--panel);
+    border-bottom:1px solid var(--edge);position:sticky;top:0;z-index:50;flex-wrap:wrap}
+  .bar h1{font-size:14px;margin:0;letter-spacing:.5px;font-weight:700}
+  .bar .sp{flex:1}
+  .btn{appearance:none;border:1px solid var(--edge);background:#1e2127;color:var(--ink);
+    border-radius:7px;padding:7px 11px;font-size:12px;font-weight:600;cursor:pointer}
+  .btn:hover{border-color:#3a414b}
+  .btn.on{background:#1c3a4d;border-color:#2a6b8f;color:#bfe3ff}
+  .btn.red{background:#3a1e1f;border-color:#6b2e30;color:#ffb4b6}
+  .conn{font-size:11px;padding:3px 9px;border-radius:20px;border:1px solid var(--edge);color:var(--red)}
+  .conn.up{color:var(--ok);border-color:#2a6b4f}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .hint{color:var(--dim);font-size:11px}
+  .stage-wrap{max-width:1240px;margin:0 auto;padding:14px}
+  #stage{position:relative;width:100%;user-select:none;-webkit-user-select:none}
+  #stage img#device{display:block;width:100%;height:auto;pointer-events:none}
+  #noimg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    background:#111;border:1px dashed #444;border-radius:8px;text-align:center;padding:24px}
+  /* live screen */
+  #screen{position:absolute;background:#000;image-rendering:auto;}
+  /* hotspots */
+  .hs{position:absolute;transform:translate(-50%,-50%);border-radius:7px;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;
+    color:transparent;text-align:center;line-height:1;overflow:hidden;
+    border:1px solid transparent;background:transparent;transition:background .05s,border-color .05s}
+  .hs.round{border-radius:50%}
+  .hs:hover{background:rgba(57,179,255,.16);border-color:rgba(57,179,255,.5)}
+  .hs.down{background:rgba(57,217,138,.42)!important;border-color:var(--ok)!important}
+  .hs.track{background:rgba(57,179,255,.05)}         /* faders show a faint track */
+  .hs .fill{position:absolute;background:rgba(57,179,255,.55);pointer-events:none;border-radius:4px}
+  /* calibration */
+  body.cal .hs{border-color:rgba(224,166,58,.9);background:rgba(224,166,58,.14);
+    color:#1a1407;font-size:8px;cursor:move}
+  body.cal .hs.mapped{border-color:rgba(57,217,138,.9);background:rgba(57,217,138,.16)}
+  body.cal .hs.unmapped{border-color:rgba(229,72,77,.9);background:rgba(229,72,77,.16)}
+  body.cal #screen{outline:2px dashed var(--accent);cursor:move}
+  #calhandle{position:absolute;width:16px;height:16px;right:-8px;bottom:-8px;background:var(--accent);
+    border-radius:3px;cursor:nwse-resize;display:none}
+  body.cal #calhandle{display:block}
+  #log{max-width:1240px;margin:0 auto;padding:0 14px 20px}
+  #logbox{height:92px;overflow:auto;background:#0b0d10;border:1px solid var(--edge);border-radius:6px;
+    padding:6px 8px;font:11px/1.4 ui-monospace,Menlo,monospace;color:#b9c2cc;white-space:pre-wrap}
+  .legend{display:flex;gap:16px;color:var(--dim);font-size:11px;margin:6px 2px}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:5px;vertical-align:middle}
+  .dot.ok{background:var(--ok)} .dot.guess{background:var(--guess)} .dot.un{background:var(--red)}
+</style>
+</head>
+<body>
+<div class="bar">
+  <h1>XDJ-RX · panel</h1>
+  <span id="conn" class="conn">screen: …</span>
+  <span id="fps" class="mono hint"></span>
+  <span class="sp"></span>
+  <span id="calhint" class="hint">Tip: press <b>C</b> or “Calibrate” to drag controls onto the photo, then Save.</span>
+  <button class="btn" id="bcal">Calibrate</button>
+  <button class="btn" id="bsave" style="display:none">Save layout</button>
+  <button class="btn" id="breset" style="display:none">Reset</button>
+  <button class="btn red" id="brel">Release all</button>
+</div>
+
+<div class="stage-wrap">
+  <div id="stage">
+    <img id="device" src="/assets/xdj-rx.png" alt="XDJ-RX"
+         onerror="document.getElementById('noimg').style.display='flex'">
+    <div id="noimg" style="display:none">
+      <div><b>Device image missing.</b><br>
+      Save your XDJ-RX photo to<br>
+      <span class="mono">tools/xdj-panel/assets/xdj-rx.png</span><br>then reload.</div>
+    </div>
+    <canvas id="screen" width="800" height="480"></canvas>
+    <div id="calhandle"></div>
+    <!-- hotspots injected here -->
+  </div>
+</div>
+
+<div id="log">
+  <div class="legend">
+    <span><span class="dot ok"></span>verified code</span>
+    <span><span class="dot guess"></span>best-guess code</span>
+    <span><span class="dot un"></span>unmapped (click logs it)</span>
+  </div>
+  <div id="logbox"></div>
+</div>
+
+<script>
+// ---- control layout (percentages of the device image) --------------------
+// cx,cy = centre %, w,h = size %. type: btn | vfader | hfader | knob.
+// spec: "B off bit" (button) or "A off" (analog) in hex; null = unmapped.
+// grade: ok=verified, guess=unverified, un=unmapped.
+const SCREEN0 = { x:36.5, y:5.4, w:22.5, h:20.3 };
+const CTRLS0 = [
+  // --- centre / browser-nav ---
+  {id:'browse', label:'BROWSE',  type:'btn', spec:'B 16 01', grade:'guess', cx:39.8, cy:29.5, w:3.6, h:2.4},
+  {id:'taglist',label:'TAG LIST',type:'btn', spec:'B 16 04', grade:'guess', cx:45.3, cy:29.5, w:3.6, h:2.4},
+  {id:'info',   label:'INFO',    type:'btn', spec:null,      grade:'un',    cx:50.8, cy:29.5, w:3.4, h:2.4},
+  {id:'menu',   label:'MENU',    type:'btn', spec:null,      grade:'un',    cx:56.4, cy:29.5, w:3.4, h:2.4},
+  {id:'back',   label:'BACK',    type:'btn', spec:'B 16 02', grade:'guess', cx:47.0, cy:36.4, w:2.6, h:3.0},
+  {id:'tagtrk', label:'TAG TRK', type:'btn', spec:null,      grade:'un',    cx:49.9, cy:36.4, w:2.0, h:3.0},
+  {id:'enc',    label:'PUSH',    type:'btn', spec:'B 17 02', grade:'guess', cx:48.4, cy:45.2, w:4.6, h:7.6, shape:'round'},
+  {id:'encL',   label:'ROT−',    type:'btn', spec:'B 17 01', grade:'guess', cx:45.4, cy:45.2, w:1.5, h:2.4},
+  {id:'encR',   label:'ROT+',    type:'btn', spec:'B 17 04', grade:'guess', cx:51.4, cy:45.2, w:1.5, h:2.4},
+  {id:'loadL',  label:'◄LOAD',   type:'btn', spec:'B 18 01', grade:'guess', cx:44.0, cy:52.0, w:2.2, h:2.6},
+  {id:'loadR',  label:'LOAD►',   type:'btn', spec:'B 18 02', grade:'guess', cx:51.7, cy:52.0, w:2.2, h:2.6},
+  {id:'quant',  label:'QUANTIZE',type:'btn', spec:'B 19 01', grade:'guess', cx:62.9, cy:8.2,  w:3.6, h:2.4},
+  {id:'deck12', label:'DECK1/2', type:'btn', spec:null,      grade:'un',    cx:62.9, cy:12.0, w:3.6, h:2.4},
+  {id:'timemd', label:'TIME MODE',type:'btn',spec:null,      grade:'un',    cx:62.9, cy:16.5, w:3.6, h:2.4},
+  // --- source select (left of screen) ---
+  {id:'src_rb', label:'rekordbox',type:'btn',spec:null,      grade:'un',    cx:34.3, cy:8.6,  w:4.3, h:2.4},
+  {id:'src_midi',label:'MIDI',   type:'btn', spec:null,      grade:'un',    cx:34.3, cy:12.2, w:4.3, h:2.4},
+  {id:'src_usb1',label:'USB1 src',type:'btn',spec:null,      grade:'un',    cx:34.3, cy:16.1, w:4.3, h:2.4},
+  {id:'src_usb2',label:'USB2 src',type:'btn',spec:null,      grade:'un',    cx:34.3, cy:19.9, w:4.3, h:2.4},
+  // --- USB STOP (subucom? to discover) ---
+  {id:'usb1stop',label:'USB1 STOP',type:'btn',spec:null,     grade:'un',    cx:2.7,  cy:21.7, w:3.6, h:2.4},
+  {id:'usb2stop',label:'USB2 STOP',type:'btn',spec:null,     grade:'un',    cx:97.3, cy:21.7, w:3.6, h:2.4},
+  {id:'mrec',   label:'MASTER REC',type:'btn',spec:null,     grade:'un',    cx:87.8, cy:16.3, w:3.4, h:2.4},
+  {id:'tmark',  label:'TRACK MARK',type:'btn',spec:null,     grade:'un',    cx:87.8, cy:21.7, w:3.4, h:2.4},
+  // --- mixer analog ---
+  {id:'eq_hi1', label:'HI1', type:'knob', spec:'A 46', grade:'guess', cx:42.4, cy:40.1, w:3.2, h:3.8, val:512},
+  {id:'eq_mid1',label:'MID1',type:'knob', spec:'A 48', grade:'guess', cx:42.4, cy:47.3, w:3.2, h:3.8, val:512},
+  {id:'eq_low1',label:'LOW1',type:'knob', spec:'A 4a', grade:'guess', cx:42.4, cy:54.6, w:3.2, h:3.8, val:512},
+  {id:'eq_hi2', label:'HI2', type:'knob', spec:'A 50', grade:'guess', cx:54.4, cy:40.1, w:3.2, h:3.8, val:512},
+  {id:'eq_mid2',label:'MID2',type:'knob', spec:'A 52', grade:'guess', cx:54.4, cy:47.3, w:3.2, h:3.8, val:512},
+  {id:'eq_low2',label:'LOW2',type:'knob', spec:'A 4e', grade:'guess', cx:54.4, cy:54.6, w:3.2, h:3.8, val:512},
+  {id:'ch1',    label:'CH1', type:'vfader',spec:'A 44', grade:'guess', cx:41.6, cy:75.3, w:3.0, h:15.0, val:0},
+  {id:'ch2',    label:'CH2', type:'vfader',spec:'A 4c', grade:'guess', cx:55.0, cy:75.3, w:3.0, h:15.0, val:0},
+  {id:'xf',     label:'CROSSFADER',type:'hfader',spec:'A 4a',grade:'guess',cx:47.8, cy:90.8, w:11.0, h:3.4, val:512},
+  {id:'cue1',   label:'CUE1',type:'btn', spec:'B 4c 01', grade:'guess', cx:45.8, cy:83.7, w:2.4, h:2.4},
+  {id:'cue2',   label:'CUE2',type:'btn', spec:'B 4c 02', grade:'guess', cx:50.8, cy:83.7, w:2.4, h:2.4},
+  // --- beat fx ---
+  {id:'beatL',  label:'BEAT◄',type:'btn', spec:'B 56 01', grade:'guess', cx:59.1, cy:42.6, w:2.2, h:2.4},
+  {id:'beatR',  label:'BEAT►',type:'btn', spec:'B 56 02', grade:'guess', cx:61.4, cy:42.6, w:2.2, h:2.4},
+  {id:'fxtap',  label:'TAP', type:'btn', spec:'B 5b 08', grade:'ok',    cx:60.2, cy:48.4, w:3.4, h:4.0, shape:'round'},
+  {id:'fxsel_l',label:'SEL◄',type:'btn', spec:'B 5a 01', grade:'guess', cx:59.1, cy:55.0, w:2.0, h:2.4},
+  {id:'fxsel_r',label:'SEL►',type:'btn', spec:'B 5a 04', grade:'guess', cx:61.4, cy:55.0, w:2.0, h:2.4},
+  {id:'fxch',   label:'CH SEL',type:'btn',spec:'B 5a 20', grade:'guess', cx:60.2, cy:59.2, w:3.6, h:4.4, shape:'round'},
+  {id:'fxlev',  label:'FX LVL',type:'knob',spec:'A 54',  grade:'guess', cx:60.2, cy:74.5, w:3.2, h:3.8, val:512},
+  {id:'fxon',   label:'ON/OFF',type:'btn',spec:'B 5b 04', grade:'ok',    cx:60.2, cy:83.7, w:3.6, h:4.4, shape:'round'},
+  // --- deck 1 ---
+  {id:'d1play', label:'PLAY', type:'btn', spec:'B 10 01', grade:'guess', cx:4.6,  cy:85.4, w:5.0, h:6.4, shape:'round'},
+  {id:'d1cue',  label:'CUE',  type:'btn', spec:'B 10 02', grade:'guess', cx:4.6,  cy:74.9, w:5.0, h:6.4, shape:'round'},
+  {id:'d1sync', label:'SYNC', type:'btn', spec:'B 10 04', grade:'guess', cx:29.8, cy:46.8, w:2.6, h:3.0},
+  {id:'d1shift',label:'SHIFT',type:'btn', spec:'B 10 08', grade:'guess', cx:22.9, cy:79.6, w:3.2, h:2.6},
+  {id:'d1h1',   label:'HOT1', type:'btn', spec:'B 11 01', grade:'guess', cx:10.8, cy:84.8, w:3.2, h:4.6},
+  {id:'d1h2',   label:'HOT2', type:'btn', spec:'B 11 02', grade:'guess', cx:14.5, cy:84.8, w:3.2, h:4.6},
+  {id:'d1h3',   label:'HOT3', type:'btn', spec:'B 11 04', grade:'guess', cx:18.3, cy:84.8, w:3.2, h:4.6},
+  {id:'d1h4',   label:'HOT4', type:'btn', spec:'B 11 08', grade:'guess', cx:22.1, cy:84.8, w:3.2, h:4.6},
+  {id:'d1in',   label:'IN',   type:'btn', spec:'B 13 01', grade:'guess', cx:3.6,  cy:31.8, w:2.6, h:2.6},
+  {id:'d1out',  label:'OUT',  type:'btn', spec:'B 13 02', grade:'guess', cx:7.1,  cy:31.8, w:2.6, h:2.6},
+  {id:'d1reloop',label:'RELOOP',type:'btn',spec:'B 13 04',grade:'guess', cx:10.8, cy:33.4, w:2.6, h:2.6},
+  {id:'d1auto', label:'AUTO', type:'btn', spec:'B 13 08', grade:'guess', cx:14.6, cy:79.6, w:3.2, h:2.6},
+  {id:'d1jogL', label:'JOG−', type:'btn', spec:'B 13 10', grade:'guess', cx:9.0,  cy:54.8, w:2.4, h:3.0},
+  {id:'d1jogR', label:'JOG+', type:'btn', spec:'B 13 20', grade:'guess', cx:21.0, cy:54.8, w:2.4, h:3.0},
+  {id:'d1slip', label:'SLIP', type:'btn', spec:'B 19 02', grade:'guess', cx:8.3,  cy:41.1, w:2.4, h:2.6},
+  {id:'d1trng', label:'TEMPO RANGE',type:'btn',spec:'B 12 08',grade:'ok', cx:30.9, cy:51.4, w:2.6, h:2.6},
+  {id:'d1tempo',label:'TEMPO1',type:'vfader',spec:'A 04', grade:'guess', cx:30.0, cy:76.2, w:3.0, h:24.0, val:512},
+  // --- deck 2 ---
+  {id:'d2play', label:'PLAY', type:'btn', spec:'B 20 01', grade:'guess', cx:95.4, cy:85.4, w:5.0, h:6.4, shape:'round'},
+  {id:'d2cue',  label:'CUE',  type:'btn', spec:'B 20 02', grade:'guess', cx:95.4, cy:74.9, w:5.0, h:6.4, shape:'round'},
+  {id:'d2sync', label:'SYNC', type:'btn', spec:'B 20 04', grade:'guess', cx:70.2, cy:46.8, w:2.6, h:3.0},
+  {id:'d2shift',label:'SHIFT',type:'btn', spec:'B 20 08', grade:'guess', cx:89.6, cy:79.6, w:3.2, h:2.6},
+  {id:'d2h1',   label:'HOT1', type:'btn', spec:'B 21 01', grade:'guess', cx:77.9, cy:84.8, w:3.2, h:4.6},
+  {id:'d2h2',   label:'HOT2', type:'btn', spec:'B 21 02', grade:'guess', cx:81.7, cy:84.8, w:3.2, h:4.6},
+  {id:'d2h3',   label:'HOT3', type:'btn', spec:'B 21 04', grade:'guess', cx:85.5, cy:84.8, w:3.2, h:4.6},
+  {id:'d2h4',   label:'HOT4', type:'btn', spec:'B 21 08', grade:'guess', cx:89.3, cy:84.8, w:3.2, h:4.6},
+  {id:'d2in',   label:'IN',   type:'btn', spec:'B 23 01', grade:'guess', cx:96.4, cy:31.8, w:2.6, h:2.6},
+  {id:'d2out',  label:'OUT',  type:'btn', spec:'B 23 02', grade:'guess', cx:92.9, cy:31.8, w:2.6, h:2.6},
+  {id:'d2reloop',label:'RELOOP',type:'btn',spec:'B 23 04',grade:'guess', cx:89.3, cy:33.4, w:2.6, h:2.6},
+  {id:'d2auto', label:'AUTO', type:'btn', spec:'B 23 08', grade:'guess', cx:81.3, cy:79.6, w:3.2, h:2.6},
+  {id:'d2jogL', label:'JOG−', type:'btn', spec:'B 23 10', grade:'guess', cx:79.0, cy:54.8, w:2.4, h:3.0},
+  {id:'d2jogR', label:'JOG+', type:'btn', spec:'B 23 20', grade:'guess', cx:91.0, cy:54.8, w:2.4, h:3.0},
+  {id:'d2trng', label:'TEMPO RANGE',type:'btn',spec:'B 22 08',grade:'ok', cx:69.1, cy:51.4, w:2.6, h:2.6},
+  {id:'d2tempo',label:'TEMPO2',type:'vfader',spec:'A 14', grade:'guess', cx:70.0, cy:76.2, w:3.0, h:24.0, val:512},
+];
+
+// ---- state ----------------------------------------------------------------
+let SCREEN = Object.assign({}, SCREEN0);
+let CTRLS = CTRLS0.map(c=>Object.assign({}, c));
+let calib = false;
+const stage = document.getElementById('stage');
+const logbox = document.getElementById('logbox');
+function log(m){ const t=new Date().toLocaleTimeString();
+  logbox.textContent = `[${t}] ${m}\n`+logbox.textContent;
+  if(logbox.textContent.length>5000) logbox.textContent=logbox.textContent.slice(0,5000); }
+
+async function post(p,b){ try{ await fetch(p,{method:'POST',body:b||''});}catch(e){ log('POST '+p+' failed'); } }
+function ctrl(spec){ post('/ctrl',spec); }
+function release(){ post('/release'); }
+
+// ---- build hotspots -------------------------------------------------------
+const els = {};
+function place(el,c){ el.style.left=c.cx+'%'; el.style.top=c.cy+'%';
+  el.style.width=c.w+'%'; el.style.height=c.h+'%'; }
+function gradeClass(c){ return c.spec? (c.grade==='ok'?'mapped':'mapped') : 'unmapped'; }
+
+function build(){
+  Object.values(els).forEach(e=>e.remove());
+  for(const c of CTRLS){
+    const el=document.createElement('div');
+    el.className='hs '+(c.shape==='round'?'round ':'')+(c.spec?'mapped':'unmapped');
+    el.dataset.id=c.id; el.textContent=c.label; place(el,c); el.title=c.label+(c.spec?('  ['+c.spec+']'):'  (unmapped)');
+    if(c.type==='vfader'||c.type==='hfader'){ el.classList.add('track');
+      const fill=document.createElement('div'); fill.className='fill'; el.appendChild(fill); el._fill=fill; drawFill(c,el); }
+    stage.appendChild(el); els[c.id]=el; wire(el,c);
+  }
+  layoutScreen();
+}
+function drawFill(c,el){
+  const v=(c.val==null?512:c.val)/1023;
+  if(c.type==='vfader'){ el._fill.style.left='30%'; el._fill.style.width='40%';
+    el._fill.style.bottom='0'; el._fill.style.height=(v*100).toFixed(1)+'%'; }
+  else { el._fill.style.top='25%'; el._fill.style.height='50%';
+    el._fill.style.left='0'; el._fill.style.width=(v*100).toFixed(1)+'%'; }
+}
+
+// ---- interaction ----------------------------------------------------------
+function wire(el,c){
+  let dragging=false, moved=false, startPx, startCxy;
+  const onDown=e=>{
+    e.preventDefault();
+    if(calib){ // drag to reposition
+      dragging=true; moved=false;
+      const p=pt(e); startPx=p; startCxy={cx:c.cx,cy:c.cy};
+      const mv=ev=>{ const q=pt(ev); const r=stage.getBoundingClientRect();
+        c.cx=clamp(startCxy.cx+(q.x-startPx.x)/r.width*100,0,100);
+        c.cy=clamp(startCxy.cy+(q.y-startPx.y)/r.height*100,0,100);
+        place(el,c); moved=true; };
+      const up=()=>{ document.removeEventListener('pointermove',mv);
+        document.removeEventListener('pointerup',up); };
+      document.addEventListener('pointermove',mv); document.addEventListener('pointerup',up);
+      return;
+    }
+    // normal mode
+    if(c.type==='btn'){ if(!c.spec){ log('· '+c.label+' — unmapped (no frame code yet)'); return; }
+      el.classList.add('down'); ctrl(c.spec); log('▸ '+c.label+'  '+c.spec); }
+    else { // fader/knob: drag sets value
+      const setFromEvent=ev=>{ const r=el.getBoundingClientRect(); const q=pt(ev); let v;
+        if(c.type==='vfader'){ v=1-(q.y-r.top)/r.height; }
+        else if(c.type==='hfader'){ v=(q.x-r.left)/r.width; }
+        else { // knob: vertical drag over the element
+          v=1-(q.y-r.top)/r.height; }
+        v=clamp(Math.round(v*1023),0,1023); c.val=v; drawFill(c,el);
+        if(c.spec) ctrl(c.spec+' '+v.toString(16));
+      };
+      setFromEvent(e);
+      const mv=ev=>setFromEvent(ev);
+      const up=()=>{ document.removeEventListener('pointermove',mv);
+        document.removeEventListener('pointerup',up); };
+      document.addEventListener('pointermove',mv); document.addEventListener('pointerup',up);
+    }
+  };
+  const onUp=()=>{ if(calib) return;
+    if(c.type==='btn' && c.spec){ el.classList.remove('down'); release(); } };
+  el.addEventListener('pointerdown',onDown);
+  el.addEventListener('pointerup',onUp);
+  el.addEventListener('pointerleave',()=>{ if(!calib && c.type==='btn' && el.classList.contains('down')){ el.classList.remove('down'); release(); }});
+}
+function pt(e){ return {x:e.clientX, y:e.clientY}; }
+function clamp(v,a,b){ return v<a?a:v>b?b:v; }
+
+// ---- live screen ----------------------------------------------------------
+const cv=document.getElementById('screen'), cx2=cv.getContext('2d'),
+      conn=document.getElementById('conn'), fps=document.getElementById('fps');
+function layoutScreen(){ cv.style.left=SCREEN.x+'%'; cv.style.top=SCREEN.y+'%';
+  cv.style.width=SCREEN.w+'%'; cv.style.height=SCREEN.h+'%'; positionHandle(); }
+let imgData=null, frames=0, lastFps=performance.now();
+async function pump(){
+  try{
+    const r=await fetch('/raw?t='+Date.now(),{cache:'no-store'});
+    if(!r.ok) throw 0;
+    const w=+r.headers.get('X-Width')||800, h=+r.headers.get('X-Height')||480;
+    const buf=new Uint8Array(await r.arrayBuffer());
+    if(cv.width!==w||cv.height!==h){ cv.width=w; cv.height=h; imgData=null; }
+    if(!imgData) imgData=cx2.createImageData(w,h);
+    const d=imgData.data,n=w*h;
+    for(let i=0,j=0;i<n;i++){ d[j++]=buf[i*3]; d[j++]=buf[i*3+1]; d[j++]=buf[i*3+2]; d[j++]=255; }
+    cx2.putImageData(imgData,0,0);
+    conn.className='conn up'; conn.textContent='screen: live';
+    frames++; const now=performance.now();
+    if(now-lastFps>1000){ fps.textContent=frames+' fps'; frames=0; lastFps=now; }
+    requestAnimationFrame(pump);
+  }catch(e){ conn.className='conn'; conn.textContent='screen: no QEMU'; setTimeout(pump,700); }
+}
+
+// ---- calibration: screen rect move/resize ---------------------------------
+const handle=document.getElementById('calhandle');
+function positionHandle(){ const r=cv.getBoundingClientRect(), s=stage.getBoundingClientRect();
+  handle.style.left=(cv.offsetLeft+cv.offsetWidth)+'px'; handle.style.top=(cv.offsetTop+cv.offsetHeight)+'px'; }
+cv.addEventListener('pointerdown',e=>{ if(!calib) return; e.preventDefault();
+  const p=pt(e), st={x:SCREEN.x,y:SCREEN.y}, r=stage.getBoundingClientRect();
+  const mv=ev=>{ const q=pt(ev); SCREEN.x=clamp(st.x+(q.x-p.x)/r.width*100,0,90);
+    SCREEN.y=clamp(st.y+(q.y-p.y)/r.height*100,0,90); layoutScreen(); };
+  const up=()=>{ document.removeEventListener('pointermove',mv); document.removeEventListener('pointerup',up); };
+  document.addEventListener('pointermove',mv); document.addEventListener('pointerup',up); });
+handle.addEventListener('pointerdown',e=>{ if(!calib) return; e.preventDefault(); e.stopPropagation();
+  const p=pt(e), st={w:SCREEN.w,h:SCREEN.h}, r=stage.getBoundingClientRect();
+  const mv=ev=>{ const q=pt(ev); SCREEN.w=clamp(st.w+(q.x-p.x)/r.width*100,4,60);
+    SCREEN.h=clamp(st.h+(q.y-p.y)/r.height*100,4,60); layoutScreen(); };
+  const up=()=>{ document.removeEventListener('pointermove',mv); document.removeEventListener('pointerup',up); };
+  document.addEventListener('pointermove',mv); document.addEventListener('pointerup',up); });
+
+// ---- toolbar --------------------------------------------------------------
+function setCal(on){ calib=on; document.body.classList.toggle('cal',on);
+  document.getElementById('bcal').classList.toggle('on',on);
+  document.getElementById('bsave').style.display=on?'':'none';
+  document.getElementById('breset').style.display=on?'':'none';
+  positionHandle();
+  log(on?'calibration ON — drag controls & screen, then Save':'calibration off'); }
+document.getElementById('bcal').onclick=()=>setCal(!calib);
+document.getElementById('brel').onclick=()=>{ release(); document.querySelectorAll('.hs.down').forEach(e=>e.classList.remove('down')); log('⏹ release all'); };
+document.getElementById('bsave').onclick=async()=>{
+  const out={screen:SCREEN, ctrls:{}};
+  for(const c of CTRLS) out.ctrls[c.id]={cx:+c.cx.toFixed(2),cy:+c.cy.toFixed(2),w:+c.w.toFixed(2),h:+c.h.toFixed(2)};
+  const r=await fetch('/savecal',{method:'POST',body:JSON.stringify(out)});
+  log(r.ok?'✓ layout saved (assets/calibration.json)':'save failed'); };
+document.getElementById('breset').onclick=async()=>{
+  SCREEN=Object.assign({},SCREEN0); CTRLS=CTRLS0.map(c=>Object.assign({},c));
+  build(); await fetch('/savecal',{method:'POST',body:JSON.stringify({})}); log('layout reset to defaults'); };
+window.addEventListener('keydown',e=>{ if(e.key==='c'||e.key==='C'){ if(e.target.tagName!=='INPUT') setCal(!calib); }});
+
+// ---- load calibration overrides, then build -------------------------------
+async function init(){
+  try{ const r=await fetch('/cal?t='+Date.now()); if(r.ok){ const j=await r.json();
+    if(j.screen) SCREEN=Object.assign({},SCREEN0,j.screen);
+    if(j.ctrls) for(const c of CTRLS){ const o=j.ctrls[c.id]; if(o) Object.assign(c,o); }
+    if(j.screen||j.ctrls) log('loaded saved calibration'); } }catch(e){}
+  build(); pump();
+  window.addEventListener('resize',()=>{ layoutScreen(); });
+}
+init();
+</script>
+</body>
+</html>

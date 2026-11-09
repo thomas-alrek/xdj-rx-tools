@@ -20,3 +20,4 @@ venv/
 # USB test images (large; place your own rekordbox-formatted image here)
 test/usb/*.img
 test/usb/*.dmg
+tools/xdj-panel/assets/calibration.json
