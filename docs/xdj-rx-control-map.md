@@ -212,8 +212,22 @@ USB1/USB2 are the MAIN-UCOM GPIO keys, exactly as the service manual says:
 - **GPIO 160 (GPIO6_IO00) = USB1** → center shows `⇔ NO USB( USB1 )` browse screen.
 - **GPIO 159 (GPIO5_IO31) = rekordbox**, **GPIO 161 (GPIO6_IO01) = MIDI** (`USB MIDI /
   MIXER MODE: XDJ-RX / NOT CONNECTED`). The 4 map sequentially to CN5601 pins 7-10
-  (KEY_USB2, KEY_RB, KEY_USB1, KEY_MIDI). Remaining 4 of the 8 (119,120,146,149) =
-  DECK1/2, TIME MODE, 2× jack SW.
+  (KEY_USB2, KEY_RB, KEY_USB1, KEY_MIDI).
+
+Full 8-key GPIO identity (all tested live via /tmp/mainkey):
+| GPIO | i.MX6 pad | key | confirmed by |
+|---|---|---|---|
+| 158 | GPIO5_IO30 | **USB2** | `NO USB( USB2 )` browse screen |
+| 159 | GPIO5_IO31 | **rekordbox** | source screen |
+| 160 | GPIO6_IO00 | **USB1** | `NO USB( USB1 )` browse screen |
+| 161 | GPIO6_IO01 | **MIDI** | `USB MIDI / MIXER MODE: XDJ-RX` |
+| 119 | GPIO4_IO23 | ch1 Phono/Line SW | DECK1 `INPUT : LINE/PHONO` |
+| 120 | GPIO4_IO24 | ch2 Phono/Line SW | DECK2 `INPUT : LINE/PHONO` |
+| 146 | GPIO5_IO18 | DECK1/2 (tentative) | — |
+| 149 | GPIO5_IO21 | TIME MODE (tentative) | time-area/`A.CUE` change |
+(146 vs 149 for DECK1/2 vs TIME MODE is a best guess — the Phono/Line input state
+accumulates across presses, blurring the diff; refine later.) The web panel
+(tools/xdj-panel) wires the 4 source keys + DECK1/2 + TIME MODE through `/mainkey`.
 
 So the browser DOES open via the real USB1/USB2 buttons. (The list shows "NO USB" only
 when the library hasn't registered that boot — the separate flaky USB-accept issue; with
