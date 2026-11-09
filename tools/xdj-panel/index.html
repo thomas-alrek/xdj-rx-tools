@@ -76,7 +76,7 @@
         <h1>XDJ-RX · virtual panel</h1>
         <span id="conn" class="conn down">screen: …</span>
       </div>
-      <img id="screen" alt="QEMU screen">
+      <canvas id="screen" width="800" height="480"></canvas>
       <div class="screenbar">
         <label><input type="checkbox" id="live" checked> live screen</label>
         <span id="fps" class="mono"></span>
@@ -349,24 +349,38 @@ document.getElementById('rawtap').onclick=()=>{
 document.getElementById('rawrel').onclick=releaseAll;
 document.getElementById('relall').onclick=releaseAll;
 
-// ---- live screen ----
-const img=document.getElementById('screen'), conn=document.getElementById('conn'),
-      live=document.getElementById('live'), fps=document.getElementById('fps');
-let lastT=0;
-function refreshScreen(){
-  if(!live.checked) return;
-  const u='/screen?t='+Date.now();
-  const probe=new Image();
-  const t0=performance.now();
-  probe.onload=()=>{ img.src=probe.src; conn.className='conn up'; conn.textContent='screen: live';
-    const dt=performance.now()-t0; fps.textContent=Math.round(dt)+'ms'; };
-  probe.onerror=()=>{ conn.className='conn down'; conn.textContent='screen: no QEMU'; };
-  probe.src=u;
+// ---- live screen: raw RGB -> canvas, back-to-back ----
+const cv=document.getElementById('screen'), ctx=cv.getContext('2d'),
+      conn=document.getElementById('conn'), live=document.getElementById('live'),
+      fps=document.getElementById('fps');
+let imgData=null, frames=0, lastFps=performance.now();
+async function pump(){
+  if(!live.checked){ setTimeout(pump,200); return; }
+  try{
+    const r=await fetch('/raw?t='+Date.now(),{cache:'no-store'});
+    if(!r.ok) throw 0;
+    const w=+r.headers.get('X-Width')||800, h=+r.headers.get('X-Height')||480;
+    const buf=new Uint8Array(await r.arrayBuffer());
+    if(cv.width!==w||cv.height!==h){ cv.width=w; cv.height=h; imgData=null; }
+    if(!imgData) imgData=ctx.createImageData(w,h);
+    const d=imgData.data, n=w*h;
+    for(let i=0,j=0;i<n;i++){ d[j++]=buf[i*3]; d[j++]=buf[i*3+1]; d[j++]=buf[i*3+2]; d[j++]=255; }
+    ctx.putImageData(imgData,0,0);
+    conn.className='conn up'; conn.textContent='screen: live';
+    frames++; const now=performance.now();
+    if(now-lastFps>1000){ fps.textContent=frames+' fps'; frames=0; lastFps=now; }
+    requestAnimationFrame(pump);
+  }catch(e){
+    conn.className='conn down'; conn.textContent='screen: no QEMU';
+    setTimeout(pump,600);
+  }
 }
-document.getElementById('snap').onclick=()=>{ const u='/screen?t='+Date.now();
-  img.src=u; log('snapshot'); };
-setInterval(refreshScreen, 900);
-refreshScreen();
+document.getElementById('snap').onclick=()=>{
+  const a=document.createElement('a');
+  a.href=cv.toDataURL('image/png'); a.download='xdj-'+Date.now()+'.png'; a.click();
+  log('snapshot saved');
+};
+pump();
 </script>
 </body>
 </html>

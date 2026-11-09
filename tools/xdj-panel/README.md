@@ -45,5 +45,8 @@ live screen.
 ## Protocol
 
 `POST /ctrl` body `"B 12 08"` → writes the spec to `/tmp/subucom_ctrl`.
-`POST /release` → removes it. `GET /screen` → current framebuffer as PNG.
-The harness (QEMU `xdj-subucom`, `qemu/patches/02`) interprets the spec each frame.
+`POST /release` → removes it. `GET /raw` → the current framebuffer as **raw RGB**
+(headers `X-Width`/`X-Height`, body `w*h*3` bytes) drawn straight onto a `<canvas>`.
+No per-frame image encoding and a persistent monitor connection, so the grab is ~9 ms
+(≈100 fps server-side; the browser caps it at the display refresh). The harness (QEMU
+`xdj-subucom`, `qemu/patches/02`) interprets the spec each frame.
