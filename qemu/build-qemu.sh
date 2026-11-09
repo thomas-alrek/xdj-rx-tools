@@ -77,9 +77,11 @@
 #       wakeup before resuming a bus-suspended host controller; with it unmapped
 #       (reads 0) the guest flooded "host1, _is_usbh1_wakeup, invalid wake up" and
 #       never resumed, so a USB stick inserted AFTER boot never enumerated. This
-#       derives OWIR live from the matching EHCI root port (FPRES/CSC), so a device
-#       attaching to a suspended controller is reported as a valid wakeup and Host1
-#       resumes. This is what makes hardware-accurate post-boot USB insertion work,
+#       derives OWIR live from the matching EHCI root port's Force-Port-Resume bit
+#       (FPRES), so a device attaching to a suspended controller is reported as a
+#       valid wakeup and Host1 resumes. FPRES self-clears when the guest completes
+#       the resume, so OWIR does not latch (an earlier FPRES|CSC version churned:
+#       CSC stays set on disconnect, re-asserting OWIR -> resume/re-enumerate loop). This is what makes hardware-accurate post-boot USB insertion work,
 #       which in turn fixes the flaky library-accept: insert the stick after rbp is
 #       polling and the stock udev mount rule + its blocking "echo > /proc/udev_usb2"
 #       run while rbp reads them, so the library registers deterministically. See

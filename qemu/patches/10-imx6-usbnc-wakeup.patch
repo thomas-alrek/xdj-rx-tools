@@ -9,12 +9,10 @@
  #include "hw/core/boards.h"
  #include "hw/core/qdev-properties.h"
  #include "system/system.h"
-@@ -978,6 +980,75 @@
- 
- static const GraphicHwOps xdj_fb_ops = {
+@@ -980,6 +982,80 @@
      .gfx_update = xdj_fb_gfx_update,
-+};
-+
+ };
+ 
 +/*
 + * i.MX6 USBNC (USB non-core) wakeup-request model (XDJ-RX patch 10).
 + *
@@ -29,14 +27,19 @@
 + * the stick after boot, which is exactly this path.
 + *
 + * Model the four CTRL registers and derive OWIR live from the matching
-+ * EHCI root port: when a device attaches to / resumes a suspended
-+ * controller the EHCI sets Force-Port-Resume or Connect-Status-Change on
-+ * portsc[0], which we surface as OWIR=1 so the firmware treats it as a
-+ * valid wakeup and resumes. OWIR is read-only (never stored); the other
-+ * CTRL bits are stored so guest read-modify-write behaves. The region sits
-+ * in the unused tail of USBOH3 (the four chipidea cores occupy
-+ * 0x000/0x200/0x400/0x600; USBNC is at +0x800), so it cannot perturb the
-+ * existing enumeration path.
++ * EHCI root port's Force-Port-Resume bit: when a device remote-wakes a
++ * suspended controller, ehci_wakeup() sets PORTSC_FPRES and we surface that
++ * as OWIR=1 so the firmware treats it as a valid wakeup and resumes. FPRES
++ * is transient -- the guest clears it once the resume completes -- so OWIR
++ * self-clears and the controller can suspend again and STAY suspended.
++ * (An earlier version also OR'd in PORTSC_CSC, but CSC latches on every
++ * connect/DISconnect until the guest clears it, so after the first churn it
++ * kept OWIR asserted and the guest resumed -> re-enumerated -> disconnected
++ * -> resumed ... forever; FPRES-only breaks that loop.) OWIR is read-only
++ * (never stored); other CTRL bits are stored so guest read-modify-write
++ * behaves. The region sits in the unused tail of USBOH3 (the four chipidea
++ * cores occupy 0x000/0x200/0x400/0x600; USBNC is at +0x800), so it cannot
++ * perturb the existing enumeration path.
 + */
 +#define FSL_IMX6_USBNC_OFFSET 0x800
 +#define USBNC_CTRL_OWIR       (1u << 31)
@@ -58,7 +61,7 @@
 +        uint32_t val = u->ctrl[n];
 +        EHCIState *e = u->ehci[n];
 +
-+        if (e && (e->portsc[0] & (PORTSC_FPRES | PORTSC_CSC))) {
++        if (e && (e->portsc[0] & PORTSC_FPRES)) {
 +            val |= USBNC_CTRL_OWIR;
 +        }
 +        return val;
@@ -82,10 +85,12 @@
 +    .write = xdj_usbnc_write,
 +    .endianness = DEVICE_NATIVE_ENDIAN,
 +    .impl = { .min_access_size = 4, .max_access_size = 4 },
- };
- 
++};
++
  static void fsl_imx6_realize(DeviceState *dev, Error **errp)
-@@ -1275,6 +1346,17 @@
+ {
+     MachineState *ms = MACHINE(qdev_get_machine());
+@@ -1275,6 +1351,17 @@
                             qdev_get_gpio_in(gic, FSL_IMX6_USBn_IRQ[i]));
      }
  

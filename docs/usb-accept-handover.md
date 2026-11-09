@@ -56,6 +56,18 @@ opened `export.pdb` (fd), **no "USB Error" modal**, and the USB2 browser shows t
 (ARTIST/ALBUM/TRACK… with real entries). Deterministic by construction (insert after rbp polls);
 stock firmware untouched. Boot itself is still the separate load-sensitive `gui_task` SIGSEGV risk.
 
+**UPDATE (session 2): OWIR must be FPRES-only, and BOTH slots verified.** The first patch-10
+version derived OWIR from `FPRES | CSC`; `CSC` latches on every disconnect, so after the first
+autosuspend it kept re-asserting the wakeup → resume → re-enumerate → disconnect → … churn (device
+number climbing 3,4,5…). Fixed by deriving OWIR from **`PORTSC_FPRES` only** (transient; the guest
+clears it on resume-complete, so Host1 suspends once and STAYS suspended with the device attached).
+Re-verified on a fresh boot: insert USB2 (port 1.1) → accept; +45s later `disc=0`, `enum=2`,
+suspend=1/resume=1, `export.pdb` still open. Then inserted **USB1** (2nd stick, hub port **1.2** →
+`2-1.2` → `/media/usb1/sdb1`, detect `/tmp/usb_insert`): also accepted — rbp holds BOTH `export.pdb`
+fds at once (usb1 + usb2), USB1 browser shows the library, still `disc=0`. The suspend-side
+`usbh1_platform_rh_suspend_swfix "big error"` is BENIGN (guest polls a PHY line-state QEMU doesn't
+model; present on every boot, continues anyway) — not the churn cause.
+
 ### Fix plan (B, hardware-accurate, chosen): model USBNC OWIR wakeup in QEMU
 Add a USBNC register region at USBOH3+0x800 and set OWIR (bit31 of the per-controller CTRL at
 +0x804 for Host1) + raise the USB IRQ when a device attaches to a suspended Host1 with wakeup
@@ -86,8 +98,12 @@ lost) and it **fails repeatably** — three distinct, reproducible reasons the n
    `usbh1_platform_rh_suspend_swfix big error`. After a few cycles Host1's wake state is wedged and
    fresh `device_add`+insert either never enumerates or enumerates then immediately
    `USB disconnect`. So the patch-10 wakeup path is only reliable on a **clean boot**, not after
-   del/add churn. (Open question for you: does patch 10 need to also handle the *post-suspend
-   re-attach* case, or model `swfix`? `usbh1_platform_rh_suspend_swfix` is the guest symbol to chase.)
+   del/add churn. **RESOLVED (session 2):** the churn was patch 10 OR-ing `PORTSC_CSC` into OWIR —
+   CSC latches on disconnect and kept re-asserting the wakeup. Fixed to **FPRES-only** (see §Fix B
+   UPDATE); a clean-boot insert is now stable (`disc=0`, one suspend/resume). `swfix` did NOT need
+   modeling — its "big error" is benign. In-place `device_del`/`device_add` is still best avoided
+   (problem 1's drive-backend teardown is an inherent QEMU-monitor behavior), but the autosuspend
+   churn that also hit fresh boots is gone.
 3. **Kernel mount succeeds but rbp latches "USB Error".** On a good-looking insert the guest DOES
    mount: `/dev/sda1 on /media/usb2/sda1 type vfat`, `PIONEER/` readable — yet rbp shows
    `USB Error. Remove the device.` The udev "mount" rendezvous echo raced past rbp's reader (§0b).
