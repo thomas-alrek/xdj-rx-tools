@@ -177,6 +177,36 @@ the browser handler names its keys via `@Ui_BrowseKey> KEYCMD <name>` strings. M
 `0x20a` (confirmed). The remaining nav code↔name labels (BROWSE/USB/LOAD vs
 0x204/0x208/0x209/0x401/0x409) need one more RE pass on the key→handler registration.
 
+## ★ Browse encoder (rotary + push) RE — 2026-11-09 (corrects the "0x6010" guess)
+Traced the legacy `@Ui_BrowseKey` browser path end-to-end in rbp:
+- **EncoderRotate handler = `FUN_000e159c`** (logs `KEYCMD EncoderRotate`, str `0x39dd3c`).
+  Acts only when **`DAT_017f3234`** (accumulated signed rotation) != 0, dispatching that
+  signed delta to the mode-specific list-nav fn (`FUN_000d6950 / 69f0 / 6ac4 / 6b4c / …`).
+- `DAT_017f3234` accumulated by **`FUN_000e12e0(delta)`** (`DAT_017f3234 += clamp(delta)`);
+  `delta = DAT_0107be1c`.
+- `DAT_0107be1c` set by the browser event dispatcher **`FUN_0026ae7c`** when it receives an
+  event with **u16 code `0x4205`** and a **SIGNED delta word at event+0xc**
+  (`ldr r1,[r4,#0xc]; bl FUN_000b36e0`). So the real EncoderRotate code is **`0x4205`
+  carrying a signed delta** — NOT a single bit, and NOT `0x6010` (the old sendKey-sweep
+  label was a different, inactive code).
+- **EncoderPush** name str `0x39db94`; its handler is one of the dispatcher's button codes
+  (`0x201/0x202/0x203/0x204/0x208/0x209/0x20a/0x420b/0x420c/0x420d/0x4206`) — not yet pinned.
+
+**TWO OPEN BLOCKERS before this drives the live library from the panel** (verified live, gdb):
+1. **The active rekordbox library browser** (the `ARTIST/ALBUM/TRACK/…` category screen) does
+   **NOT** route through `FUN_0026ae7c` — a clean bp on `0x26ae7c` never fires on this screen,
+   even for MENU. So the on-screen category browser is a **different implementation** than the
+   legacy `@Ui_BrowseKey` path above; its encoder/push handler is still unidentified.
+2. **Panel-injection offset coordinate mismatch.** The QEMU harness MENU anchor is **rbp
+   offset `0x1b` → code `0x20a`** (fsl-imx6.c `inj_off=0x1b`), but the byte→code map's column
+   labels MENU as "0x5f". So the `B <off> <bit>` **rbp offset ≠ the map's offset column**;
+   with the current harness, single-bit holds across rbp 0x4a–0x5f all decode to a FIXED mixer
+   code (`0x440c` for bit 0x01, `0x4487` for bit 0x04) regardless of offset. The
+   rbp-offset ↔ map-offset ↔ byte-swapped-frame-offset mapping must be pinned before any
+   browse control can be injected reliably. **Calibration anchor: MENU @ rbp `0x1b`.**
+   (gdb note: clear ALL stale `Z1` breakpoints between probes — a leftover bp at `sendKey`
+   0x2a47c0 makes every `continue` stop there and report its `r1`, which looks like a stuck code.)
+
 ## ★ BREAKTHROUGH: USB1/USB2 are MAIN-UCOM GPIO keys, NOT subucom (2026-11-09)
 From the **XDJ-RX service manual** (`~/Downloads/da43a7.pdf`, 210pp). The unit has
 **two MCUs**, and the key routing is split:
