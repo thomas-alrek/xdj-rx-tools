@@ -42,31 +42,44 @@ drives USB1 (GPIO4_IO30), `/tmp/usb2_insert` drives USB2 (GPIO7_IO12) (patch 06)
 The device's hub port must match the GPIO's slot. Observed: hub port 1 (`2-1.1`)
 mounts at `/media/usb2` (→ drive `/tmp/usb2_insert`).
 
-## Status: library-accept is FLAKY (not reliably resolved) — updated 2026-11-09 late
-With the drive at `2-1.1` + slot mount + a genuine `baken` `export.pdb`, rbp **sometimes**
-accepts the device and parses the library (one boot — QEMU 87844 — opened `export.pdb` to
-offset 126976/217088, no error modal). But **most fresh boots FAIL**: rbp shows
-`USB Error. Remove the device.` / the browse screen reads `NO USB`, and `export.pdb` is
-never opened. It is a **load-sensitive race**, not a deterministic fix.
+## Status: SOLVED (2026-11-09) — QEMU patch 10, both slots, stock firmware
+The old "flaky" status was a **cold-plug timing race**, now understood and fixed. Full RE
+write-up in `docs/usb-accept-handover.md` §0b/§Fix B; one-paragraph version:
 
-Key facts (all verified live):
-- The device is correctly placed every time: slot `2-1.1`, mounted `/media/usb2/sda1`
-  (slot-specific, so the kernel's Pioneer slot-connect DID fire). Kernel mounts it fine
-  (`sda1`, SCSI attached). So the rejection is **100% rbp-side**.
-- rbp rejects **pre-scan**: the library scanner access check (`FUN_0024cb38` @ `0x24cf14`)
-  **never fires** on insert — the "USB Error" is raised before any library read.
-- **Not caused by the MAIN-UCOM key work (patch 09):** a clean 01-08 build (no patch 09)
-  reproduces the failure identically.
-- `full-speed` enumeration is NOT the trigger (87844 loaded while full-speed too).
+- rbp's **`UsbMountManager`** thread (`FUN_0024cb38`, via `read_sf_rbp`/`FUN_00296628`) accepts
+  the library only when it reads a **`"mount"`** text line on **`/proc/udev_usb2`** *while
+  polling*. (The earlier `UsbCautionManager`/`udev_usbctn2` lead was wrong: that is the
+  persistent `connect` STATE file — re-read every poll, which is why rbp always knew a device
+  was present and showed "USB Error" instead of "NO USB".)
+- The `"mount"` line is written by the stock udev rule `12-usb-memory-auto-mount.rules` as a
+  **blocking rendezvous write** (`echo -n mount … > /proc/udev_usb2`). On cold-plug the device
+  enumerates at t≈0, so udev runs that echo before rbp polls; udev's worker-timeout kills the
+  blocked echo and the event is lost (fs stays mounted) ⇒ "USB Error". The rare good boot = rbp
+  polling in time (hence "load-sensitive").
+- **Fix = insert the stick AFTER rbp is polling, exactly like real hardware.** That required
+  QEMU to resume a bus-suspended Host1, which it could not (`_is_usbh1_wakeup` reads the
+  unmapped USBNC OWIR bit → "invalid wake up"). **`patches/10-imx6-usbnc-wakeup.patch`** models
+  USBNC at USBOH3+0x800 and derives OWIR from the EHCI root port's `PORTSC_FPRES`, so post-boot
+  insertion resumes Host1 and enumerates normally.
 
-Localized to **`UsbCautionManager` (`FUN_00292d6c`)** — it opens `/proc/udev_usbctn1|2`
-(via `FUN_002af4d0`) and owns the `{fd1,fd2}` at `+0x18`; its main vtable is `@0x428598`
-(methods at VAs `0x292c6c/0x292d50/0x292924/0x292818`). **But those vtable methods never
-fire on insert** — the event is read in a separate thread / task-run not yet found. A
-coordinated fresh-boot trace (bps set before the first insert) caught nothing in them.
+### Reproduction (deterministic, both slots)
+1. Boot **hub-only** — keep the hub, do NOT cold-plug the storage; keep the drive as
+   `-drive if=none,id=usbstick,file=test/usb/rekordbox_new.img,format=raw,snapshot=on`.
+2. Wait until rbp's `UsbMountManager` thread wchan == `poll_schedule_timeout`
+   (`/proc/$(pidof rbp)/task/<tid>/wchan`).
+3. Insert via the monitor + detect GPIO:
+   - **USB2** (slot 2): `device_add usb-storage,bus=usb-bus.1,port=1.1,drive=usbstick,id=xdjusb,removable=on`
+     then `touch /tmp/usb2_insert`.
+   - **USB1** (slot 1): `drive_add 0 if=none,id=usbstick2,file=<ABS>/test/usb/rekordbox_new.img,format=raw,snapshot=on`,
+     `device_add usb-storage,bus=usb-bus.1,port=1.2,drive=usbstick2,id=xdjusb1,removable=on`,
+     then `touch /tmp/usb_insert`.
+   Hub port `1.1`→devpath `2-1.1`→`/media/usb2` (detect `/tmp/usb2_insert`, GPIO7_IO12);
+   hub port `1.2`→`2-1.2`→`/media/usb1` (detect `/tmp/usb_insert`, GPIO4_IO30).
+4. Result: Host1 resumes (`ehci_fsl_bus_resume`, 0 "invalid wake up"), device enumerates, udev
+   auto-mounts the slot path, rbp opens `export.pdb`, no "USB Error", the slot's browser shows
+   the library. Both slots verified simultaneously; stable (`disc=0`, one suspend/resume).
 
-**Next:** find the `udev_usbctn2` read loop (NOT the vtable methods) — trace the
-`pthread_create` the caution manager spawns, or breakpoint the blocking `read()` on that
-fd — and read the event bytes to see if the kernel posts a "caution" event or rbp branches
-on a timing/state condition. See [[usb-error-investigation]] memory for addresses + the
-REA bare-hex=file-offset (+0x8000) quirk.
+Notes: full-speed enumeration and the MAIN-UCOM key work (patch 09) were both red herrings;
+`usbh1_platform_rh_suspend_swfix "big error"` is benign (unmodeled PHY line-state poll). Do NOT
+cycle `device_del`/`device_add` in place (tears down the `if=none` drive backend) — reproduce
+from a fresh boot. See [[usb-error-investigation]] memory for the full RE trail.

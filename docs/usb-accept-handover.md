@@ -3,6 +3,13 @@
 **For:** a fresh session continuing ONLY the USB library-accept problem. Everything
 else in the emulator works; this is the last gate before a loaded track.
 
+> ✅ **SOLVED (2026-11-09).** Root cause + fix are in **§0b** and **§Fix B** below; the
+> deterministic reproduction (both slots) is in `docs/usb-slot-topology.md`. §0 and §1's
+> cold-plug launch below are the HISTORICAL problem framing — kept for context. Short version:
+> rbp needs the stock udev `"mount"` rendezvous write to land while it's polling, so insert the
+> stick AFTER boot (like real hardware); `patches/10-imx6-usbnc-wakeup.patch` models the i.MX6
+> USBNC OWIR wakeup (FPRES-derived) so post-boot insertion resumes Host1. Stock firmware untouched.
+
 ## 0. The one-paragraph summary
 The XDJ-RX emulator boots unmodified firmware (`rbp`) to a live UI, the MAIN-UCOM
 source buttons (USB1/USB2/rekordbox/MIDI) open the browser, and a genuine rekordbox
