@@ -42,20 +42,31 @@ drives USB1 (GPIO4_IO30), `/tmp/usb2_insert` drives USB2 (GPIO7_IO12) (patch 06)
 The device's hub port must match the GPIO's slot. Observed: hub port 1 (`2-1.1`)
 mounts at `/media/usb2` (→ drive `/tmp/usb2_insert`).
 
-## RESOLVED (2026-11-09)
-With the drive correctly at `2-1.1` + slot mount **and a genuine `baken` `export.pdb`**,
-rbp **accepts** the device — no "USB Error" modal, and it opens and parses the library.
-Verified live against the guest serial console (`/tmp/d_con4.sock`):
+## Status: library-accept is FLAKY (not reliably resolved) — updated 2026-11-09 late
+With the drive at `2-1.1` + slot mount + a genuine `baken` `export.pdb`, rbp **sometimes**
+accepts the device and parses the library (one boot — QEMU 87844 — opened `export.pdb` to
+offset 126976/217088, no error modal). But **most fresh boots FAIL**: rbp shows
+`USB Error. Remove the device.` / the browse screen reads `NO USB`, and `export.pdb` is
+never opened. It is a **load-sensitive race**, not a deterministic fix.
 
-- `screendump` shows the normal deck view (DECK 1/2, "Not Loaded."), **no error modal**.
-- rbp's open fds include `…/PIONEER/rekordbox/export.pdb` (read to offset 126976 of
-  217088) and `…/PIONEER/USBANLZ/USBMNG.DAT` — it registered the USB as a browsable
-  rekordbox source.
+Key facts (all verified live):
+- The device is correctly placed every time: slot `2-1.1`, mounted `/media/usb2/sda1`
+  (slot-specific, so the kernel's Pioneer slot-connect DID fire). Kernel mounts it fine
+  (`sda1`, SCSI attached). So the rejection is **100% rbp-side**.
+- rbp rejects **pre-scan**: the library scanner access check (`FUN_0024cb38` @ `0x24cf14`)
+  **never fires** on insert — the "USB Error" is raised before any library read.
+- **Not caused by the MAIN-UCOM key work (patch 09):** a clean 01-08 build (no patch 09)
+  reproduces the failure identically.
+- `full-speed` enumeration is NOT the trigger (87844 loaded while full-speed too).
 
-The **full-speed** enumeration was a red herring: the kernel logs `2-1.1: not running at
-top speed` but rbp accepts the device anyway. The fix was purely topology + a real
-library (patch 08 hub → `2-1.1` → slot mount `/media/usb2/sda1`). rbp was **not** patched.
+Localized to **`UsbCautionManager` (`FUN_00292d6c`)** — it opens `/proc/udev_usbctn1|2`
+(via `FUN_002af4d0`) and owns the `{fd1,fd2}` at `+0x18`; its main vtable is `@0x428598`
+(methods at VAs `0x292c6c/0x292d50/0x292924/0x292818`). **But those vtable methods never
+fire on insert** — the event is read in a separate thread / task-run not yet found. A
+coordinated fresh-boot trace (bps set before the first insert) caught nothing in them.
 
-Good image: `test/usb/rekordbox_new.img`. **Next gate:** open the media browser to
-browse/LOAD a track — see docs/xdj-rx-control-map.md "Browser page gate". See
-[[usb-error-investigation]].
+**Next:** find the `udev_usbctn2` read loop (NOT the vtable methods) — trace the
+`pthread_create` the caution manager spawns, or breakpoint the blocking `read()` on that
+fd — and read the event bytes to see if the kernel posts a "caution" event or rbp branches
+on a timing/state condition. See [[usb-error-investigation]] memory for addresses + the
+REA bare-hex=file-offset (+0x8000) quirk.
