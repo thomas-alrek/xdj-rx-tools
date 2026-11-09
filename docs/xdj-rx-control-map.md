@@ -99,3 +99,39 @@ classes do not, and need a different method:
 2. **Pin BROWSE + load a track** (needs a reliable USB boot past the `iPodMgr` crash) →
    then screen-diff-map the whole deck transport + JOG layer against the loaded track.
 3. Finish the BEAT FX per-bit labels (a handful of screendump reads).
+
+## Browser / navigation subsystem — from rbp RE (2026-11-09)
+
+The screen-diff sweeps found no byte that opens the media browser, because BROWSE and
+the other navigation keys are handled by a self-contained **browser state machine** in
+rbp (text `0x000df…0x000e1`), not a flat panel→screen toggle. RE (REA/Ghidra) of it:
+
+- The browser-key **dispatch table** is populated by `FUN_000e11a4` at `0x017f3140`
+  (stride `0x10`); `FUN_000e1334` polls a per-key "pressed" flag and calls the handler:
+  ```
+  slot(flag@+0x8, handler@+0xc)   handler        key (from @Ui_BrowseKey> KEYCMD strings)
+  0x017f3184                       FUN_000e051c   BROWSE
+  0x017f3134 … 0x017f3224          FUN_000e1010, 0e0f94, 0e0f18, 0e0e9c, 0e0e10, 0e05dc,
+                                   0e0390, 0e0024, 0e0cfc, 0e108c, 0dfe94, 0e08e8, 0e07f0,
+                                   0dfbf8  (LOAD1/LOAD2/USB/SD/LINK/MENU/BACK/INFO/TAG/
+                                            EncoderRotate/EncoderPush/DECK_SELECT/ADD_TAG…)
+  ```
+  The exact key↔handler labels are in the `@Ui_BrowseKey> KEYCMD <name>` debug strings
+  (`0x39db50`–`0x39dd3c`): DECK_SELECT, ADD_TAG, EncoderPush, MENU, BROWSE, INFO,
+  TIME MODE, BACK, LOAD1, TAG LIST, USB, SD, LINK, rekordbox, LOAD2, EncoderRotate.
+- The "pressed" flags (e.g. BROWSE `0x017f318c`) are set/cleared only from within the
+  module (~29 sites — the browse state machine), so the panel-bit→key link is not a
+  static table; it runs through this machine.
+- Track load path (for a direct-load shortcut): `reqMusicLoad(deck, enDbMsg_Browse2Play,
+  musicid)` (log str `0x39fba8`), `notifyMusicSelect(id,player,device,browse,content_id)`
+  (`0x39f91c`), `MenuSelReqLoadTrack()` (`0x41a01c`); DB at `/PIONEER/LIBRARY/PDTL.DB`.
+
+**Definitive mapping method (next):** breakpoint the named handler addresses in gdb
+(`-gdb tcp::1234`) and sweep panel bits — the injection that hits `FUN_000e051c` is
+BROWSE, the one that hits the LOAD handler is LOAD1/2, etc. This maps every
+browser/transport control directly, without unwinding the state machine, and works for
+the audio-only controls too (they emit codes even with no on-screen change).
+
+**Test USB:** `test/usb/rekordbox_test.img` is a valid rekordbox export (FAT32) with
+`PIONEER/` DB + one track `Contents/BITCRUSHR/Play It Hard/BITCRUSHR - Play It Hard.mp3`.
+Mount it with QEMU `snapshot=on` (now default in launch) so boots never dirty it.
