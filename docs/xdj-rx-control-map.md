@@ -196,6 +196,37 @@ and on the deck screen it is **not ticking**.
 - **Proof it's gated:** writing `0x17f315c=1` via gdb is **never consumed**
   (flag stays 1); a bp on `FUN_000e1334` **never fires** on the deck screen.
 
+### Input architecture — fully mapped (2026-11-09, rigorous)
+Confirmed live + static, authoritative:
+- **`IKeyManager::sendKey` = `FUN_002a47c0`** is the universal key entry (throws the
+  literal `"IKeyManager::sendKey"`). It is the receiver-observer `vtable[8]` target.
+- A real single-bit button DOES produce a distinct code here: **tempo-range `[0x12]`
+  bit3 → code `0x4108`** (verified repeatably). Injecting all 8 bits of a byte (`ff`)
+  instead triggers that byte's analog interpretation (code `0x410a`) and masks the
+  button — so map buttons with **single-bit** injects, well spaced (the harness one-shot
+  needs the ~30-frame press to release before the next, or the new inject is dropped and
+  the stale code re-read; that is the `0x430e`/`0x410a` "stuck" artifact in batch sweeps).
+- sendKey dispatches to the focused key target's `onKey` (`FUN_002ac848` = deck/LED
+  feedback: maps `0x410a`/`0x420c`/`0x5112`/… to `FUN_002ac1d4` deck-value updates) AND
+  broadcasts to observer lists (one is the active UI page).
+- **Browser in-page key dispatcher `FUN_000e1334` is gated behind the browser page being
+  foregrounded** — it never ticks on the deck screen (gdb bp never fires), setting a key
+  flag there is inert, and a write-watchpoint on the USB flag `0x17f315c` never fires from
+  the deck screen (the code→flag setter is gated too). So the deck→browser transition is
+  upstream, in the main-UI page manager, triggered by the deck page's handling of the
+  USB/BROWSE key. (Browser init `FUN_000d5714` populates the key table `FUN_000e11a4` then
+  allocates its object via `FUN_00115f5c`; `FUN_00122d80` there is only the alloc-fail
+  error logger — not a message bus, earlier guess retracted.)
+
+**NEXT (authentic open path):** identify the deck page's key observer (one of the UI
+observers sendKey broadcasts to, distinct from the `FUN_002ac848` deck-LED handler) and
+the USB/BROWSE code it switches pages on. Cleanest method on the now-verified-clean state:
+breakpoint the browser dispatcher `FUN_000e1334` and inject nav buttons **one at a time,
+well spaced** (single bit, ≥0.8 s apart to avoid the drop/stale artifact); whichever press
+makes `FUN_000e1334` begin ticking opened the browser — that panel bit is USB/BROWSE.
+Then the in-browser nav keys (table `0x17f3140`, USB flag `0x17f315c`) drive scroll/LOAD.
+gdb helpers: scratchpad/{sendkeymap.py,robustprobe.py,watchusb.py,browseopen.py,flagcheck.py}.
+
 ### The real gate (next)
 Opening the browser = the **main-UI page manager** switching the foreground page to the
 browser (so its update()→`FUN_000e1334` starts ticking). That switch is triggered by the
