@@ -33,6 +33,21 @@
 #       the panel (buttons/jogs) never came up. Reset those two pins high so the
 #       unmodified firmware sees "no USB" and the panel initialises normally.
 #
+#   patches/05-imx6-dvfs-gpt-kick.patch
+#       Keeps the DVFS/GPT timer path advancing so the firmware does not stall.
+#
+#   patches/06-imx6-usb-insert-hook.patch
+#       Runtime USB-insert simulation: touching /tmp/usb_insert drives a detect
+#       line LOW after boot so rbp mounts+scans the drive (without the init
+#       deadlock patch 04 avoids by idling the lines high).
+#
+#   patches/07-imx6-multifield-holds.patch
+#       Extends the Subucom control-injection harness (added in patch 02) to apply
+#       MULTIPLE simultaneous A/B holds (all lines of /tmp/subucom_ctrl), not just
+#       one. Needed for analog controls that span two complementary frame fields
+#       at once -- the tempo fader (0x04 negative + 0x0a positive); see
+#       docs/xdj-rx-control-map.md.
+#
 #   patches/03-sabrelite-sabresd-sd.patch
 #       The XDJ-RX firmware's real board is SABRE-SD (MACH_TYPE 3980), which
 #       registers ECSPI2 (bus 1) for the panel MCU + audio codecs, on a

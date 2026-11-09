@@ -1,0 +1,107 @@
+--- a/hw/arm/fsl-imx6.c
++++ b/hw/arm/fsl-imx6.c
+@@ -657,51 +657,71 @@
+      * held/analog/momentary states and fader positions; release by removing the file).
+      * `touch /tmp/subucom_menu` is the legacy one-shot MENU shortcut.
+      */
+-    static int inj_off = -1, inj_bit = 0;
++    /*
++     * Up to MAXHOLD simultaneous persistent holds (A/B lines), parsed from ALL
++     * lines of the ctrl file. Analog faders whose position spans two complementary
++     * frame fields (the tempo fader = 0x04 negative half + 0x0a positive half) must
++     * set both at once: with only one field forced rbp reads the pot as fully pegged.
++     */
++    enum { MAXHOLD = 8 };
++    static int  hold_off[MAXHOLD];
++    static long hold_val[MAXHOLD];              /* >=0: 16-bit analog; <0: button bit */
++    static int  hold_bit[MAXHOLD];
++    static int  nhold = 0;
++    static int inj_off = -1, inj_bit = 0;       /* one-shot */
+     static long inj_val = -1;
+-    static int inj_hold = 0;
+     {
+         FILE *cf = fopen("/tmp/subucom_ctrl", "r");
+         if (cf) {
+-            char kind = 0; unsigned off = 0, a = 0; char line[64] = {0};
+-            int parsed = (fgets(line, sizeof(line), cf) &&
+-                          sscanf(line, " %c %x %x", &kind, &off, &a) >= 2);
+-            if (parsed && (kind == 'B' || kind == 'A')) {
+-                /* persistent hold: re-applied every frame; file kept until removed */
+-                inj_hold = 1; inj_off = (int)off;
+-                if (kind == 'A') { inj_val = a; inj_bit = -1; }
+-                else { inj_bit = (int)a; inj_val = -1; }
+-                fclose(cf);
+-            } else if (parsed && s->press == 0) {
+-                /* one-shot auto press+release */
+-                inj_hold = 0; inj_off = (int)off;
+-                if (kind == 'a') { inj_val = a; inj_bit = -1; }
+-                else { inj_bit = (int)a; inj_val = -1; }
+-                s->press = 30;
+-                fclose(cf); remove("/tmp/subucom_ctrl");
+-            } else {
+-                fclose(cf);
++            char line[64]; int newn = 0, did_oneshot = 0;
++            while (fgets(line, sizeof(line), cf)) {
++                char kind = 0; unsigned off = 0, a = 0;
++                if (sscanf(line, " %c %x %x", &kind, &off, &a) < 2) continue;
++                if (kind == 'B' || kind == 'A') {
++                    if (newn < MAXHOLD) {
++                        hold_off[newn] = (int)off;
++                        if (kind == 'A') { hold_val[newn] = (long)a; hold_bit[newn] = -1; }
++                        else             { hold_bit[newn] = (int)a;  hold_val[newn] = -1; }
++                        newn++;
++                    }
++                } else if (!did_oneshot && s->press == 0) {
++                    /* one-shot auto press+release (first one-shot line only) */
++                    inj_off = (int)off;
++                    if (kind == 'a') { inj_val = (long)a; inj_bit = -1; }
++                    else             { inj_bit = (int)a;  inj_val = -1; }
++                    s->press = 30; did_oneshot = 1;
++                }
+             }
+-        } else if (inj_hold) {
+-            inj_hold = 0; inj_off = -1; inj_bit = 0; inj_val = -1; /* file gone -> release */
+-        } else if (s->press == 0 && access("/tmp/subucom_menu", F_OK) == 0) {
+-            inj_off = 0x1b; inj_bit = 0x01; inj_val = -1; /* MENU (code 0x20a) */
+-            s->press = 30; remove("/tmp/subucom_menu");
++            fclose(cf);
++            nhold = newn;                        /* replace the held set each frame */
++            if (newn == 0 && did_oneshot) remove("/tmp/subucom_ctrl");
++        } else {
++            nhold = 0;                            /* file gone -> release all holds */
++            if (s->press == 0 && access("/tmp/subucom_menu", F_OK) == 0) {
++                inj_off = 0x1b; inj_bit = 0x01; inj_val = -1; /* MENU (code 0x20a) */
++                s->press = 30; remove("/tmp/subucom_menu");
++            }
+         }
+     }
+ 
+     /* Build the 100-byte frame rbp will see (rbp_buf coordinates). */
+     memset(rbp, 0, sizeof(rbp));
+ 
+-    if (inj_hold && inj_off >= 0) {             /* persistent hold: apply every frame */
+-        if (inj_val >= 0) {
+-            rbp[inj_off]     = (uint8_t)(inj_val & 0xff);
+-            rbp[inj_off + 1] = (uint8_t)((inj_val >> 8) & 0xff);
+-        } else {
+-            rbp[inj_off] |= (uint8_t)inj_bit;
++    {
++        int hi;
++        for (hi = 0; hi < nhold; hi++) {         /* persistent holds: all applied */
++            int off = hold_off[hi];
++            if (off < 0 || off + 1 >= (int)sizeof(rbp)) continue;
++            if (hold_val[hi] >= 0) {
++                rbp[off]     = (uint8_t)(hold_val[hi] & 0xff);
++                rbp[off + 1] = (uint8_t)((hold_val[hi] >> 8) & 0xff);
++            } else {
++                rbp[off] |= (uint8_t)hold_bit[hi];
++            }
+         }
+-    } else if (s->press > 0) {
+-        if (s->press > 8 && inj_off >= 0) {     /* held down for the first frames */
++    }
++    if (s->press > 0) {                          /* one-shot press window (holds take priority) */
++        if (nhold == 0 && s->press > 8 && inj_off >= 0) {
+             if (inj_val >= 0) {
+                 rbp[inj_off]     = (uint8_t)(inj_val & 0xff);
+                 rbp[inj_off + 1] = (uint8_t)((inj_val >> 8) & 0xff);
