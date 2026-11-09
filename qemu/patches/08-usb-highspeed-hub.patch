@@ -1,0 +1,51 @@
+--- a/hw/usb/dev-hub.c
++++ b/hw/usb/dev-hub.c
+@@ -127,6 +127,30 @@
+     .bcdUSB                        = 0x0110,
+     .bDeviceClass                  = USB_CLASS_HUB,
+     .bMaxPacketSize0               = 8,
++    .bNumConfigurations            = 1,
++    .confs = (USBDescConfig[]) {
++        {
++            .bNumInterfaces        = 1,
++            .bConfigurationValue   = 1,
++            .bmAttributes          = USB_CFG_ATT_ONE | USB_CFG_ATT_SELFPOWER |
++                                     USB_CFG_ATT_WAKEUP,
++            .nif = 1,
++            .ifs = &desc_iface_hub,
++        },
++    },
++};
++
++/*
++ * High-speed (USB 2.0) variant so the hub can attach to a high-speed-only
++ * EHCI root bus (the i.MX6 fsl-ehci / chipidea HOST controllers). The real
++ * XDJ-RX wires both front USB slots behind a 2.0 hub on USB HOST1; a USB 1.1
++ * (full-speed) hub is rejected by EHCI. A high-speed device behind this hub
++ * talks to EHCI directly (no transaction translator needed).
++ */
++static const USBDescDevice desc_device_hub_high = {
++    .bcdUSB                        = 0x0200,
++    .bDeviceClass                  = USB_CLASS_HUB,
++    .bMaxPacketSize0               = 64,
+     .bNumConfigurations            = 1,
+     .confs = (USBDescConfig[]) {
+         {
+@@ -150,6 +174,7 @@
+         .iSerialNumber     = STR_SERIALNUMBER,
+     },
+     .full = &desc_device_hub,
++    .high = &desc_device_hub_high,
+     .str  = desc_strings,
+ };
+ 
+@@ -614,7 +639,8 @@
+         port = &s->ports[i];
+         usb_register_port(usb_bus_from_device(dev),
+                           &port->port, s, i, &usb_hub_port_ops,
+-                          USB_SPEED_MASK_LOW | USB_SPEED_MASK_FULL);
++                          USB_SPEED_MASK_LOW | USB_SPEED_MASK_FULL |
++                          USB_SPEED_MASK_HIGH);
+         usb_port_location(&port->port, dev->port, i+1);
+     }
+     usb_hub_handle_reset(dev);

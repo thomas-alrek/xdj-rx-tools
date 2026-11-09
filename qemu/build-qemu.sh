@@ -48,6 +48,14 @@
 #       at once -- the tempo fader (0x04 negative + 0x0a positive); see
 #       docs/xdj-rx-control-map.md.
 #
+#   patches/08-usb-highspeed-hub.patch
+#       Makes QEMU's usb-hub a USB 2.0 (high-speed) dual-speed hub so it can
+#       attach to the high-speed-only EHCI/chipidea HOST buses. The real XDJ-RX
+#       wires both front USB slots behind a 2.0 hub on USB HOST1 (guest bus 2),
+#       at devpaths 2-1.1 / 2-1.2 -- the kernel's Pioneer driver keys the
+#       udev_usbctn slot-connect channels on exactly those paths, so the USB
+#       drive must be placed there. See docs/usb-slot-topology.md.
+#
 #   patches/03-sabrelite-sabresd-sd.patch
 #       The XDJ-RX firmware's real board is SABRE-SD (MACH_TYPE 3980), which
 #       registers ECSPI2 (bus 1) for the panel MCU + audio codecs, on a
