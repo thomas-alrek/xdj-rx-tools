@@ -520,3 +520,32 @@ byte; patches 04/05 unchanged — verified).
 
 Full detail + reproduction: `docs/rbp-and-panel-protocol.md` → "FRAME TRANSPORT
 SOLVED & VERIFIED END-TO-END (2026-11-06)".
+
+---
+
+## Follow-up 5 (2026-11-09): THE UI VISIBLY REACTS — Follow-up 3/4 negatives overturned
+
+Follow-up 3's "control feedback doesn't land / sweep changed nothing" and Follow-up 4's
+"pressing buttons produced no framebuffer change" are **wrong** — they were a measurement
+artifact. With patch-02 in the running build and USB mounted, injected controls **visibly
+change the deck UI**, reproduced **live in a Cocoa window**, rbp healthy throughout
+(pid 2405, 79 threads).
+
+**Why the earlier sweeps missed it:** (1) they diffed screendumps **by eye**, and the real
+reactions are subtle sticky text/colour toggles (`TEMPO ±10`→`±16`, `500 ms`→`10 ms`,
+`ROLL` turning orange); **md5-diffing** each screendump catches them. (2) The toggles are
+sticky, so a sweep diffing *consecutive* shots sees "no change" once the first toggle
+sticks — diff against a **fixed baseline** or capture **pre/post per injection**.
+
+**Confirmed reactions** (byte sweep `b <off> ff`, md5 vs fixed baseline): `0x12`→DECK1
+TEMPO ±10→±16, `0x22`→DECK2 TEMPO ±16, `0x56`→BEAT EFFECTS 500ms→10ms, `0x5b`→ROLL
+(orange)+TAP BPM (green). The discriminating test also settled the render question:
+`IMX6_GPU_TRACE` shows GPU command traffic **frozen after init** (1× `0x658`), so the deck
+UI and its reactions render via **software DirectFB straight to fb 0x18000000** — the GC320
+2D stub is **not** in the live redraw path, and the "render-stub swallow" theory is dead.
+
+**Live repro:** `scratchpad/launch_live.sh` (`-display cocoa`, USB, mon `/tmp/d_mon5.sock`,
+gdb `:1235`), inject `0x12/0x22/0x56/0x5b` → the window steps through all four states.
+Full detail + the control-map method: `docs/rbp-and-panel-protocol.md` → "UI VISIBLY
+REACTS TO CONTROLS — SEEN LIVE (2026-11-09)". Remaining = refine to a complete per-control
+XDJ-RX map (per-bit + analog pre/post-diff sweeps); not a blocker.

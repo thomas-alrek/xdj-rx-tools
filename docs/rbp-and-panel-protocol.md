@@ -1007,3 +1007,76 @@ analogs per section, and identify navigation controls (BROWSE / MENU / rotary /
 LOAD) by code. A cycling-counter idle heartbeat would also let the baseline
 initialise without an injected transition. BROWSE specifically could not be
 pinned this session — it is the first target once the code→action map is RE'd.
+
+---
+
+## ✅ UI VISIBLY REACTS TO CONTROLS — SEEN LIVE (2026-11-09)
+
+**This section is authoritative and overturns the "Still open / no fb change"
+negatives above (lines in "FRAME TRANSPORT SOLVED" §"Still open" and
+§"Control-map re-derivation").** With patch-02 (byte-order fix) in the running
+build and USB mounted, injected panel controls **visibly change the deck UI**,
+and it was reproduced **live in a Cocoa window**. rbp stays healthy throughout
+(`pidof rbp_solo` = 2405, 79 threads, before and after).
+
+### Why the earlier sweep reported "no change" (measurement artifact)
+
+The earlier negative ("sweep 0x04..0x5f → no fb change") was not real. Two causes:
+1. Those sweeps compared screendumps **by eye**; the real reactions are often
+   small text/colour toggles (e.g. `TEMPO ±10`→`±16`, `500 ms`→`10 ms`) that are
+   easy to miss. **md5-diffing** each screendump catches them instantly.
+2. The reactions are **sticky toggles**. Pressing the same control twice returns
+   to the baseline, so a sweep that diffs *consecutive* shots sees "no change"
+   after the first toggle sticks. (Diff against a **fixed** baseline, or capture
+   **pre/post per injection**, to avoid this.)
+
+### What was observed (byte-level sweep, `b <off> ff`, all 8 bits, fixed baseline)
+
+A sweep of `b <off> ff` for `off = 0x04..0x5f` (the harness auto-runs a full
+press+release via `s->press=30`), md5-diffed against the idle baseline, drove the
+deck UI through **four distinct sticky states**. The genuine reacting transitions
+(where the hash changed from the *previous* byte) are:
+
+| transition byte | section | visible change |
+|---|---|---|
+| `0x12` | deck1 Fmt/Common (`+0x04`, button bytes `[0x10..0x13]`) | **DECK 1 TEMPO range ±10 → ±16** |
+| `0x22` | deck2 Fmt/Common (`+0x14`, button bytes `[0x20..0x23]`) | **DECK 2 TEMPO range ±10 → ±16** |
+| `0x56` | Mixer/Other (`+0x44`) | **BEAT EFFECTS 500 ms → 10 ms** |
+| `0x5b` | Mixer/Other (`+0x44`) | **ROLL selected (orange) + TAP BPM (green)** |
+
+**Accuracy note:** because the toggles are sticky and the sweep diffed against a
+*fixed* baseline, bytes *between* the transitions (0x13–0x21, 0x23–0x55, …) read
+as "changed" only because the screen was still holding the prior toggle — they are
+**not** independently confirmed reactors. The four bytes above are the confirmed
+reacting controls at all-bits granularity; isolating the exact bit/control of
+every byte needs the per-bit **pre/post-diff** pass (below).
+
+### Render path is NOT the bottleneck (and never was)
+
+`IMX6_GPU_TRACE=1` over a full boot shows GPU command traffic **frozen after init**
+— exactly **one** `GPUSTUB[0320] wr off=0x658` (a 2D command kick) in the whole
+run. So this build renders the deck UI and all control reactions via **software
+DirectFB straight to the framebuffer at `0x18000000`**; the GC320 2D stub is not
+in the live redraw path. The "render-stub swallows the redraw" theory is therefore
+dead: redraws reach the framebuffer directly, which is why the md5 diffs fire.
+
+### Seen live
+
+`scratchpad/launch_live.sh` boots `-display cocoa` (visible window) with the USB
+image, monitor `/tmp/d_mon5.sock`, gdb `:1235`. Injecting `0x12 → 0x22 → 0x56 →
+0x5b` stepped the on-screen window through all four states; each capture off the
+live window matched the headless sweep hash exactly. The harness reads host
+`/tmp/subucom_ctrl` (`b <off> <bitmask>` / `a <off> <value>`, hex).
+
+### Method for the full control map (in progress)
+
+- **Byte pre/post sweep:** for each byte, screendump *before*, inject `b <off> ff`,
+  screendump *after*, diff pre vs post — finds every byte with a net-visible effect
+  (immune to accumulated sticky state).
+- **Per-bit pre/post sweep** of each reacting byte → isolate the individual
+  button/LED bit.
+- **Analog sweep** of the section ADC offsets (`a <off> <val>` at 0x24–0x33 deck1,
+  0x34–0x43 deck2, 0x44–0x53 mixer, and the deck-perf 16-bit at `sec[0x02]`) with a
+  few values (0x0000 / 0x0200 / 0x03ff) → faders / jog / knobs.
+- Correlate each hit to (a) the visible UI element, (b) the static decoder code
+  (the byte/bit→code tables above), and (c) the **XDJ-RX physical control**.

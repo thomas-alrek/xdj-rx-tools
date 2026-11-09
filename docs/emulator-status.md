@@ -199,17 +199,26 @@ enumerates and mounts (`/dev/sda1 → /media/usb1/sda1 vfat`) and rbp stays heal
 (pid alive, 79 threads) — no crash. The deck screen does not auto-switch on insert
 (expected; you open the browser with BROWSE).
 
-**Remaining:** (1) **Re-derive the control map.** The byte/bit→code map above was
-built while decode was broken and is **unreliable** — e.g. `frame[0x1a..0x1b]`
-(claimed "global buttons") is actually a **16-bit analog** value (its handler
-`FUN_0028411c` emits float code `0x410a`), not buttons. Need to RE each section
-decoder (`FUN_002841e4` Fmt/Common, `FUN_00282800` Mixer, `FUN_00282a98` Other)
-and the event router `FUN_0028cea4` into a verified byte/bit→code table, then find
-the buttons that reach the router (BROWSE, MENU, rotary, LOAD) and confirm a
-visible screen change. (2) Optional: give the idle frame a heartbeat so rbp's
-baseline initialises without needing an injected transition. Verification tooling:
-guest shell (root, empty pw, `-serial` socket), `pidof`/`/proc/<pid>/mem`, and the
-**working** QEMU gdbstub (`-gdb tcp::1234`; resume with gdb `c`, not the monitor).
+**✅ UI VISIBLY REACTS — SEEN LIVE (2026-11-09).** Injected panel controls now
+**visibly change the deck UI**, reproduced live in a Cocoa window, with rbp healthy
+throughout (pid 2405, 79 threads). The earlier "no fb change / nothing reacts" was a
+**measurement artifact** (by-eye diffing of subtle sticky toggles on pre-fix builds);
+md5-diffing each screendump catches the changes. Confirmed reacting controls (all-bits
+granularity): `0x12`→**DECK1 TEMPO ±10→±16**, `0x22`→**DECK2 TEMPO ±16**, `0x56`→**BEAT
+EFFECTS 500ms→10ms**, `0x5b`→**ROLL (orange)+TAP BPM (green)**. The render path is NOT
+the bottleneck: this build renders via **software DirectFB straight to fb 0x18000000**
+(GPU cmd traffic frozen at 1× `0x658` since init), so the 2D stub isn't even in the live
+redraw path. Full detail + method: `docs/rbp-and-panel-protocol.md` → "UI VISIBLY REACTS".
+
+**Remaining (refinement, not a blocker): complete the XDJ-RX control map.** The all-bits
+byte sweep proves visible reaction but doesn't isolate individual controls; the full map
+needs (a) a **per-bit pre/post-diff** sweep of each reacting byte, (b) an **analog sweep**
+of the section ADC offsets (faders / jog / knobs), and (c) correlation of each hit to the
+visible UI element, the static decoder code table (`docs/rbp-and-panel-protocol.md` →
+"FULL control map"), and the physical XDJ-RX control (BROWSE/rotary/LOAD still to pin).
+Verification tooling: guest shell (root, empty pw, `-serial` socket), `pidof`/`/proc`,
+the **working** gdbstub (`-gdb tcp::1234`, resume with gdb `c`), `scratchpad/launch_live.sh`
+(visible window), `scratchpad/sweep_btn.py` (md5-diff sweep).
 
 ## RE tooling notes
 - Kernel: link base **0x80008000** (PAGE_OFFSET 0x80000000); wrap `vmlinux.bin` as
