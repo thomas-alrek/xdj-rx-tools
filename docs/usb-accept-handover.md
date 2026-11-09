@@ -46,6 +46,16 @@ wakeup-interrupt-request)**; if 0 it prints "invalid wake up" and refuses the re
 i.MX6 models usbphy + chipidea (176-line stub) but **NOT the USBNC non-core block** (USBOH3+0x800),
 so +0x804 reads 0 ⇒ OWIR never set ⇒ Host1 never resumes.
 
+### ✅ FIX B IMPLEMENTED & VERIFIED (2026-11-09): `patches/10-imx6-usbnc-wakeup.patch`
+Models the USBNC block at USBOH3+0x800, deriving OWIR (bit31 of each controller's CTRL at
++0x04*n) live from the matching EHCI root port (FPRES|CSC). **Verified end-to-end:** booted
+hub-only, waited for `UsbMountManager` == `poll_schedule_timeout`, then `device_add usb-storage`
+on 2-1.1 + `touch /tmp/usb2_insert`. Result: `0` "invalid wake up" lines, `ehci_fsl_bus_resume
+begins/ends, Host 1`, `usb 2-1.1: new ... device number 3`, auto-mount `/media/usb2/sda1`, rbp
+opened `export.pdb` (fd), **no "USB Error" modal**, and the USB2 browser shows the live library
+(ARTIST/ALBUM/TRACK… with real entries). Deterministic by construction (insert after rbp polls);
+stock firmware untouched. Boot itself is still the separate load-sensitive `gui_task` SIGSEGV risk.
+
 ### Fix plan (B, hardware-accurate, chosen): model USBNC OWIR wakeup in QEMU
 Add a USBNC register region at USBOH3+0x800 and set OWIR (bit31 of the per-controller CTRL at
 +0x804 for Host1) + raise the USB IRQ when a device attaches to a suspended Host1 with wakeup

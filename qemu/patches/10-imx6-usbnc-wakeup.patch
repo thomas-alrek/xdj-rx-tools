@@ -1,0 +1,105 @@
+--- a/hw/arm/fsl-imx6.c
++++ b/hw/arm/fsl-imx6.c
+@@ -26,6 +26,8 @@
+ #include "hw/arm/fsl-imx6.h"
+ #include "hw/misc/unimp.h"
+ #include "hw/usb/imx-usb-phy.h"
++#include "hw/usb/chipidea.h"
++#include "hw/usb/ehci-regs.h"
+ #include "hw/core/boards.h"
+ #include "hw/core/qdev-properties.h"
+ #include "system/system.h"
+@@ -978,6 +980,75 @@
+ 
+ static const GraphicHwOps xdj_fb_ops = {
+     .gfx_update = xdj_fb_gfx_update,
++};
++
++/*
++ * i.MX6 USBNC (USB non-core) wakeup-request model (XDJ-RX patch 10).
++ *
++ * The stock firmware validates a USB remote-wakeup before resuming a
++ * suspended host controller: _is_usbh1_wakeup() (and the h2/h3 variants)
++ * read the controller's USBNC CTRL register (USBOH3 + 0x800 + 4*n) and
++ * require bit 31 (OWIR, the wakeup-interrupt-request status) to be set.
++ * QEMU does not model the USBNC block, so that read returned 0 and the
++ * guest looped printing "host1, _is_usbh1_wakeup, invalid wake up" and
++ * never resumed Host1 -- so a USB stick inserted (or re-enumerated) AFTER
++ * the controller had bus-suspended never enumerated. Real hardware inserts
++ * the stick after boot, which is exactly this path.
++ *
++ * Model the four CTRL registers and derive OWIR live from the matching
++ * EHCI root port: when a device attaches to / resumes a suspended
++ * controller the EHCI sets Force-Port-Resume or Connect-Status-Change on
++ * portsc[0], which we surface as OWIR=1 so the firmware treats it as a
++ * valid wakeup and resumes. OWIR is read-only (never stored); the other
++ * CTRL bits are stored so guest read-modify-write behaves. The region sits
++ * in the unused tail of USBOH3 (the four chipidea cores occupy
++ * 0x000/0x200/0x400/0x600; USBNC is at +0x800), so it cannot perturb the
++ * existing enumeration path.
++ */
++#define FSL_IMX6_USBNC_OFFSET 0x800
++#define USBNC_CTRL_OWIR       (1u << 31)
++
++typedef struct XdjUsbnc {
++    MemoryRegion mem;
++    EHCIState   *ehci[FSL_IMX6_NUM_USBS];
++    uint32_t     ctrl[FSL_IMX6_NUM_USBS];
++} XdjUsbnc;
++
++static XdjUsbnc g_xdj_usbnc;
++
++static uint64_t xdj_usbnc_read(void *opaque, hwaddr offset, unsigned size)
++{
++    XdjUsbnc *u = opaque;
++
++    if ((offset & 3) == 0 && offset < FSL_IMX6_NUM_USBS * 4) {
++        unsigned n = offset / 4;
++        uint32_t val = u->ctrl[n];
++        EHCIState *e = u->ehci[n];
++
++        if (e && (e->portsc[0] & (PORTSC_FPRES | PORTSC_CSC))) {
++            val |= USBNC_CTRL_OWIR;
++        }
++        return val;
++    }
++    return 0;
++}
++
++static void xdj_usbnc_write(void *opaque, hwaddr offset,
++                            uint64_t value, unsigned size)
++{
++    XdjUsbnc *u = opaque;
++
++    if ((offset & 3) == 0 && offset < FSL_IMX6_NUM_USBS * 4) {
++        /* OWIR is read-only wakeup status; never let the guest store it. */
++        u->ctrl[offset / 4] = (uint32_t)value & ~USBNC_CTRL_OWIR;
++    }
++}
++
++static const MemoryRegionOps xdj_usbnc_ops = {
++    .read = xdj_usbnc_read,
++    .write = xdj_usbnc_write,
++    .endianness = DEVICE_NATIVE_ENDIAN,
++    .impl = { .min_access_size = 4, .max_access_size = 4 },
+ };
+ 
+ static void fsl_imx6_realize(DeviceState *dev, Error **errp)
+@@ -1275,6 +1346,17 @@
+                            qdev_get_gpio_in(gic, FSL_IMX6_USBn_IRQ[i]));
+     }
+ 
++    /* USBNC (USB non-core) wakeup registers -- see XdjUsbnc above. */
++    for (i = 0; i < FSL_IMX6_NUM_USBS; i++) {
++        g_xdj_usbnc.ehci[i] = &SYS_BUS_EHCI(&s->usb[i])->ehci;
++        g_xdj_usbnc.ctrl[i] = 0;
++    }
++    memory_region_init_io(&g_xdj_usbnc.mem, OBJECT(dev), &xdj_usbnc_ops,
++                          &g_xdj_usbnc, "xdj-usbnc", 0x100);
++    memory_region_add_subregion(get_system_memory(),
++                                FSL_IMX6_USBOH3_USB_ADDR + FSL_IMX6_USBNC_OFFSET,
++                                &g_xdj_usbnc.mem);
++
+     /* Initialize all ECSPI */
+     for (i = 0; i < FSL_IMX6_NUM_ECSPIS; i++) {
+         static const struct {

@@ -70,6 +70,21 @@
 #       (An isolation build confirmed these key GPIOs do NOT affect the separate,
 #       flaky rbp USB-library accept.)
 #
+#   patches/10-imx6-usbnc-wakeup.patch
+#       Models the i.MX6 USBNC (USB non-core) wakeup-request block at USBOH3+0x800
+#       (previously unmapped). The stock firmware's _is_usbh1_wakeup() reads the
+#       controller's USBNC CTRL register bit 31 (OWIR) to validate a USB remote
+#       wakeup before resuming a bus-suspended host controller; with it unmapped
+#       (reads 0) the guest flooded "host1, _is_usbh1_wakeup, invalid wake up" and
+#       never resumed, so a USB stick inserted AFTER boot never enumerated. This
+#       derives OWIR live from the matching EHCI root port (FPRES/CSC), so a device
+#       attaching to a suspended controller is reported as a valid wakeup and Host1
+#       resumes. This is what makes hardware-accurate post-boot USB insertion work,
+#       which in turn fixes the flaky library-accept: insert the stick after rbp is
+#       polling and the stock udev mount rule + its blocking "echo > /proc/udev_usb2"
+#       run while rbp reads them, so the library registers deterministically. See
+#       docs/usb-accept-handover.md.
+#
 #   patches/03-sabrelite-sabresd-sd.patch
 #       The XDJ-RX firmware's real board is SABRE-SD (MACH_TYPE 3980), which
 #       registers ECSPI2 (bus 1) for the panel MCU + audio codecs, on a
