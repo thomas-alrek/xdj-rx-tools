@@ -70,6 +70,45 @@ thread == `poll_schedule_timeout`.
 NB boot is load-sensitive: `gui_task` SIGSEGV (sig 11, PC ~0x2da5xxxx = stubbed-GPU/DirectFB
 path) crashes rbp before UI when host load is high (seen at host load avg 6+). Keep load low.
 
+## 0c. ⚠️ IN-PLACE device_del/device_add CYCLING DOES NOT WORK — 2026-11-09 session 2
+Patch 10's deterministic insert was verified on a **fresh hub-only boot** (§Fix B). This session
+tried to *re-insert in place* on an already-running instance (to restore a library view that was
+lost) and it **fails repeatably** — three distinct, reproducible reasons the next agent must know:
+
+1. **`device_del xdjusb` tears down the `-drive if=none,id=usbstick` backend too.** After a
+   `device_del`, `info block` shows no `usbstick`, and a re-`device_add ...,drive=usbstick` fails
+   with `Property 'usb-storage.drive' can't find value 'usbstick'`. You must recreate it first:
+   `drive_add 0 if=none,id=usbstick,file=<ABS>/test/usb/rekordbox_new.img,format=raw,snapshot=on`
+   THEN `device_add usb-storage,bus=usb-bus.1,port=1.1,drive=usbstick,id=xdjusb,removable=on`.
+   (The hub's child bus is NOT `xdjhub.0`; attach on `usb-bus.1` port `1.1`.)
+2. **Every `device_del` drops Host1 into a bus-suspend churn** that patch 10 does not recover from
+   in-place: guest dmesg repeats `ehci_fsl_bus_suspend begins/ends, Host 1` +
+   `usbh1_platform_rh_suspend_swfix big error`. After a few cycles Host1's wake state is wedged and
+   fresh `device_add`+insert either never enumerates or enumerates then immediately
+   `USB disconnect`. So the patch-10 wakeup path is only reliable on a **clean boot**, not after
+   del/add churn. (Open question for you: does patch 10 need to also handle the *post-suspend
+   re-attach* case, or model `swfix`? `usbh1_platform_rh_suspend_swfix` is the guest symbol to chase.)
+3. **Kernel mount succeeds but rbp latches "USB Error".** On a good-looking insert the guest DOES
+   mount: `/dev/sda1 on /media/usb2/sda1 type vfat`, `PIONEER/` readable — yet rbp shows
+   `USB Error. Remove the device.` The udev "mount" rendezvous echo raced past rbp's reader (§0b).
+   **Re-posting it manually does NOT clear a latched error:** running
+   `timeout 3 sh -c 'echo -n "mount /media/usb2/sda1" > /proc/udev_usb2'` on the guest (while rbp
+   thread is at `poll_schedule_timeout`) left the modal up. Once rbp shows USB Error it appears to
+   need a clean *disconnect→reconnect with correct timing*, not just a re-sent mount event.
+
+**Diagnostics that worked this session (reuse them):**
+- rbp pid: `pidof rbp`; its UsbMountManager poll thread is the one whose
+  `/proc/<pid>/task/<tid>/wchan` == `poll_schedule_timeout` (this session: pid 2346, tid 2347).
+- `info usb` / `info block` over the monitor socket show device + drive-backend state. NOTE the
+  monitor echoes each typed char back (readline) — strip with `sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '\010'`.
+- Guest console helper `con4.py` (§1) for `dmesg | tail`, `mount | grep media`, wchan, the echo test.
+
+**Bottom line for the next agent:** do NOT try to rescue USB by cycling device_del/add on a live
+instance — it wedges Host1. Reproduce from a **fresh hub-only boot** per §Fix B, and treat the two
+real open problems as (a) does patch 10 cover post-suspend re-attach / the `swfix` path, and (b) the
+rbp-side latched-"USB Error" recovery (what clean disconnect timing clears it). The static firmware
+side (`UsbMountManager` `FUN_0024cb38`, `read_sf_rbp` `FUN_00296628`, scanner bp `0x24cf14`) is in §2.
+
 ## 1. How to run the emulator
 Build (only if you change a QEMU patch): `qemu/build-qemu.sh` then `qemu/build-nand.sh`.
 The binary is `build/qemu-src/qemu-11.1.0/build/qemu-system-arm`. Exact launch command
