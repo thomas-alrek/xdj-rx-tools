@@ -41,6 +41,15 @@ Notes:
   deck 2) as 16-bit values — **not** the `+0x24`/`+0x34` "per-deck analog" group the
   older static table assumed. This also resolves the old `[0x1a/0x1b]` contradiction:
   it is a 16-bit analog (the deck-2 tempo fader), not "MENU".
+- **TEMPO fader is a complementary dual-field pot** (verified by screendump sweep): each
+  fader reports TWO 16-bit fields that rbp reads *together* — deck 1 `[0x04/05]` = negative
+  side, `[0x0a/0b]` = positive side (deck 2: `[0x14/15]` / `[0x1a/1b]`). With only one
+  field forced and the other 0, rbp reads the pot as **fully pegged** (any nonzero positive
+  field → +max; in WIDE it reads ratiometrically). The physical fader always sends both as
+  a matched pair, so the emulator must too: drive `0x0a = round(pos·1023)` and
+  `0x04 = 1023 − 0x0a` (0a=04 at centre → 0%; 04=max/0a=0 at top → −range; 0a=max/04=0 at
+  bottom → +range). This is why the injection harness grew multi-field holds (qemu patch 07).
+  Confirmed: `(04=0x3ff,0a=0)`→−16%, `(04=0,0a=0x3ff)`→+16%, `(04≈0a)`→0%.
 - `[0x12]`/`[0x22]` bit3 = TEMPO RANGE is the cleanest single-bit result (isolated by
   the per-bit sweep).
 - The BEAT FX bytes (`0x56/0x57/0x5a/0x5b`) each drive several on-screen sub-functions;
