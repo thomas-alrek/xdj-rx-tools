@@ -1,0 +1,58 @@
+--- a/hw/arm/fsl-imx6.c
++++ b/hw/arm/fsl-imx6.c
+@@ -555,6 +555,12 @@
+ };
+ 
+ static XdjSubucom *g_xdj_subucom;
++/*
++ * The two USB-storage "device present" detect-line GPIOs (GPIO4_IO30 = USB1,
++ * GPIO7_IO12 = USB2), captured at realize so the harness can simulate a USB
++ * insertion at runtime by driving the line LOW (see xdj_subucom_frame_start).
++ */
++static DeviceState *g_xdj_usb_gpio[2];
+ 
+ /*
+  * CRC-16/X-25 (poly 0x1021, reflected 0x8408, init 0xffff, refin/refout, xorout
+@@ -612,6 +618,30 @@
+     if (!s) {
+         return;
+     }
++    /*
++     * USB-insert simulation. The detect lines idle HIGH ("no USB"); driving one
++     * LOW (as a real insertion does) makes rbp mount+scan the drive and register
++     * it as a browsable rekordbox source. Done at runtime -- after rbp's panel
++     * poll thread exists -- so it does not hit the init deadlock that patch 04
++     * avoids by idling the lines HIGH.
++     *   touch /tmp/usb_insert  -> USB1 present (GPIO4_IO30 driven LOW)
++     *   rm    /tmp/usb_insert  -> USB1 removed (GPIO4_IO30 back HIGH)
++     *   /tmp/usb2_insert does the same for USB2 (GPIO7_IO12).
++     */
++    {
++        static int usb_present[2] = { 0, 0 };
++        static const int det_pin[2] = { 30, 12 };
++        static const char *det_file[2] = { "/tmp/usb_insert", "/tmp/usb2_insert" };
++        int u;
++        for (u = 0; u < 2; u++) {
++            int want = (access(det_file[u], F_OK) == 0);
++            if (want != usb_present[u] && g_xdj_usb_gpio[u]) {
++                qemu_set_irq(qdev_get_gpio_in(g_xdj_usb_gpio[u], det_pin[u]),
++                             want ? 0 : 1);
++                usb_present[u] = want;
++            }
++        }
++    }
+     if (getenv("SUBUCOM_BURST") && s->pos) {
+         fprintf(stderr, "SUBUCOM msg_size=%u\n", s->pos);
+     }
+@@ -1107,6 +1137,11 @@
+         }
+         if (!sysbus_realize(SYS_BUS_DEVICE(&s->gpio[i]), errp)) {
+             return;
++        }
++        if (i == 3) {        /* GPIO4: USB1 detect (GPIO4_IO30) */
++            g_xdj_usb_gpio[0] = DEVICE(&s->gpio[i]);
++        } else if (i == 6) { /* GPIO7: USB2 detect (GPIO7_IO12) */
++            g_xdj_usb_gpio[1] = DEVICE(&s->gpio[i]);
+         }
+ 
+         sysbus_mmio_map(SYS_BUS_DEVICE(&s->gpio[i]), 0, gpio_table[i].addr);
