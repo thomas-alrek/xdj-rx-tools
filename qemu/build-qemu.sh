@@ -62,9 +62,13 @@
 #       shows they are MAIN-UCOM "direct-input" keys: plain i.MX6 GPIO switches
 #       (idle HIGH, pressed LOW) that rbp reads through /dev/gpiodrv. This adds a
 #       runtime hook: writing a Linux GPIO number to /tmp/mainkey drives that pin
-#       LOW (press); removing the file releases it (HIGH). Confirmed live: GPIO
-#       158 = USB2, 160 = USB1 (press -> the browser opens on that slot), 159 =
-#       rekordbox, 161 = MIDI. See docs/xdj-rx-control-map.md.
+#       LOW (press); removing the file releases it (HIGH). The 8 key GPIOs idle
+#       HIGH from reset (psr-reset, like the detect lines) so there is no boot
+#       edge. Confirmed live: GPIO 158 = USB2, 160 = USB1 (press -> the browser
+#       opens on that slot), 159 = rekordbox, 161 = MIDI; 119/120 = ch1/ch2
+#       Phono-Line, 146/149 = DECK1/2 + TIME MODE. See docs/xdj-rx-control-map.md.
+#       (An isolation build confirmed these key GPIOs do NOT affect the separate,
+#       flaky rbp USB-library accept.)
 #
 #   patches/03-sabrelite-sabresd-sd.patch
 #       The XDJ-RX firmware's real board is SABRE-SD (MACH_TYPE 3980), which
