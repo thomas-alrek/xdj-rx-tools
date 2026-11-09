@@ -135,3 +135,45 @@ the audio-only controls too (they emit codes even with no on-screen change).
 **Test USB:** `test/usb/rekordbox_test.img` is a valid rekordbox export (FAT32) with
 `PIONEER/` DB + one track `Contents/BITCRUSHR/Play It Hard/BITCRUSHR - Play It Hard.mp3`.
 Mount it with QEMU `snapshot=on` (now default in launch) so boots never dirty it.
+
+## ✅ COMPLETE byte→code map — captured LIVE via gdb (2026-11-09)
+
+Breakthrough method: the panel section handlers all funnel through one observer sink,
+`IKeyManager::sendKey` = **`FUN_002a47c0`** (found live: at a section handler, the
+receiver's `+0x3c` observer's `vtable[8]` resolves to runtime `0x2a47c0`). The control
+**code is r1 (2nd arg)**. Breakpointing `0x2a47c0` in gdb and injecting each panel byte
+(`B <off> ff`) and reading r1 gives the authoritative code for every control — **idle
+noise = 0** (it fires only on injected controls). Raw capture: `scratchpad/codesweep.out`.
+
+Codes by frame region (`0xff` sets all 8 bits, so a byte lists all its bits' codes;
+adjacent bytes share codes where a value spans two bytes):
+
+| frame region | codes | meaning |
+|---|---|---|
+| `[0x04/05]`,`[0x0a/0b]` (D1), `[0x14/15]`,`[0x1a/1b]` (D2) | `0x410a` | TEMPO fader (analog) |
+| `[0x06-0x08]` / `[0x16-0x18]` | `0x411d` | deck control |
+| `[0x0c-0x0f]` / `[0x1c-0x1f]` | `0x4306` | deck control |
+| `[0x10-0x13]` / `[0x20-0x23]` | `0x4103-0x411c, 0x4306, 0x430e, 0x421b, 0x421c` | **deck transport/hot-cue/loop buttons** (PLAY/CUE/SYNC/SHIFT/HOTx/LOOP…) |
+| `[0x24-0x30]` / `[0x34-0x40]` | `0x5007,0x5008,0x5009,0x500a,0x5011,0x508b` | **deck analogs** (jog/params) |
+| `[0x33]` / `[0x43]` | `0x5112` | deck button |
+| `[0x44-0x52]` | `0x805,0x804,0x440c,0x4405,0x448b,0x4403,0x4402,0x448a` | **mixer** (channel faders/EQ/trim + buttons) |
+| `[0x4e-0x50]` | `0x600f` | **encoder/rotary** |
+| `[0x59-0x5a]` | `0x5095,0x5096,0x5097,0x5098` | COLOR-FX / param analogs |
+| `[0x5b-0x5c]` | `0x803, 0x6010 (encoder), 0x4486, 0x4487, 0x5014` + ROLL/TAP (bit2/3) | beat-fx + **browser rotary 0x6010** |
+| `[0x5d-0x5e]` | `0x420b, 0x420d, 0x4205, 0x8001, 0x8002, 0x4488` | beat-fx / crossfader |
+| `[0x5f]` | `0x204, 0x208, 0x209, 0x20a (MENU), 0x401, 0x409, 0x4206, 0x4488` | **GLOBAL nav buttons** (MENU/BROWSE/BACK/TAG/USB…) |
+
+Code→name: `IKeyManager::sendKey` routes the code to the active screen's key handler;
+the browser handler names its keys via `@Ui_BrowseKey> KEYCMD <name>` strings. MENU =
+`0x20a` (confirmed). The remaining nav code↔name labels (BROWSE/USB/LOAD vs
+0x204/0x208/0x209/0x401/0x409) need one more RE pass on the key→handler registration.
+
+## ⚠ Current blocker: the browser does not open from panel input
+The global nav codes (`[0x5f]`) **do** reach `IKeyManager::sendKey` (confirmed live),
+and per-bit presses of every nav/encoder bit produce **no on-screen change** — the
+media browser never opens, so there is nothing to scroll/LOAD. Likely cause: rbp has
+**not registered the USB as a browsable rekordbox source** (no USB source indicator on
+the deck), so the deck→browse key is a no-op. Next: verify in-guest that `/media/usb1`
+is mounted with `PIONEER/LIBRARY/PDTL.DB` AND that rbp's media/DB manager scanned+
+registered it (notifyMusicSelect/device registration); if not, that scan/registration is
+the real gate to BROWSE→LOAD, not the control map.
