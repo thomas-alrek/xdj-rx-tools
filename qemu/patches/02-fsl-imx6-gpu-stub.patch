@@ -18,7 +18,7 @@
  
  #define IMX6_ESDHC_CAPABILITIES     0x057834b4
  
-@@ -107,9 +111,766 @@
+@@ -107,9 +111,790 @@
                              TYPE_OR_IRQ);
  }
  
@@ -530,25 +530,42 @@
 +
 +    /*
 +     * Flexible control injection. Write a one-line spec to /tmp/subucom_ctrl:
-+     *   "b <off> <bitmask>"  -> hold rbp_buf[off] |= bitmask   (a button, e.g. "b 1b 1" = MENU)
-+     *   "a <off> <value>"    -> set LE 16-bit value at rbp_buf[off] (an analog, e.g. "a 24 200")
-+     * Offsets/values are hex. `touch /tmp/subucom_menu` is the legacy MENU shortcut.
++     *   "b <off> <bitmask>"  -> one-shot button press+release (auto, ~30 frames)
++     *   "a <off> <value>"    -> one-shot LE 16-bit analog, then release
++     *   "B <off> <bitmask>"  -> HOLD a button down while the file exists (release on rm)
++     *   "A <off> <value>"    -> HOLD an LE 16-bit analog value while the file exists
++     * Offsets/values are hex. Uppercase B/A = persistent hold (lets a tester observe
++     * held/analog/momentary states and fader positions; release by removing the file).
++     * `touch /tmp/subucom_menu` is the legacy one-shot MENU shortcut.
 +     */
 +    static int inj_off = -1, inj_bit = 0;
 +    static long inj_val = -1;
-+    if (s->press == 0) {
++    static int inj_hold = 0;
++    {
 +        FILE *cf = fopen("/tmp/subucom_ctrl", "r");
 +        if (cf) {
 +            char kind = 0; unsigned off = 0, a = 0; char line[64] = {0};
-+            if (fgets(line, sizeof(line), cf) &&
-+                sscanf(line, " %c %x %x", &kind, &off, &a) >= 2) {
-+                inj_off = (int)off;
++            int parsed = (fgets(line, sizeof(line), cf) &&
++                          sscanf(line, " %c %x %x", &kind, &off, &a) >= 2);
++            if (parsed && (kind == 'B' || kind == 'A')) {
++                /* persistent hold: re-applied every frame; file kept until removed */
++                inj_hold = 1; inj_off = (int)off;
++                if (kind == 'A') { inj_val = a; inj_bit = -1; }
++                else { inj_bit = (int)a; inj_val = -1; }
++                fclose(cf);
++            } else if (parsed && s->press == 0) {
++                /* one-shot auto press+release */
++                inj_hold = 0; inj_off = (int)off;
 +                if (kind == 'a') { inj_val = a; inj_bit = -1; }
 +                else { inj_bit = (int)a; inj_val = -1; }
 +                s->press = 30;
++                fclose(cf); remove("/tmp/subucom_ctrl");
++            } else {
++                fclose(cf);
 +            }
-+            fclose(cf); remove("/tmp/subucom_ctrl");
-+        } else if (access("/tmp/subucom_menu", F_OK) == 0) {
++        } else if (inj_hold) {
++            inj_hold = 0; inj_off = -1; inj_bit = 0; inj_val = -1; /* file gone -> release */
++        } else if (s->press == 0 && access("/tmp/subucom_menu", F_OK) == 0) {
 +            inj_off = 0x1b; inj_bit = 0x01; inj_val = -1; /* MENU (code 0x20a) */
 +            s->press = 30; remove("/tmp/subucom_menu");
 +        }
@@ -557,7 +574,14 @@
 +    /* Build the 100-byte frame rbp will see (rbp_buf coordinates). */
 +    memset(rbp, 0, sizeof(rbp));
 +
-+    if (s->press > 0) {
++    if (inj_hold && inj_off >= 0) {             /* persistent hold: apply every frame */
++        if (inj_val >= 0) {
++            rbp[inj_off]     = (uint8_t)(inj_val & 0xff);
++            rbp[inj_off + 1] = (uint8_t)((inj_val >> 8) & 0xff);
++        } else {
++            rbp[inj_off] |= (uint8_t)inj_bit;
++        }
++    } else if (s->press > 0) {
 +        if (s->press > 8 && inj_off >= 0) {     /* held down for the first frames */
 +            if (inj_val >= 0) {
 +                rbp[inj_off]     = (uint8_t)(inj_val & 0xff);
@@ -785,7 +809,7 @@
      FslIMX6State *s = FSL_IMX6(dev);
      uint16_t i;
      qemu_irq irq;
-@@ -472,7 +1233,157 @@
+@@ -472,7 +1257,157 @@
       */
      create_unimplemented_device("pcie-phy", FSL_IMX6_PCIe_ADDR,
                                  FSL_IMX6_PCIe_SIZE);
@@ -943,7 +967,7 @@
      /* ROM memory */
      if (!memory_region_init_rom(&s->rom, OBJECT(dev), "imx6.rom",
                                  FSL_IMX6_ROM_SIZE, errp)) {
-@@ -502,6 +1413,10 @@
+@@ -502,6 +1437,10 @@
                               &s->ocram, 0, FSL_IMX6_OCRAM_ALIAS_SIZE);
      memory_region_add_subregion(get_system_memory(), FSL_IMX6_OCRAM_ALIAS_ADDR,
                                  &s->ocram_alias);
