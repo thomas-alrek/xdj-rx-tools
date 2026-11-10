@@ -56,9 +56,33 @@ inj = `b <rbp_off> <mask>` for buttons, `A <rbp_off> <val16>` for analog.
 | 0x12.5 | 0x410b | SYNC | ✅ ("SYNC ON") |
 | 0x12.6 | 0x4104 | VINYL | ◆ (RX3-match) |
 | 0x12.7 | 0x4110 | RELOOP/EXIT | ○ |
-| 0x13.7 | 0x4102 | CUE | ○ (code RX3-match, bit unverified) |
-| 0x13.6 | 0x4101 | PLAY/PAUSE | ○ (inferred; injected → no LCD effect) |
-| 0x13.0–5 | — | LOOP IN/OUT/RELOOP, CALL ◄/►, SEARCH/TRACK | *(decoding)* |
+| 0x13.0 | 0x410f | REV / DIRECTION | ◆ (RX3-match) |
+| 0x13.1 | 0x410d | LOOP OUT | ◆ (RX3-match) |
+| 0x13.2 | 0x4121 | VINYL SPEED ADJ | ◆ (RX3-match) |
+| 0x13.3 | 0x4120 | SEARCH ◄ (reverse) | ◆ (RX3-match) |
+| 0x13.4 | 0x431e | DELETE | ○ (positional) |
+| 0x13.5 | 0x431f | MEMORY | ○ (positional) |
+| 0x13.6 | 0x4101 | PLAY/PAUSE | ✅ (→ performance view; movw @0x284370) |
+| 0x13.7 | 0x4102 | CUE | ◆ (RX3-match) |
+
+## Analog continuous (16-bit LE, inj `A <off> <val16>`, ÷1023) — base 0x44 CONFIRMED (0x600f@0x4e)
+| rbp | code | control | conf |
+|---|---|---|---|
+| 0x04 / 0x0a (+ 0x14/0x1a d2) | — | TEMPO fader (dual complementary) | ✅ |
+| 0x24 / 0x34 | 0x5008 | EQ HI (d1/d2) | ◆ |
+| 0x26 / 0x36 | 0x5007 | TRIM | ○ (audio-only) |
+| 0x28 / 0x38 | 0x500a | EQ MID | ◆ |
+| 0x2a / 0x3a | 0x5009 | EQ LOW | ◆ |
+| 0x2c / 0x3c | 0x5011 | COLOR / FILTER | ○ |
+| 0x48 | 0x440c | BOOTH MONITOR | ○ |
+| 0x4a | 0x4405 | HEADPHONE MIXING | ◆ (RX3-match) |
+| 0x4c | 0x448b | HEADPHONE LEVEL | ○ |
+| 0x4e | 0x600f | CROSSFADER | ✅ (offset, 0x600f) |
+| 0x50 | 0x4403 | MASTER LEVEL | ◆ (RX3-match) |
+| 0x52 | 0x4402 | BOOTH/MASTER-BAL | ○ |
+| 0x44 / 0x46 | 0x805/0x804 | CH1/CH2 fader OR MIC1/2 (ambiguous) | ○ |
+
+*(All analog are audio-only — no emulator feedback — so these are firmware-decoded, not screen-verified.)*
 
 ## Analog (16-bit LE, inj `A <off> <val16>`, value/1023)
 - Deck1 continuous @ rbp 0x04,0x06,0x08,0x0a,0x0c,0x0e,0x12 — TEMPO fader = **0x04 (neg) + 0x0a
