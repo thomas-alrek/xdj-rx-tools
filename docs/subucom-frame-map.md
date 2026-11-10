@@ -7,8 +7,13 @@ each an unrolled `ldrb [cur,#OFF]; ldrb [prev,#OFF]; eor; tst #MASK; …` patter
 - **Center/nav/beat-fx/source buttons** → code-emitting decoder `~0x282c00–0x283880`;
   `rbp_off = 0x44 + decoder_OFF`; emits 16-bit codes consumed by `FUN_0026ae7c`.
 - **Deck buttons** → decoder `~0x2845xx–0x284d40`; `rbp_off = 0x04 + decoder_OFF` (deck1),
-  **deck2 = deck1 + 0x10**; emits codes `0x41xx/0x42xx`; routed via `FUN_00222188(ctlr,
-  deckIdx, evtType, index)`.
+  **deck2 = deck1 + 0x10**; emits codes `0x41xx/0x42xx`. **Runtime note (2026-11-11):** the
+  code→handler is NOT `FUN_00222188` as previously written — gdb breakpoints on `0x222188`
+  do **not** fire for SYNC / TEMPO-RANGE / PLAY / CUE even though all four produce LCD
+  reactions, so `FUN_00222188` is a *deck-engine state object*, not the button dispatch. The
+  real deck-button handler is still TBD. Deck buttons ARE delivered and decoded correctly
+  (verified by LCD effect); the earlier static "routed via FUN_00222188" was an unconfirmed
+  inference.
 - **Mixer/analog continuous** → decoder near `0x282400–0x282800`; 16-bit LE ÷1023.0 → codes
   `0x50xx/0x60xx` via `FUN_002adee8`. *(offsets being finalized)*
 
@@ -62,7 +67,7 @@ inj = `b <rbp_off> <mask>` for buttons, `A <rbp_off> <val16>` for analog.
 | 0x13.3 | 0x4120 | SEARCH ◄ (reverse) | ◆ (RX3-match) |
 | 0x13.4 | 0x431e | DELETE | ○ (positional) |
 | 0x13.5 | 0x431f | MEMORY | ○ (positional) |
-| 0x13.6 | 0x4101 | PLAY/PAUSE | ✅ (→ performance view; movw @0x284370) |
+| 0x13.6 | 0x4101 | PLAY/PAUSE | ✅ received — deck reacts, but **position frozen** (audio-clock-gated, see below) |
 | 0x13.7 | 0x4102 | CUE | ◆ (RX3-match) |
 
 ## Analog continuous (16-bit LE, inj `A <off> <val16>`, ÷1023) — base 0x44 CONFIRMED (0x600f@0x4e)
@@ -114,3 +119,29 @@ shows no LCD feedback, so the exact label per bit can't be fixed in the emulator
 - **JOG rotation**: a separate protocol (not this 100-byte frame); unmapped.
 - Top-panel source keys (rekordbox/MIDI/USB1/USB2/DECK1-2/TIME MODE) are **MAIN-UCOM GPIOs**
   (158–161 etc.), not subucom — already wired via `/tmp/mainkey`.
+
+## PLAY works but playback position does not advance (audio DMA not emulated)
+
+**Symptom (2026-11-11):** with a track loaded on a deck, pressing PLAY (`0x13.6`,
+`b 13 40`) makes the deck react (view/state changes on the LCD) but the **REMAIN
+time stays frozen** (e.g. `02:56.640`, unchanged 2.5 s later). The track never plays.
+
+**Root cause — the deck playhead is slaved to the audio sample clock, which the
+emulator has no backend for:**
+
+- The QEMU machine (`hw/arm/fsl-imx6.c`) models **no audio peripheral** — the only
+  SSI present is the *subucom panel SPI slave*. There is no i.MX6 **SSI audio** path
+  and no **SDMA audio** channels.
+- On the guest, ALSA enumerates (`card0: ak4387-audio`, codec + `imx-ssi` map OK) but
+  the DMA platform fails: `dmesg` shows **`asoc: platform imx-pcm-audio.0 hw params
+  failed`**, and every playback substream (`/proc/asound/card0/pcm{0,1,2}p/sub0/status`)
+  reads **`closed`** — rbp never opens the audio device.
+- CDJ/XDJ players advance the deck position from frames consumed by the audio hardware.
+  With no SDMA audio DMA to drain PCM at 44.1 kHz, no period-elapsed IRQ fires, the ALSA
+  pointer never moves, and rbp's playhead is stuck — even though "play" latched.
+
+**So the PLAY mapping is correct; this is the (still-unimplemented) `audio` roadmap
+feature.** To make playback advance, QEMU must model the i.MX6 **SSI + SDMA audio**
+path enough that `snd_pcm_hw_params` succeeds and the DMA produces period IRQs at the
+PCM rate (a real backend for sound, or a "null sink that drains at realtime" if only the
+*visual* playhead advancing is wanted, no actual audio).
