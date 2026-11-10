@@ -31,7 +31,7 @@ PPM = "/tmp/xdjpanel_fb.ppm"
 _CTYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
            ".webp": "image/webp", ".json": "application/json; charset=utf-8",
            ".html": "text/html; charset=utf-8", ".css": "text/css",
-           ".js": "application/javascript"}
+           ".js": "application/javascript", ".svg": "image/svg+xml"}
 
 _grab_lock = threading.Lock()
 

@@ -234,6 +234,196 @@ On a FRESH instance (USB solved, library loaded, NOT harness-degraded):
   signed value. Clean probe to confirm once you have a candidate: `Z1,2adfa0,4` must fire with the
   injection (it's encoder-only), and the on-screen highlight must move ARTIST→ALBUM.
 
+### Session 4 (2026-11-09, static Ghidra/REA deep-dive) — frame is BIT-PACKED; locator tables found; prior "decoder/oracle" labels corrected
+Fully traced the subucom control-object machinery in rbp (REA ghidra provider, real VAs).
+
+**Headline: the subucom frame is a BIT-PACKED stream, not a byte array.** Every control object
+carries a 2-byte **bit-locator** plus a 32-bit descriptor:
+- `obj+0x1d` = **b1** (type/width byte; e.g. `0x90`, `0xb0`, `0xb4`, or `~(~deck & 0x6f)` for buttons)
+- `obj+0x1e` = **b2** (bit/field position)
+- `obj+0x08` (= `obj[2]`) = **32-bit descriptor word**
+This per-control bit addressing is the root reason `b <off> <bit>` / `A <off> <val>` byte pokes can
+never hit the encoder — confirming & explaining the Session 2/3 wall.
+
+**Authoritative locator tables (code→frame-field map for EVERY control — the Rosetta Stone):**
+- **`FUN_002ad060(code, deckIdx, &b1, &b2, phase)` @ `0x2ad060`** — giant switch returning (b1,b2).
+- **`FUN_002adc90(code)` @ `0x2adc90`** — returns the 32-bit descriptor word.
+
+**Encoder (code `0x4205`) is special-cased** — built by **`FUN_002adfa0` @ `0x2adfa0`** with a
+**HARDCODED descriptor `0x8188000`** (= bits {27,20,19,15}) and HARDCODED locators
+**`b1=0x90`, `b2=0x33` (phase 0) / `b2=0x61` (phase 1)**. (Note: `FUN_002ad060`'s own `0x4205`
+entry gives `b1=0xb0, b2=0x4f/0x60` — a DIFFERENT path NOT used by the registry; trust the
+`FUN_002adfa0` hardcode for the encoder.) `0x8188000 & 0x20000 == 0` ⇒ encoder is NOT a fader
+(obj[5] stays 0); the `& 0x8000` descriptor bit = "has phase-B half-step sub-field".
+
+**CORRECTION to Sessions 2–3 (important):** `FUN_0028a7b8`, `FUN_00286e1c`, `FUN_0028931c`,
+`FUN_002adfa0`, `FUN_002adee8` are the control-object **REGISTRY BUILDERS / templates**, built
+**ONCE** by the decoder ctor **`FUN_0028dfdc` @ `0x28dfdc`** (object vtable `DAT_00427540`; owned by
+subucom mgr `FUN_00221d78` @ `0x221d78`). They are **NOT per-frame decoders**, and **`FUN_002adfa0`
+is NOT a runtime "encoder oracle"** — its ONLY caller is the init-time builder `FUN_0028a7b8`
+(verified via `procedure_callers`). So the old `Z1,2adfa0,4` oracle premise is wrong (it fires at
+init, not per rotation). `FUN_0028e420` (decoder vtable slot 0) is the decoder **destructor** (frees
+all the per-section event vectors at obj `+0xbc…+0x120`). `FUN_002ad060`/`FUN_002adc90`/`FUN_002aeed4`
+only COMPUTE locators from (code,deck) — they do not read the frame either.
+
+**The real per-frame bitstream READER is still unlocated.** It must iterate the built registry
+(sections at `decoder+0xd0 + i*0xc`, vectors at `+0x7c/+0x94/…/+0x10c/+0x118`), read each object's
+`b1`/`b2` against the raw frame, set the changed-flag + signed delta, and dispatch via
+`IKeyManager::sendKey` (`FUN_002a47c0`) → `FUN_0026ae7c`. It is reached indirectly (via `obj->vtable`
+or from the SPI-receive/CRC path), so call-graph/xref walking did not surface it. Leads to try next:
+callers of the CRC reverser `FUN_0028259c`, and the subucom RX thread that reads `/dev/subucom_spi1.0`.
+
+**Rosetta Stone data points (verified-visual controls ↔ their `FUN_002ad060` locators):**
+| code | control (verified frame) | b1 | b2 |
+|---|---|---|---|
+| `0x410a` | TEMPO fader D1 — rbp `[0x04/05]+[0x0a/0b]` | `0xb0` | `0x1d` (29) |
+| `0x4108` | TEMPO RANGE D1 — rbp `[0x12]` bit3 | `0x90` | `0x10` (16) |
+| `0x4205` | **browse encoder** (target) | `0x90` | `0x33`/`0x61` |
+
+Two points are not enough to algebraically invert (b1,b2)→rbp-bit without the reader fn, so the bit
+formula is not yet pinned. **Fastest path to finish is now live gdb probing** (needs emulator booted +
+library loaded): breakpoint the reader once found (or bp `FUN_0026ae7c` on code `0x4205`), sweep
+candidate frame bits in the harness, and confirm the ARTIST→ALBUM highlight move. Encoder search
+target: a changing signed field at bit-locator `b1=0x90, b2=0x33/0x61`.
+
+### Session 4b (2026-11-10, LIVE on the running emulator) — ENCODER PUSH + USB STOP buttons FOUND
+Booted instance (rbp pid 2363, library registered on usb1+usb2, category browser on screen),
+gdb oracle on `sendKey` (`FUN_002a47c0`, code=r1), injected via `/tmp/subucom_ctrl`. **CORRECTION
+to Session 4's "bit-packed / b1,b2" worry:** the real per-frame decoder IS byte/bit-addressable in
+rbp coordinates (the b1/b2 locators are a separate LED-feedback path). The decoder structure, found
+live by tracing `sendKey`'s caller:
+
+- Per-frame decode dispatches to **per-section handlers** that compare current-frame vs previous-frame
+  bytes and fire on change. Tempo handler `FUN_0028411c` (code `0x410a`) is called from an (undefined)
+  deck-section dispatcher at ~`0x2842xx` with `r4`=&curr_frame[section], `r5`=&prev_frame[section];
+  tempo value = 16-bit LE at `[r4,#0]/[#1]` = rbp `[0x04/05]`, change-gated on `[r4,#6/#7]`.
+- **The "Other"/global section decoder is at VA `0x283600+`.** It reads frame byte **`[section_base+0x19]`**
+  (section_base `0x44` ⇒ **rbp `[0x5d]`**) and fires per changed bit:
+  | rbp[0x5d] bit | mask | code | control (confirmed live) |
+  |---|---|---|---|
+  | bit 0 | `0x01` | `0x8001` | **USB1 STOP / eject** — unmounts usb1 library (verified: `export.pdb` closed, kernel umount) |
+  | bit 1 | `0x02` | `0x8002` | **USB2 STOP / eject** — unmounts usb2 library |
+  | bit 4 | `0x10` | `0x4205` | **browse ENCODER PUSH (select/enter)** — drives the live browser: categories→ARTIST→BITCRUSHR→album |
+  | bit 5 | `0x20` | `0x420d` | (no visible effect in this test; TBD) |
+
+**Full bit map of the "Other" decoder (`0x283600`), confirmed live via the `sendKey` oracle:**
+| frame bit | code | control |
+|---|---|---|
+| rbp[0x5d] bit0 (`0x01`) | `0x8001` | **USB1 STOP / eject** ✅ confirmed (kernel umount, `export.pdb` closed) |
+| rbp[0x5d] bit1 (`0x02`) | `0x8002` | **USB2 STOP / eject** ✅ confirmed |
+| rbp[0x5d] bit4 (`0x10`) | `0x4205` | **browse encoder EncoderRotate event** (see correction below) |
+| rbp[0x5d] bit5 (`0x20`) | `0x420d` | nav (no visible effect in test) |
+| rbp[0x5d] bit7 (`0x80`) | `0x420b` | nav |
+| rbp[0x5e] bit0 (`0x01`) | `0x4206` | nav |
+| rbp[0x5e] bit1 (`0x02`) | `0x409`  | nav |
+
+- **USB STOP: rbp[0x5d] bit0=USB1 STOP, bit1=USB2 STOP — SOLID** (verified by actual eject). After eject
+  rbp latches "USB Error. Remove the device." which a manual remount + `echo mount>/proc/udev_usb2`
+  re-opens the fd but does NOT clear the modal (docs/usb-accept-handover.md §0c) — needs a fresh boot.
+
+- **CORRECTION on the encoder (supersedes an earlier "bit4 = PUSH" claim in this section):** rbp[0x5d]
+  bit4 → code `0x4205` is **EncoderRotate** (the handover was right). The active browser dispatcher
+  `FUN_0026ae7c` routes `0x4205` to **`FUN_000b36e0(state, event+0xc)`** — the rotation accumulator —
+  where **event+0xc = the signed delta**. Injecting bit4 fires `FUN_000b36e0` with **delta = 0** (no
+  scroll) and does NOT fire the push handler `FUN_000b36f0`. So bit4 alone = a zero-delta rotate pulse.
+  It drilled the browser on one instance (session 4b/inst-1) but not a fresh one (inst-2) — the
+  handover's **browser-page-gating / inject-quiescence flakiness**, not a wiring difference.
+  - **EncoderPush was NOT isolated** — `FUN_000b36f0` (the push action) never fired from the bits tested.
+  - **EncoderRotate (real scroll) needs event+0xc ≠ 0**, which comes from the **velocity-gated counter
+    path at `0x283b80`** (sign compare `0x283b58`; timestamped queue, `cmp #30`-unit window; reads frame
+    bytes rbp[0x59]/[0x5a]/[0x5b] = 0x15/0x16/0x17). gdb-stepped injection CAN'T trigger it — the time
+    gaps between breakpoints blow the velocity window, so it falls back to other codes (0x448e). A
+    **real-time** quadrature stream on rbp[0x5a] didn't scroll the list but **loaded a track onto DECK1**
+    (hit a load/select path). So the exact encoder byte+encoding is still unpinned.
+
+**Remaining for a working ROTATE:** pin the counter frame field (likely rbp[0x59–0x5b]) + its
+signed-delta encoding, then build a QEMU harness injector that STREAMS a changing counter with frame
+timing tight enough to satisfy the `0x283b80` velocity window. Static/`b`/`B` pokes can't do it.
+The browse controls ARE reachable at rbp[0x5d]+ (contradicts the Session 2/3 "collapses to 0x409/0x410a"
+claim = an offset mistake); the blocker is the velocity-gated streaming, plus the browser-page gating.
+
+### Session 4c (2026-11-10, fresh instance) — ROTATE IS BLOCKED DOWNSTREAM IN rbp, NOT IN THE HARNESS
+Traced the full rotate apply-chain live and reached a decisive conclusion: **a QEMU harness injector
+cannot make rotate work — the blocker is rbp's browser not applying rotation on the category screen.**
+- The dispatcher `FUN_0026ae7c` routes code `0x4205` → `FUN_000b36e0` which just does
+  `DAT_0107be1c = delta` (= event+0xc). At the end of the browser's per-event processing
+  (`FUN_000b3760`), `FUN_000e12e0(DAT_0107be1c)` **accumulates** it: `DAT_017f3234 += clamp(delta)`.
+  It does NOT move the cursor — it only accumulates.
+- The cursor MOVE is `FUN_000e159c` (reads `DAT_017f3234`), which runs only from the browser update
+  tick `FUN_000e1334` (key table @ `0x17f3140`). **Live: `FUN_000e1334` does NOT tick on the category
+  screen, and `FUN_000e159c` never fires** (breakpointed, 0 hits). `FUN_000e1264` (the per-key flag
+  updater called in `FUN_000b3760`) only sets flag *state* in that table; the apply is still the
+  dormant `FUN_000e1334`. So the accumulated rotation **dead-ends**.
+- PROVEN by forcing it: setting `DAT_017f3234`/`DAT_0107be1c` nonzero via gdb did NOT scroll; forcing
+  delta=+1 on a `0x4205` event made the browser **enter ARTIST** (the push side `FUN_000b36f0`), never
+  scroll. The legacy browser-key subsystem (table `0x17f3140`, `FUN_000e1334`/`FUN_000e159c`,
+  `DAT_017f3234`) is **dormant** behind the active `ARTIST/ALBUM/…` page — exactly the long-standing
+  "browser PAGE not foregrounded / not ticking" blocker in the "⚠ Current blocker" section above.
+- Corollary: on a fresh instance even the PUSH (`b 5d 10`) did not reliably navigate — the whole
+  encoder is gated behind this. (It drilled on the earlier instance = that page happened to be ticking.)
+- **So the frame side is DONE** (rbp[0x5d] bit4 = `0x4205` is produced reliably); **the real blocker is
+  making the active category browser's rotation applier run.** That is an rbp-browser-internals problem
+  (the deck→browser page-manager gating), NOT a subucom-frame / QEMU-harness problem. A streaming
+  counter injector would emit the event and still not scroll. USB1/USB2 STOP are unaffected (different
+  path) and remain SOLID.
+
+**Next step for rotate (redirected):** crack the page-manager gating so the active browser's update
+tick (`FUN_000e1334` / the equivalent in the `DAT_0107bdf8` active-browser object) runs and applies
+`DAT_017f3234` — then the already-solved `0x4205` injection will scroll. Pursue the active browser's
+own apply path (methods of `DAT_0107bdf8` / `FUN_000b3760`'s return consumer), not a harness change.
+
+### Session 4d (2026-11-10) — scroll mechanism FULLY RE'd & proven; clean rotate blocked by page interactivity
+Pinned the entire scroll chain for the category browser and PROVED the scroll works:
+- **`FUN_000e159c` @ `0xe159c` = the category-list scroll applier.** Takes no args; reads the signed
+  accumulator **`DAT_017f3234` @ `0x17f3234`**, picks the browse mode via `FUN_000df480()`, and calls
+  the mode's nav fn (`FUN_000d6950(delta)` / `…69f0/6ac4/6b4c/6cb8/6bdc/6c84/6d4c`) to move the cursor,
+  then logs `@Ui_BrowseKey> KEYCMD EncoderRotate` and zeroes the accumulator. **Force-calling it over
+  gdb (set `DAT_017f3234=±N`, `pc=0xe159c`, trap the return) DID move the category selection on screen.**
+  So the scroll is real and the firmware frame side (producing `0x4205`) is already solved.
+- **The full normal chain:** `0x4205` event → `FUN_0026ae7c` → `FUN_000b36e0` (`DAT_0107be1c=delta`) →
+  `FUN_000b3760` → `FUN_000e12e0` accumulates `DAT_017f3234`; the apply (`FUN_000e159c`) is a browser
+  **page vtable virtual** (no static callers; `search_bytes 9c150e00` = 0 hits) called from the page's
+  update() — which is **dormant** (`FUN_000e1334` bp = 0 ticks on the category screen).
+- **CONFIRMED the blocker is browser-page interactivity, not the frame:** on this instance the category
+  list is **displayed but not interactive** — pressing the USB2 source key did NOT reset the selection,
+  and injected encoder events accumulate but never apply. (On the earlier instance the same push DID
+  drill — the page was ticking there. It's load/boot-dependent, the handover's long-standing gating.)
+- **The force-call is a glitchy workaround, NOT a clean fix** (the user correctly flagged the on-screen
+  **▲▼ scroll-overlay — not present on real hardware**): driving `FUN_000e159c` out of the page's own
+  update context moves the index but the page never re-renders normally, so it sticks showing the
+  rotation overlay and the selection wedges. Experimental bridge: `tools/xdj-panel/encoder_bridge.py`
+  (force-calls `FUN_000e159c`) — demonstrates the scroll but leaves the browser in a degraded state;
+  needs a reboot to recover. **It is not a usable rotate.**
+- **The genuine remaining blocker = make the browser page the foreground, interactive, ticking page**
+  so its own update() calls `FUN_000e159c` in context (clean render, no overlay). That is the
+  deck→browser page-manager gating from the "⚠ Current blocker" section — still unsolved, and it gates
+  the PUSH too (both only work when the page is ticking). No subucom-frame / QEMU-harness change helps.
+
+### Session 4e (2026-11-10) — fresh browser IS interactive; PUSH solid; ROTATE still not reliably drivable
+Rebooted clean (hub-only boot → `device_add usb-storage` on 2-1.1 → `touch /tmp/usb2_insert`), and the
+key correction to Session 4c/4d: **a freshly-booted browser IS interactive** (the earlier "not
+interactive" was a corrupted/force-call-wedged state, not inherent).
+- **PUSH = rbp[0x5d] bit4 (`b 5d 10`, code `0x4205`) — SOLID & reproducible.** On a fresh interactive
+  browser it cleanly drills one level per click (categories→ARTIST→…), **no overlay**. Reproduced on
+  two independent fresh boots. **This CORRECTS the handover: `0x4205`/bit4 is EncoderPush, NOT
+  EncoderRotate.** (`FUN_000e159c`'s `KEYCMD EncoderRotate` log belongs to the dormant legacy path.)
+- **ROTATE — field candidate found but NOT reliably drivable.** Empirically the browse selection is
+  moved by **rbp[0x4e]/[0x4f]** (16-bit value, code **`0x600f`**, AbsMoved, normalized by the float
+  const **1023.0** at `0x282ec4`; decode at `0x282c1c`–`0x282c74`, section-base 0x44 so `[r4,#0xa/0xb]`).
+  Streaming/changing it moved ARTIST→ALBUM **cleanly (no overlay, no gdb)** on one instance — but it did
+  NOT reproduce on a clean reboot (continuous increase scrolled 0 steps), and multi-step/bidirectional
+  driving never worked: pulses (value→0 between) scroll down-then-up = net zero; continuous holds hit
+  the emulator's **inject-quiescence** (rbp's change-gated poll stops dispatching after ~150 injects —
+  real HW streams continuous frames). So `0x600f`/rbp[0x4e] is the best rotate lead but the clean
+  multi-step scroll is blocked by (a) emulator quiescence vs the encoder's continuous-stream nature and
+  (b) browser-state dependence. The force-call of `FUN_000e159c` (Session 4d) scrolls but glitches
+  (overlay). **Net: PUSH + USB STOP are usable; a clean ROTATE is not yet achieved.**
+- Harness note: the browse encoder wants a continuously-held, slowly-changing 16-bit value at
+  rbp[0x4e]/[0x4f] — which the current `/tmp/subucom_ctrl` `A` hold re-injects every frame and trips
+  quiescence. A faithful rotate likely needs the QEMU harness to stream rbp[0x4e] as a changing value
+  WITHOUT counting toward the change-gated-poll quiescence (or fixing that quiescence), then feed small
+  per-detent deltas — but confirm `0x600f`→browse-scroll reproduces on a clean instance FIRST.
+
 ## ★ BREAKTHROUGH: USB1/USB2 are MAIN-UCOM GPIO keys, NOT subucom (2026-11-09)
 From the **XDJ-RX service manual** (`~/Downloads/da43a7.pdf`, 210pp). The unit has
 **two MCUs**, and the key routing is split:

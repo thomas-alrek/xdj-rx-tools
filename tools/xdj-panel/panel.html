@@ -101,6 +101,19 @@
 // cx,cy = centre %, w,h = size %. type: btn | vfader | hfader | knob.
 // spec: "B off bit" (button) or "A off" (analog) in hex; null = unmapped.
 // grade: ok=verified, guess=unverified, un=unmapped.
+// Browse-encoder / USB-stop controls (live 2026-11-10, see docs/xdj-rx-control-map.md
+// "Session 4b"): all live in subucom frame byte rbp[0x5d] (decoder @ 0x283600).
+//   bit0(0x01)=USB1 STOP, bit1(0x02)=USB2 STOP (code 0x8001/0x8002) -- VERIFIED by
+//     actual eject (kernel umount, export.pdb closed). Lowercase "b" = one eject/click.
+//   bit4(0x10)=encoder PUSH (code 0x4205) -- VERIFIED: on a fresh interactive browser,
+//     one "b 5d 10" cleanly drills one level (categories->ARTIST->...), no overlay.
+//     Reproduced on two fresh boots. (This CORRECTS the handover: 0x4205 is the PUSH,
+//     not EncoderRotate.) A browser must be freshly interactive for it to apply.
+// ROTATE (scroll): best lead is rbp[0x4e]/[0x4f] = code 0x600f (16-bit AbsMoved value,
+//   /1023). Changing it moved ARTIST->ALBUM cleanly once, but NOT reliably on a clean
+//   reboot, and multi-step scrolling is blocked by the emulator's ~150-inject quiescence
+//   (encoder wants a continuously-streamed value). Left unmapped (ROT-/ROT+) pending a
+//   faithful streaming injector. See docs/xdj-rx-control-map.md "Session 4e".
 const SCREEN0 = { x:36.5, y:5.4, w:22.6, h:19.84 };
 const CTRLS0 = [
   {id:'browse', label:'BROWSE', type:'btn', spec:'B 16 01', grade:'guess', cx:40.06, cy:29.21, w:3.6, h:2.4},
@@ -109,9 +122,9 @@ const CTRLS0 = [
   {id:'menu', label:'MENU', type:'btn', spec:null, grade:'un', cx:57.11, cy:29.18, w:3.4, h:2.4},
   {id:'back', label:'BACK', type:'btn', spec:'B 16 02', grade:'guess', cx:47.21, cy:36.81, w:2.6, h:3.0},
   {id:'tagtrk', label:'TAG TRK', type:'btn', spec:null, grade:'un', cx:49.9, cy:36.85, w:2.0, h:3.0},
-  {id:'enc', label:'PUSH', type:'btn', spec:'B 17 02', grade:'guess', cx:48.47, cy:44.85, w:5.2, h:9.0, shape:'round'},
-  {id:'encL', label:'ROT−', type:'btn', spec:'B 17 01', grade:'guess', cx:44.6, cy:45.2, w:2.0, h:3.0},
-  {id:'encR', label:'ROT+', type:'btn', spec:'B 17 04', grade:'guess', cx:52.2, cy:45.2, w:2.0, h:3.0},
+  {id:'enc', label:'PUSH', type:'btn', spec:'b 5d 10', grade:'ok', cx:48.47, cy:44.85, w:5.2, h:9.0, shape:'round'},
+  {id:'encL', label:'ROT−', type:'btn', spec:null, grade:'un', cx:44.6, cy:45.2, w:2.0, h:3.0},
+  {id:'encR', label:'ROT+', type:'btn', spec:null, grade:'un', cx:52.2, cy:45.2, w:2.0, h:3.0},
   {id:'loadL', label:'◄LOAD', type:'btn', spec:'B 18 01', grade:'guess', cx:46.82, cy:52.24, w:2.2, h:2.6},
   {id:'loadR', label:'LOAD►', type:'btn', spec:'B 18 02', grade:'guess', cx:50.31, cy:51.81, w:2.2, h:2.6},
   {id:'quant', label:'QUANTIZE', type:'btn', spec:'B 19 01', grade:'guess', cx:62.5, cy:8.08, w:3.6, h:2.4},
@@ -121,8 +134,8 @@ const CTRLS0 = [
   {id:'src_midi', label:'MIDI', type:'btn', gpio:161, grade:'ok', cx:34.3, cy:12.2, w:4.3, h:2.4},
   {id:'src_usb1', label:'USB1 src', type:'btn', gpio:160, grade:'ok', cx:34.45, cy:16.32, w:4.3, h:2.4},
   {id:'src_usb2', label:'USB2 src', type:'btn', gpio:158, grade:'ok', cx:34.47, cy:20.84, w:4.3, h:2.4},
-  {id:'usb1stop', label:'USB1 STOP', type:'btn', spec:null, grade:'un', cx:3.7, cy:23.62, w:3.6, h:2.4},
-  {id:'usb2stop', label:'USB2 STOP', type:'btn', spec:null, grade:'un', cx:93.42, cy:23.21, w:3.6, h:2.4},
+  {id:'usb1stop', label:'USB1 STOP', type:'btn', spec:'b 5d 01', grade:'ok', cx:3.7, cy:23.62, w:3.6, h:2.4},
+  {id:'usb2stop', label:'USB2 STOP', type:'btn', spec:'b 5d 02', grade:'ok', cx:93.42, cy:23.21, w:3.6, h:2.4},
   {id:'mrec', label:'MASTER REC', type:'btn', spec:null, grade:'un', cx:88.32, cy:16.93, w:3.4, h:2.4},
   {id:'tmark', label:'TRACK MARK', type:'btn', spec:null, grade:'un', cx:88.33, cy:23.32, w:3.4, h:2.4},
   {id:'eq_hi1', label:'HI1', type:'knob', spec:'A 46', grade:'guess', cx:42.82, cy:41.14, w:4.0, h:5.0, val:512},
