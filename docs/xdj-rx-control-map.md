@@ -424,7 +424,30 @@ interactive" was a corrupted/force-call-wedged state, not inherent).
   WITHOUT counting toward the change-gated-poll quiescence (or fixing that quiescence), then feed small
   per-detent deltas — but confirm `0x600f`→browse-scroll reproduces on a clean instance FIRST.
 
-### Session 4g (2026-11-10, fresh boot) — ⚠️ RETRACTS 4f's "forward PROVEN"; rotate is EDGE-TRIGGERED ±1 and cancels → still not drivably scrollable
+### Session 4h (2026-11-10) — ✅ BROWSE ROTATE FULLY SOLVED (both directions, clean, pure injection) — thanks to the RX3 emulator repo
+**The rotate works. Completely. Both directions.** The unlock came from the **XDJ-RX3** emulator
+`github.com/nzoschke/xdj-emu` (`docs/xdj-rx3-panel.md`): on the RX3 the browse encoder is a
+**free-running 16-bit signed counter at EUP bytes 84–85**, and the firmware reads `delta = new−old`.
+Those byte offsets are **84–85 = 0x54/0x55** and the RX3 push is **byte 93 bit4 = rbp[0x5d] bit4** —
+both MATCH the RX exactly, so the RX3 frame layout transfers. My 4f/4g mistake: I drove **rbp[0x58]
+with edge toggles**; the real control is a **16-bit counter at rbp[0x54]/[0x55]** driven **monotonically**.
+
+- **FORWARD (scroll down) = monotonic INCREMENT** of the 16-bit LE counter at rbp[0x54]/[0x55].
+- **REVERSE (scroll up) = monotonic DECREMENT.**
+- **Clean 1:1:** `A 54 1,2,3,4,5,6` (6 increments, ~50 ms apart) moved USB2-root ARTIST→SEARCH =
+  exactly 6 items. 99 increments → bottom (DATE ADDED); 100 decrements → top (ARTIST). No gdb, no
+  overlay, fully reproducible on a fresh boot. (Edge toggles / monotonic ramps on rbp[0x58] failed
+  because that's the wrong field; the 0x54–0x61 "all react" in 4g was just frame-change noise.)
+- **Driving model:** hold the counter via `A 54 <value16>`; each +1/−1 change the firmware polls =
+  one detent. Dwell ≥ ~40–50 ms per step so each value is polled (faster collapses multiple into one
+  clamped step). Wrapping the 16-bit counter is fine for continuous spin. The counter persists in the
+  held frame; the NEXT detent just changes it again (no clear needed between detents).
+- This **supersedes 4g's "not drivable"**: there was no quiescence/applier blocker — I was driving the
+  wrong field with the wrong waveform. PUSH (rbp[0x5d] bit4) + USB STOP unchanged/solid.
+- Panel wiring: a stateful server `/browse` endpoint maintains the 16-bit counter and ramps it ±1 per
+  detent; the panel's central encoder sends spin steps to it.
+
+### Session 4g (2026-11-10, fresh boot) — ⚠️ (SUPERSEDED by 4h) thought rotate was edge-triggered/undrivable — WRONG field (0x58); the real field is the 0x54/0x55 counter
 Field + encoding from 4f stand (rbp[0x58], code `0x4205`, type 3 RelMoved — correct, RE-
 and gdb-confirmed). **But 4f's "forward scroll PROVEN clean via pure injection" is RETRACTED.**
 A fresh hub-only boot + USB2 bring-up, then exhaustive screen tests, could **not** reproduce
