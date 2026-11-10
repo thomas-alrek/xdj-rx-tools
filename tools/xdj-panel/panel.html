@@ -124,7 +124,7 @@ const CTRLS0 = [
   {id:'browse', label:'BROWSE', type:'btn', spec:'B 16 01', grade:'guess', cx:40.06, cy:29.21, w:3.6, h:2.4},
   {id:'taglist', label:'TAG LIST', type:'btn', spec:'b 5e 02', grade:'ok', cx:45.7, cy:29.19, w:3.6, h:2.4},
   {id:'info', label:'INFO', type:'btn', spec:'b 5f 08', grade:'ok', cx:51.37, cy:29.15, w:3.4, h:2.4},
-  {id:'menu', label:'MENU', type:'btn', spec:'b 5f 01', grade:'ok', cx:57.11, cy:29.18, w:3.4, h:2.4},
+  {id:'menu', label:'MENU/UTILITY', type:'btn', spec:'B 5f 01', grade:'ok', cx:57.11, cy:29.18, w:3.4, h:2.4},
   {id:'back', label:'BACK', type:'btn', spec:'b 5e 01', grade:'ok', cx:47.21, cy:36.81, w:2.6, h:3.0},
   {id:'tagtrk', label:'TAG TRK', type:'btn', spec:null, grade:'un', cx:49.9, cy:36.85, w:2.0, h:3.0},
   {id:'enc', label:'PUSH', type:'btn', spec:'b 5d 10', browseWheel:true, grade:'ok', cx:48.47, cy:44.85, w:5.2, h:9.0, shape:'round'},
@@ -319,7 +319,10 @@ function wire(el,c){
         log('↻ '+c.label+'  browse '+(c.browse>0?'+':'')+c.browse+' (rbp[0x54] counter)'); return; }
       if(c.gpio){ el.classList.add('down'); mainkey(c.gpio); log('▸ '+c.label+'  gpio '+c.gpio+' (MAIN-UCOM)'); return; }
       if(!c.spec){ log('· '+c.label+' — unmapped (no frame code yet)'); return; }
-      el.classList.add('down'); ctrl(c.spec); log('▸ '+c.label+'  '+c.spec); }
+      // press WHILE held (like a real momentary button): send as a HOLD (B/A), released
+      // on pointer-up. A quick click = short press; holding >1s = long press (e.g.
+      // MENU→UTILITY). One-shot 'b'/'a' specs are promoted to holds 'B'/'A' on send.
+      el.classList.add('down'); ctrl(c.spec.replace(/^b /,'B ').replace(/^a /,'A ')); log('▸ '+c.label+'  '+c.spec); }
     else if(c.type==='rotary'){ // rotary encoder: spin -> one-shot step pulses
       if(!c.specUp){ log('· '+c.label+' — unmapped'); return; }
       const r=el.getBoundingClientRect(), cx0=r.left+r.width/2, cy0=r.top+r.height/2;
