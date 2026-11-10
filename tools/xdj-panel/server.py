@@ -54,17 +54,11 @@ def _compose_ctrl(lines):
     """Build the ctrl-file body. Once the browse encoder has moved, the 16-bit
     counter at 0x54/0x55 MUST be present in EVERY frame: if a later frame drops
     it, the firmware reads 0x54 jumping back to 0 as a big rotate delta (so e.g.
-    a push scrolls instead of drilling in). The harness also suppresses one-shot
-    'b'/'a' lines whenever any hold is present, so promote them to holds 'B'/'A'
-    (the panel releases them on pointer-up via /release)."""
-    out = []
-    for ln in lines:
-        s = ln.strip()
-        if not s:
-            continue
-        if _browse_active and s[0] in ("b", "a"):      # one-shot -> hold
-            s = s[0].upper() + s[1:]
-        out.append(s)
+    a push scrolls instead of drilling in). The QEMU harness (patch 07, updated)
+    applies one-shot 'b'/'a' presses ON TOP of holds, so we no longer promote
+    them to holds -- they stay one-shots (a sustained hold on the encoder push
+    would trigger the wrong mode) and just ride alongside the held counter."""
+    out = [ln.strip() for ln in lines if ln.strip()]
     if _browse_active and not any(l.lower().startswith("a 54") for l in out):
         out.append("A 54 %x" % _browse_counter)
     return "\n".join(out) + "\n"

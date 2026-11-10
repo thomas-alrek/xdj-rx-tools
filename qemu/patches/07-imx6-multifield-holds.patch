@@ -100,8 +100,8 @@
 -    } else if (s->press > 0) {
 -        if (s->press > 8 && inj_off >= 0) {     /* held down for the first frames */
 +    }
-+    if (s->press > 0) {                          /* one-shot press window (holds take priority) */
-+        if (nhold == 0 && s->press > 8 && inj_off >= 0) {
++    if (s->press > 0) {                          /* one-shot press window (applies ON TOP of holds) */
++        if (s->press > 8 && inj_off >= 0) {      /* was nhold==0 gated: a one-shot must fire while held */
              if (inj_val >= 0) {
                  rbp[inj_off]     = (uint8_t)(inj_val & 0xff);
                  rbp[inj_off + 1] = (uint8_t)((inj_val >> 8) & 0xff);
