@@ -35,6 +35,11 @@ analog); `post≠pre` = a sticky toggle.
 | `[0x57]` bits 0–2 | **BEAT FX** (further params) | distinct `BEAT EFFECTS` states | momentary |
 | `[0x5a]` (7 active bits) | **BEAT FX SELECT (type) + CH SELECT** | effect ROLL↔DELAY↔…, CH SELECT MASTER↔1↔2; bits 0 (`0x01`) & 5 (`0x20`) sticky | mixed |
 | `[0x5b]` bits 2–3 (`0x04`,`0x08`) | **BEAT FX ROLL / TAP** | `ROLL` turns orange; `TAP` BPM turns green | button (sticky) |
+| `[0x54/0x55]` (16-bit LE counter) | **BROWSE encoder ROTATE** | increment=scroll down, decrement=up (1:1) | encoder (Session 4h) |
+| `[0x5d]` bit4 (`0x10`) | **BROWSE encoder PUSH** | drills into the selected category/track | button |
+| `[0x5d]` bits 0–1 (`0x01`,`0x02`) | **USB1 / USB2 STOP** | ejects the USB library (kernel umount) | button |
+| `[0x5e]` bit0 (`0x01`) | **BACK** | navigates up one browser level | button |
+| `[0x12]` bit5 (`0x20`) / `[0x22]` bit5 | **DECK 1 / DECK 2 SYNC** | deck shows `SYNC ON` (red) | button |
 
 Notes:
 - The two TEMPO faders live in the **deck Fmt/Common sections** (`+0x04` deck 1, `+0x14`
@@ -56,6 +61,33 @@ Notes:
   the per-bit held hashes are recorded in `scratchpad/map/bits_5x.out`. Exact per-bit
   physical labels (BEAT ◄ vs ►, FX ON/OFF, QUANTIZE, LEVEL/DEPTH) need a few more
   screendump reads to pin — the bytes and their byte-level function are confirmed.
+
+## Mapping coverage & limits (2026-11-10, region-aware bit sweep)
+
+Method that works: the live screen is **byte-stable** (3 identical screendump md5s), so a
+**held-vs-released, region-diffed bit sweep** (`scratchpad/sweep2.py`, zones top/d1/d2) reliably
+flags which frame bits do something and **where**. But several hard limits cap what is
+*verifiable this way*:
+
+- **Audio-only controls have NO on-screen feedback** → unverifiable by screendump: EQ (HI/MID/LOW),
+  channel faders, trim, crossfader, headphone level/mix, channel CUE. These can only ever be
+  "plausible", not confirmed, in this emulator (no audio path). ~1/3 of the panel is like this.
+- **PLAY / CUE / performance pads are on the SUB SPI channel** (`subucom_spi2.0`), which the current
+  harness does **not** inject (it builds the EUP frame only). So deck transport/pads can't be driven
+  yet — would need a SUB-channel injection path in the harness.
+- **Deck function buttons need a LOADED track** to show an effect, and each press **drifts deck state**
+  (sync on, tempo range cycled, cues set), so cross-deck/bit comparison is noisy. Only *distinctive*
+  effects are reliably labelled. Confirmed clean this pass: `[0x12]/[0x22]` bit3 = TEMPO RANGE,
+  bit5 = SYNC (shows "SYNC ON"). `[0x12]` bit6 produced a SYNC-master popup on d1 but `[0x22]` bit6
+  changed d2 tempo range — **ambiguous (state drift), NOT wired.** Many other deck bits
+  (`0x10`,`0x11`,`0x13`) are *active* (set hot-cue ABCD markers, loop, etc.) but not cleanly labelled.
+- **The RX3 cross-reference (`rx3-panel-crossref.md`) does NOT transfer** beyond the browse/push/back
+  core + tempo range: its whole global-nav byte `0x5c` is dead on the RX (8-bit sweep, zero hits).
+  RX nav buttons (BROWSE/TAG/INFO/MENU/LOAD) are elsewhere and not yet found (prior sessions: they may
+  not be single-bit). Found but unidentified: `[0x5e]` bit5 (`0x20`) = a sticky toggle.
+
+Net: the screendump-verifiable controls are the browser/nav cluster, the distinctive deck functions,
+BEAT FX (visible display), and the tempo faders/range — roughly the ~16 now at panel grade `ok`.
 
 ## Raw sweep data (for refinement)
 
