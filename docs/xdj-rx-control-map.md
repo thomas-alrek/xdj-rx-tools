@@ -40,6 +40,16 @@ analog); `post≠pre` = a sticky toggle.
 | `[0x5d]` bits 0–1 (`0x01`,`0x02`) | **USB1 / USB2 STOP** | ejects the USB library (kernel umount) | button |
 | `[0x5e]` bit0 (`0x01`) | **BACK** | navigates up one browser level | button |
 | `[0x12]` bit5 (`0x20`) / `[0x22]` bit5 | **DECK 1 / DECK 2 SYNC** | deck shows `SYNC ON` (red) | button |
+| `[0x5f]` bit0 (`0x01`) | **MENU** (code 0x20a) | opens the SORT menu | button (static-decode + screen-verified) |
+
+**Single subucom channel:** rbp opens only `/dev/subucom_spi1.0` — ALL controls (incl. PLAY/CUE/
+pads/faders) are on the one 100-byte frame; no SUB channel, so no harness change is needed to drive
+any control. The authoritative byte/bit→control map lives in the firmware's section decoders:
+**center/nav keys** = unrolled code-emitting decoder `~0x282c00–0x2837xx` (`rbp_off = 0x44 +
+decoder_OFF`, emits codes → `FUN_0026ae7c`); **deck/mixer** = section decoders → `FUN_00222188(ctlr,
+deckIdx, evtType, value)`. Static decompilation of these is reliable (MENU@0x5f.0 predicted then
+screen-confirmed); gdb breakpoint sweeps are NOT (they disrupt the panel-decode timing). Full-map
+extraction in progress.
 
 Notes:
 - The two TEMPO faders live in the **deck Fmt/Common sections** (`+0x04` deck 1, `+0x14`
