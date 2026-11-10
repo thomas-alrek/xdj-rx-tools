@@ -109,15 +109,16 @@
 //     one "b 5d 10" cleanly drills one level (categories->ARTIST->...), no overlay.
 //     Reproduced on two fresh boots. (This CORRECTS the handover: 0x4205 is the PUSH,
 //     not EncoderRotate.) A browser must be freshly interactive for it to apply.
-// ROTATE (scroll) = rbp[0x58], SAME code 0x4205 as the push but event type 3 (RelMoved),
-//   delta +1 per transition (Session 4f, CORRECTS the 0x4e/0x600f lead). FORWARD scroll is
-//   PROVEN clean: toggling rbp[0x58] bit0 (A 58 0 <-> A 58 1, ~15ms apart) scrolled the
-//   USB2 root list ARTIST->PIONEER REC, no overlay, no gdb. Left unmapped (ROT-/ROT+) for
-//   now: (a) reverse/scroll-up not yet found (delta is quadrature-style, magnitude-
-//   independent; rbp[0x59]!=0 suppresses the encoder), and (b) forward is intermittent --
-//   after sustained injection the instance hits the global ~150-inject quiescence. Wiring
-//   needs a server-side toggle-burst endpoint once reverse + reliability are solved.
-//   See docs/xdj-rx-control-map.md "Session 4f".
+// ROTATE (scroll) = rbp[0x58], SAME code 0x4205 as the push but event type 3 (RelMoved)
+//   (field+encoding SOLID; CORRECTS the old 0x4e/0x600f lead). BUT it is NOT drivably
+//   scrollable via injection (Session 4g RETRACTS the earlier "forward proven"). The delta
+//   is EDGE-TRIGGERED on rbp[0x58] 0<->nonzero: 0->nonzero=+1, nonzero->0=-1, so every
+//   injectable waveform pairs +1/-1 that CANCEL in the scroll accumulator (net 0 = no
+//   scroll). Also rotate events only register while the dispatcher is gdb-breakpointed, and
+//   the applier FUN_000e159c is dormant on a fresh browser. Real blocker = emulator/harness
+//   (an incremental encoder can't be driven by one injectable phase), not field ID. Left
+//   unmapped (ROT-/ROT+); a faithful rotate needs QEMU subucom-harness work.
+//   See docs/xdj-rx-control-map.md "Session 4g".
 const SCREEN0 = { x:36.5, y:5.4, w:22.6, h:19.84 };
 const CTRLS0 = [
   {id:'browse', label:'BROWSE', type:'btn', spec:'B 16 01', grade:'guess', cx:40.06, cy:29.21, w:3.6, h:2.4},

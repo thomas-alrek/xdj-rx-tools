@@ -424,7 +424,40 @@ interactive" was a corrupted/force-call-wedged state, not inherent).
   WITHOUT counting toward the change-gated-poll quiescence (or fixing that quiescence), then feed small
   per-detent deltas — but confirm `0x600f`→browse-scroll reproduces on a clean instance FIRST.
 
-### Session 4f (2026-11-10) — ROTATE FIELD FOUND: rbp[0x58], code 0x4205 type 3; forward scroll PROVEN clean (supersedes the 0x4e/0x600f lead)
+### Session 4g (2026-11-10, fresh boot) — ⚠️ RETRACTS 4f's "forward PROVEN"; rotate is EDGE-TRIGGERED ±1 and cancels → still not drivably scrollable
+Field + encoding from 4f stand (rbp[0x58], code `0x4205`, type 3 RelMoved — correct, RE-
+and gdb-confirmed). **But 4f's "forward scroll PROVEN clean via pure injection" is RETRACTED.**
+A fresh hub-only boot + USB2 bring-up, then exhaustive screen tests, could **not** reproduce
+any scroll from rbp[0x58] by any pure-injection method (fast/slow toggle, more steps, file-
+absent cycling, monotonic ramp). What actually happens, from live gdb + accumulator reads:
+- **The rotate delta is EDGE-TRIGGERED on the 0→nonzero / nonzero→0 transition of the
+  rbp[0x54–0x61] region, not a position read.** `0x58` 0→nonzero ⇒ delta **+1**; nonzero→0 ⇒
+  delta **−1** (live: `DAT_0107be1c` observed at −1 after a fall). A **monotonic ramp**
+  (nonzero→nonzero+1) produces **zero events** — only the 0↔nonzero *edges* fire. So any
+  injectable waveform pairs every +1 rise with a −1 fall and they **cancel in the accumulator
+  `DAT_017f3234` (observed = 0 after every pattern)** ⇒ no net scroll. This is the real reason,
+  deeper than "quiescence": rise/fall cancellation, because I can only drive one phase.
+- **Pure injection (no gdb) fires NO rotate events at all** (acc stays 0); events only register
+  while the dispatcher `FUN_0026ae7c` is gdb-breakpointed (CPU-stop gating of subucom delivery)
+  — an emulator-timing artifact, not a userspace-drivable path.
+- **The scroll applier `FUN_000e159c` is DORMANT on a fresh browser** (confirmed: no self-tick
+  in 1.5 s; push works because it is handled immediately in the dispatcher, the rotate needs the
+  deferred applier tick). So even a net-nonzero accumulator would not scroll on a fresh page.
+- The 4f "ARTIST→PIONEER REC" scroll was on a long-warmed instance right after a gdb sweep of
+  **0x54–0x61**; it is now **unverified/retracted** — likely driven by a *different* control in
+  that span (category nav) or an applier-timing fluke, NOT a reproducible browse-encoder rotate.
+- **PUSH (rbp[0x5d] bit4, 0x4205 type 0) and USB STOP remain SOLID** — reconfirmed on this fresh
+  boot (push drilled USB2-root→ARTIST cleanly).
+
+**Faithful fix (real blocker, needs HARNESS work — rbp stays unpatched):** the browse encoder is
+an incremental/quadrature device; one injectable phase cannot produce monotonic same-sign deltas.
+A clean rotate needs the QEMU subucom harness to deliver a proper 2-phase quadrature (or an
+incremental counter rbp reads as signed detents) so continuous rotation nets same-sign counts —
+AND to ensure the frame is delivered on rbp's poll without the CPU-stop gating — AND the browser
+applier must be ticking. This is harness engineering, not a `/tmp/subucom_ctrl` pattern. Helpers:
+scratchpad/{rampbp.py,probe3.py,drv.py} (gdb = RE only; screendump is the only honest rotate oracle).
+
+### Session 4f (2026-11-10) — ROTATE FIELD FOUND: rbp[0x58], code 0x4205 type 3 (forward-scroll claim RETRACTED in 4g)
 The Session 4e rotate lead (`rbp[0x4e]/[0x4f]`, code `0x600f`) is **WRONG** — that is a
 different (mixer-section) analog. The real browse rotate shares the encoder's own code:
 
