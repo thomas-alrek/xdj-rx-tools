@@ -424,6 +424,50 @@ interactive" was a corrupted/force-call-wedged state, not inherent).
   WITHOUT counting toward the change-gated-poll quiescence (or fixing that quiescence), then feed small
   per-detent deltas — but confirm `0x600f`→browse-scroll reproduces on a clean instance FIRST.
 
+### Session 4f (2026-11-10) — ROTATE FIELD FOUND: rbp[0x58], code 0x4205 type 3; forward scroll PROVEN clean (supersedes the 0x4e/0x600f lead)
+The Session 4e rotate lead (`rbp[0x4e]/[0x4f]`, code `0x600f`) is **WRONG** — that is a
+different (mixer-section) analog. The real browse rotate shares the encoder's own code:
+
+- **ROTATE = rbp[0x58], code `0x4205`, event type 3 (RelMoved).** The push and the rotate
+  are the **same event code `0x4205`**; they differ only in the event struct:
+  `code@+0x8` (u16) · `subtype@+0xa` · `type@+0xb` (&0xf: 0=Pressed,2=Released,**3=RelMoved**) ·
+  `delta@+0xc` (i32). Push = type 0, delta 0 (live capture of `b 5d 10`: event bytes @+8 =
+  `05 42 01 00  00 00 00 00`). Rotate = **type 3, delta +1 per transition**.
+- **Forward scroll PROVEN, clean, pure injection (no gdb, no overlay).** Toggling
+  **rbp[0x58] bit0** (`A 58 0` ⇄ `A 58 1` via atomic rewrites of `/tmp/subucom_ctrl`,
+  ~15 ms apart) scrolled the USB2 **root category list** `ARTIST → … → PIONEER REC`
+  (~7 items) in one burst. This is the authentic path the Session 4d force-call only faked.
+  **Test on a MULTI-ITEM list** — the test USB (one track) makes every category list a
+  single item; the USB2 root (ARTIST/ALBUM/TRACK/KEY/PLAYLIST/HISTORY/SEARCH/FOLDER/
+  PIONEER REC/DATE ADDED) is the usable multi-item target (reach it with the USB2 key).
+- **RE chain (all confirmed):** event `0x4205` → dispatcher `FUN_0026ae7c` →
+  `FUN_000b36e0(obj, param_2[3]=delta)` sets `DAT_0107be1c` → `FUN_000b3760` →
+  `FUN_000e12e0(DAT_0107be1c)` accumulates into `DAT_017f3234` (`+=delta`, ×2 if |Δ|>2,
+  or clamped to ±1 in one mode via `FUN_000df100`) → applier `FUN_000e159c` scrolls the
+  list and logs `KEYCMD EncoderRotate`. The applier does NOT self-tick; it runs when the
+  accumulator is driven and the browser page is live.
+- **Field-map method that worked:** bp `FUN_0026ae7c` (`0x26ae7c`, R1 = event ptr), read
+  `code@+8 / type@+0xb / delta@+0xc`; a region sweep shows **rbp[0x58]–0x61** drives the
+  `0x4205` rotate (0x5d bit4 is the push; 0x5d bit0/1 = USB1/2 STOP).
+
+**STILL OPEN — reverse direction (scroll up):**
+- delta is **magnitude-independent** (`A 58 ff` still decodes +1, not −1) — it is a
+  quadrature-style edge count, not a signed byte. A single-bit toggle always reads forward.
+- **rbp[0x59] nonzero SUPPRESSES the encoder** (held high → `0x58` toggles do nothing), so
+  reverse is not a simple 2-byte quadrature on 0x58/0x59. Reverse likely needs the correct
+  phase sequence within rbp[0x58]'s bits — **not yet found**.
+- **Methodology blocker:** gdb breakpoints **disrupt the frame-to-frame diff the rotate
+  depends on** — stopping per-event silences the rotate (the push, a held static bit, still
+  re-dispatches, which is why the delta-oracle looked alive). ⇒ **characterize rotate by
+  screendump only, never with gdb stopping per frame.**
+- **Instance blocker:** after hundreds of injections this session the instance hit the
+  **global inject-quiescence** — push AND rotate both went dead and did NOT self-clear after
+  3 s idle. Reverse must be screen-tested on a **fresh boot**, racing before re-quiescence.
+- **Next:** fresh boot → USB2 root → confirm `0x58` bit0 forward reproduces → screen-sweep
+  reverse candidates (phase pairings within 0x58's bits; a held direction bit + pulsed phase
+  bit; proper A/B quadrature timing) watching for an UP scroll. Helpers:
+  scratchpad/{ramp.py,drv.py,probe3.py} (probe*/gdb = RE only; use screen for rotate).
+
 ## ★ BREAKTHROUGH: USB1/USB2 are MAIN-UCOM GPIO keys, NOT subucom (2026-11-09)
 From the **XDJ-RX service manual** (`~/Downloads/da43a7.pdf`, 210pp). The unit has
 **two MCUs**, and the key routing is split:

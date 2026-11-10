@@ -109,11 +109,15 @@
 //     one "b 5d 10" cleanly drills one level (categories->ARTIST->...), no overlay.
 //     Reproduced on two fresh boots. (This CORRECTS the handover: 0x4205 is the PUSH,
 //     not EncoderRotate.) A browser must be freshly interactive for it to apply.
-// ROTATE (scroll): best lead is rbp[0x4e]/[0x4f] = code 0x600f (16-bit AbsMoved value,
-//   /1023). Changing it moved ARTIST->ALBUM cleanly once, but NOT reliably on a clean
-//   reboot, and multi-step scrolling is blocked by the emulator's ~150-inject quiescence
-//   (encoder wants a continuously-streamed value). Left unmapped (ROT-/ROT+) pending a
-//   faithful streaming injector. See docs/xdj-rx-control-map.md "Session 4e".
+// ROTATE (scroll) = rbp[0x58], SAME code 0x4205 as the push but event type 3 (RelMoved),
+//   delta +1 per transition (Session 4f, CORRECTS the 0x4e/0x600f lead). FORWARD scroll is
+//   PROVEN clean: toggling rbp[0x58] bit0 (A 58 0 <-> A 58 1, ~15ms apart) scrolled the
+//   USB2 root list ARTIST->PIONEER REC, no overlay, no gdb. Left unmapped (ROT-/ROT+) for
+//   now: (a) reverse/scroll-up not yet found (delta is quadrature-style, magnitude-
+//   independent; rbp[0x59]!=0 suppresses the encoder), and (b) forward is intermittent --
+//   after sustained injection the instance hits the global ~150-inject quiescence. Wiring
+//   needs a server-side toggle-burst endpoint once reverse + reliability are solved.
+//   See docs/xdj-rx-control-map.md "Session 4f".
 const SCREEN0 = { x:36.5, y:5.4, w:22.6, h:19.84 };
 const CTRLS0 = [
   {id:'browse', label:'BROWSE', type:'btn', spec:'B 16 01', grade:'guess', cx:40.06, cy:29.21, w:3.6, h:2.4},
