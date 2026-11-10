@@ -7,17 +7,28 @@ Use it as a **hypothesis list**: the frame-byte layout partly transfers to our X
 **every entry must be verified on the live RX** (inject `b <off> <bitmask>` / `A <off> <v16>`
 and watch the screendump). Key IDs differ between models and are only for reference.
 
-## Transfer evidence so far (RX, live)
-| Control | RX3 offset | RX (verified) | Match |
+## Transfer evidence (RX, live — tested 2026-11-10)
+| Control | RX3 offset | RX (tested) | Result |
 |---|---|---|---|
-| Browse encoder PUSH | byte 93 (`0x5d`) bit4 | `0x5d` bit4 (code 0x4205 type0) | ✅ |
-| Browse encoder ROTATE | 16-bit counter @ 84–85 (`0x54/0x55`) | `0x54/0x55` counter, inc=down dec=up | ✅ |
-| BACK | byte 94 (`0x5e`) bit0 | `0x5e` bit0 → navigated up a level | ✅ |
-| USB1/USB2 STOP | byte 94 (`0x5e`) bit4/bit3 | `0x5d` bit0/bit1 (verified by eject) | ❌ differs |
+| Browse encoder PUSH | byte 93 (`0x5d`) bit4 | `0x5d` bit4 drills in | ✅ MATCH |
+| Browse encoder ROTATE | 16-bit counter @ 84–85 (`0x54/0x55`) | `0x54/0x55` counter, inc=down dec=up | ✅ MATCH |
+| BACK | byte 94 (`0x5e`) bit0 | `0x5e` bit0 → navigates up a level (verified twice) | ✅ MATCH |
+| USB1/USB2 STOP | byte 94 (`0x5e`) bit4/bit3 | RX is `0x5d` bit0/bit1 (verified by eject) | ❌ DIFFERS |
+| MENU | byte 92 (`0x5c`) bit2 | `b 5c 04` → no effect | ❌ no transfer |
+| TAG LIST / SHORT CUT | `0x5c` bit5 / `0x5d` bit2 | no effect | ❌ no transfer |
+| **Whole `0x5c` byte** (SOURCE/BROWSE/TAG/PLAYLIST/SEARCH/MENU) | byte 92 | **8-bit sweep: ZERO hits** | ❌ no transfer |
+| QUANTIZE deck1 | byte 17 (`0x11`) bit3 | `0x11` bit3 → "NO HOT CUE POINT" (a cue fn, not quantize) | ❌ DIFFERS |
+| TEMPO RANGE deck1/2 | byte 18/34 (`0x12`/`0x22`) bit3 | `0x12`/`0x22` bit3 = tempo range (RX RE) | ✅ MATCH |
 
-**Conclusion:** the browse/nav cluster (~`0x54`–`0x5e`) largely matches; USB STOP is one known
-exception. Treat the table as strong leads, confirm each. Inject bit N as `b <off> <2^N>`
-(e.g. `0x5e` bit0 = `b 5e 01`, `0x5c` bit2 = `b 5c 04`, `0x5d` bit6 = `b 5d 40`).
+**Conclusion (important):** transfer is **spotty**. The browse/push/back CORE matches
+(`0x54/0x55`, `0x5d` bit4, `0x5e` bit0) and `0x12/0x22` bit3 (tempo range) matches, but the
+RX3 **global-nav byte `0x5c` has ZERO effect on the RX**, USB STOP differs, and deck keys like
+`0x11` bit3 do something else. **The RX panel layout is its own — the RX3 table is a weak hint
+beyond the confirmed core.** Map the rest by **RX-side bit sweeps** (held-vs-released screendump
+diff; the live screen is static so md5 diffing is reliable) in the UI context where each control
+has a visible effect — NOT by porting RX3 offsets. Inject bit N as `b <off> <2^N>`.
+
+Open RX finds not yet identified: `0x5e` bit5 (`b 5e 20`) is a real **sticky toggle** (effect TBD).
 
 ## Global / nav keys — EUP "deck 0" (RX3 [CODE], author-chosen, UNVERIFIED on RX)
 | Control | RX3 byte.bit | Inject | RX status |
