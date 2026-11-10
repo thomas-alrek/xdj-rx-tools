@@ -90,6 +90,26 @@ inj = `b <rbp_off> <mask>` for buttons, `A <rbp_off> <val16>` for analog.
 - **Mixer analog** (TRIM/EQ/COLOR/CH-fader/crossfader/headphone/master) — separate decoder,
   base ~0x24+, codes 0x50xx/0x60xx. *(offsets being finalized — no LCD feedback, static-only.)*
 
+## Coverage ceiling — why 100% of *panel controls* ≠ 100% subucom-injectable
+Of the XDJ-RX's physical controls, these are **NOT subucom buttons** in this 100-byte frame
+(verified by decoding the whole frame — no code/slot exists for them):
+- **Slide switches** (3-position, read as GPIO/status levels, not momentary codes): DECK1/DECK2
+  ↔ PHONO/LINE, CROSSFADER CURVE, MIC OFF/ON/TALKOVER.
+- **Separate ADC path** (not in the mixer-analog group, which is full at rbp 0x44–0x52): MIC EQ
+  HI/LOW, BEAT FX TIME knob.
+- **MAIN-UCOM GPIO** (top panel, same path as the source keys, wired via `/tmp/mainkey`):
+  rekordbox/MIDI/USB1/USB2 (done), MASTER REC/WAKE UP, TRACK MARK.
+- **Not a set of buttons**: SOUND COLOR FX NOISE/GATE/CRUSH/FILTER (the per-channel COLOR pot at
+  rbp 0x2c/0x3c is the only subucom part); LOOP SLICE (the RX has exactly 4 pad modes:
+  HOT CUE/BEAT LOOP/SLIP LOOP/BEAT JUMP = codes 0x4113/14/15/16).
+- **Separate protocol**: JOG-WHEEL **rotation** (jog *touch* is a normal deck button; rotation is
+  not in this frame — see the RX3 "JogCom" notes).
+
+**Label-ambiguous (in-frame, bits decoded, but RX reassigned the codes vs RX3 and deck transport
+shows no LCD feedback, so the exact label per bit can't be fixed in the emulator):** TRACK SEARCH
+◄◄/►►, SEARCH ►► forward, CUE/LOOP CALL ◄/►. These are among the decoded deck bits (0x10 low bits,
+0x11 b4–7); assign by testing on real hardware.
+
 ## Not in this frame / unresolved
 - **JOG rotation**: a separate protocol (not this 100-byte frame); unmapped.
 - Top-panel source keys (rekordbox/MIDI/USB1/USB2/DECK1-2/TIME MODE) are **MAIN-UCOM GPIOs**
