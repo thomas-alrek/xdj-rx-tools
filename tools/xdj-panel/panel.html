@@ -369,10 +369,20 @@ function wire(el,c){
   el.addEventListener('pointerdown',onDown);
   el.addEventListener('pointerup',onUp);
   el.addEventListener('pointerleave',()=>{ if(!calib && c.type==='btn' && el.classList.contains('down')){ el.classList.remove('down'); release(); }});
-  // Browse ROTATE via mouse wheel over the central encoder: one notch = one detent.
-  if(c.browseWheel){ el.addEventListener('wheel',ev=>{ if(calib) return; ev.preventDefault();
-    const n = ev.deltaY>0 ? 1 : -1; post('/browse',String(n));
-    log('↻ '+c.label+' wheel '+(n>0?'+ (down)':'− (up)')); }, {passive:false}); }
+  // Browse ROTATE via mouse wheel / touchpad over the central encoder. Accumulate
+  // scroll distance and emit one detent per WHEEL_STEP px (normalised across
+  // deltaMode), batched so a touchpad's many tiny events don't over-scroll.
+  if(c.browseWheel){ let wAcc=0, wT=null; const WHEEL_STEP=80, WHEEL_CAP=3;
+    el.addEventListener('wheel',ev=>{ if(calib) return; ev.preventDefault();
+      let dy=ev.deltaY; if(ev.deltaMode===1) dy*=16; else if(ev.deltaMode===2) dy*=400;
+      wAcc+=dy;
+      if(!wT){ wT=setTimeout(()=>{ wT=null;
+        let s=Math.trunc(wAcc/WHEEL_STEP);
+        s=Math.max(-WHEEL_CAP,Math.min(WHEEL_CAP,s));
+        if(s){ wAcc-=s*WHEEL_STEP; post('/browse',String(s));
+          log('↻ '+c.label+' wheel '+(s>0?'+':'')+s); }
+        else if(Math.abs(wAcc)>WHEEL_STEP*4){ wAcc=0; } }, 70); }
+    }, {passive:false}); }
 }
 function pt(e){ return {x:e.clientX, y:e.clientY}; }
 function clamp(v,a,b){ return v<a?a:v>b?b:v; }

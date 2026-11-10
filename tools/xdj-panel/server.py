@@ -40,7 +40,34 @@ _grab_lock = threading.Lock()
 # so +1 per polled frame = one detent down, -1 = one detent up. We keep the
 # counter here and ramp it one step at a time with a poll-safe dwell.
 _browse_counter = 0
+_browse_active = False          # True once the encoder has been turned this session
 _browse_lock = threading.Lock()
+
+
+def _write_ctrl_atomic(data):
+    with open(CTRL + ".tmp", "w") as f:
+        f.write(data)
+    os.replace(CTRL + ".tmp", CTRL)
+
+
+def _compose_ctrl(lines):
+    """Build the ctrl-file body. Once the browse encoder has moved, the 16-bit
+    counter at 0x54/0x55 MUST be present in EVERY frame: if a later frame drops
+    it, the firmware reads 0x54 jumping back to 0 as a big rotate delta (so e.g.
+    a push scrolls instead of drilling in). The harness also suppresses one-shot
+    'b'/'a' lines whenever any hold is present, so promote them to holds 'B'/'A'
+    (the panel releases them on pointer-up via /release)."""
+    out = []
+    for ln in lines:
+        s = ln.strip()
+        if not s:
+            continue
+        if _browse_active and s[0] in ("b", "a"):      # one-shot -> hold
+            s = s[0].upper() + s[1:]
+        out.append(s)
+    if _browse_active and not any(l.lower().startswith("a 54") for l in out):
+        out.append("A 54 %x" % _browse_counter)
+    return "\n".join(out) + "\n"
 
 
 def _parse_ppm(data):
@@ -186,8 +213,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             lines = [ln.strip() for ln in body.strip().split("\n") if ln.strip()]
             if lines:
                 try:
-                    with open(CTRL, "w") as f:
-                        f.write("\n".join(lines) + "\n")
+                    with _browse_lock:
+                        _write_ctrl_atomic(_compose_ctrl(lines))
                     self._send(200, "text/plain", b"ok")
                 except Exception as e:
                     self._send(500, "text/plain", str(e).encode())
@@ -195,9 +222,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send(400, "text/plain", b"empty")
         elif path == "/release":
             try:
-                os.remove(CTRL)
-            except FileNotFoundError:
-                pass
+                with _browse_lock:
+                    if _browse_active:
+                        # keep the browse counter held; just drop the momentary control
+                        _write_ctrl_atomic("A 54 %x\n" % _browse_counter)
+                    else:
+                        try:
+                            os.remove(CTRL)
+                        except FileNotFoundError:
+                            pass
             except Exception as e:
                 self._send(500, "text/plain", str(e).encode())
                 return
@@ -236,30 +269,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
             n = max(-500, min(500, n))
 
             def _ramp(count):
-                global _browse_counter
+                global _browse_counter, _browse_active
                 step = 1 if count > 0 else -1
+                # Re-sync: the firmware reads delta = new-old of the frame counter.
+                # If no 0x54 hold is currently in the ctrl file (first turn, or it was
+                # cleared externally), the frame counter is 0 so the firmware's "old" is
+                # 0 too -- reset to match, else the first write is one huge delta that
+                # jumps to the list end.
                 with _browse_lock:
-                    # Re-sync: the firmware reads delta = new-old of the frame counter.
-                    # If our hold is no longer in the ctrl file (cleared by /release or
-                    # overwritten by /ctrl), the frame counter is 0, so the firmware's
-                    # "old" is 0 too -- reset to match, else the first write is one huge
-                    # delta that jumps to the list end.
                     try:
                         with open(CTRL) as f:
-                            held = f.read()
+                            held = f.read().lower()
                     except Exception:
                         held = ""
-                    if "A 54 " not in held:
+                    if "a 54" not in held:
                         _browse_counter = 0
-                    for _ in range(abs(count)):
+                    _browse_active = True
+                # Step one detent at a time, re-acquiring the lock each step so a push
+                # (/ctrl) can interleave and still see the current counter.
+                for _ in range(abs(count)):
+                    with _browse_lock:
                         _browse_counter = (_browse_counter + step) & 0xffff
                         try:
-                            with open(CTRL + ".tmp", "w") as f:
-                                f.write("A 54 %x\n" % _browse_counter)
-                            os.replace(CTRL + ".tmp", CTRL)
+                            _write_ctrl_atomic("A 54 %x\n" % _browse_counter)
                         except Exception:
                             break
-                        time.sleep(0.045)
+                    time.sleep(0.045)
 
             if n:
                 threading.Thread(target=_ramp, args=(n,), daemon=True).start()
