@@ -316,5 +316,21 @@ build/qemu-src/          the patched QEMU source + build
 - [x] Update mechanism, boot flow, NAND layout, component inventory mapped
 - [x] **Firmware boots in QEMU to its live UI** (one gfxdriver removed) — [QEMU.md](QEMU.md)
 - [x] **GUI bringup** done: IPU display model, framebuffer scanout, app runs (software render)
-- [ ] **Button input**: inject the Subucom panel-MCU SPI frames (buttons/jogs/faders)
+- [~] **Button input**: Subucom panel-MCU SPI frame injection working; browse encoder
+  (push + rotate, both directions), USB STOP, and several nav keys mapped and live-verified.
+  Full control map in [docs/xdj-rx-control-map.md](docs/xdj-rx-control-map.md); remaining
+  buttons/jogs/faders in progress — see [docs/rx3-panel-crossref.md](docs/rx3-panel-crossref.md).
 - [ ] exFAT mod: patch `12-usb-memory-auto-mount.rules`; cross-compile `fuse-exfat`
+
+## Acknowledgements / references
+
+- **[nzoschke/xdj-emu](https://github.com/nzoschke/xdj-emu)** — an emulator for the
+  *XDJ-RX3* (a different, later model). Its [`docs/xdj-rx3-panel.md`](https://github.com/nzoschke/xdj-emu/blob/main/docs/xdj-rx3-panel.md)
+  panel write-up was the key reference for cracking our browse encoder: it documents the RX3
+  browse control as a **16-bit signed counter in the panel frame** (RX3 EUP bytes 84–85) and
+  the encoder push at byte 93 bit 4 — byte offsets that turned out to match the original
+  XDJ-RX exactly (`0x54/0x55` counter, `0x5d` bit 4 push). That insight let us drive the
+  rotate (increment = scroll down, decrement = up) after an earlier edge-trigger dead end.
+  The RX3 panel byte/bit tables are now a working hypothesis source for the rest of our
+  mappings — see [docs/rx3-panel-crossref.md](docs/rx3-panel-crossref.md). The two models'
+  firmwares and key codes differ, so every mapping is verified against the live XDJ-RX.

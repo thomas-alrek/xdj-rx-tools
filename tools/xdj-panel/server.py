@@ -35,6 +35,13 @@ _CTYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
 
 _grab_lock = threading.Lock()
 
+# Browse ROTATE state: the encoder is a free-running 16-bit counter at the
+# subucom frame bytes rbp[0x54]/[0x55] (LE). The firmware reads delta=new-old,
+# so +1 per polled frame = one detent down, -1 = one detent up. We keep the
+# counter here and ramp it one step at a time with a poll-safe dwell.
+_browse_counter = 0
+_browse_lock = threading.Lock()
+
 
 def _parse_ppm(data):
     """Return (w, h, rgb_bytes) from a binary P6 PPM, or None."""
@@ -216,6 +223,46 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self._send(500, "text/plain", str(e).encode())
                 return
+            self._send(200, "text/plain", b"ok")
+        elif path == "/browse":
+            # Browse ROTATE: body = signed detent count. +N scrolls the library
+            # list DOWN (forward), -N scrolls UP (reverse). Each step nudges the
+            # 16-bit counter at rbp[0x54]/[0x55] by +/-1 and holds it; a ~45 ms
+            # dwell ensures every value is polled (faster collapses steps).
+            try:
+                n = int(body.strip() or "0")
+            except ValueError:
+                self._send(400, "text/plain", b"bad step"); return
+            n = max(-500, min(500, n))
+
+            def _ramp(count):
+                global _browse_counter
+                step = 1 if count > 0 else -1
+                with _browse_lock:
+                    # Re-sync: the firmware reads delta = new-old of the frame counter.
+                    # If our hold is no longer in the ctrl file (cleared by /release or
+                    # overwritten by /ctrl), the frame counter is 0, so the firmware's
+                    # "old" is 0 too -- reset to match, else the first write is one huge
+                    # delta that jumps to the list end.
+                    try:
+                        with open(CTRL) as f:
+                            held = f.read()
+                    except Exception:
+                        held = ""
+                    if "A 54 " not in held:
+                        _browse_counter = 0
+                    for _ in range(abs(count)):
+                        _browse_counter = (_browse_counter + step) & 0xffff
+                        try:
+                            with open(CTRL + ".tmp", "w") as f:
+                                f.write("A 54 %x\n" % _browse_counter)
+                            os.replace(CTRL + ".tmp", CTRL)
+                        except Exception:
+                            break
+                        time.sleep(0.045)
+
+            if n:
+                threading.Thread(target=_ramp, args=(n,), daemon=True).start()
             self._send(200, "text/plain", b"ok")
         elif path == "/savecal":
             try:
