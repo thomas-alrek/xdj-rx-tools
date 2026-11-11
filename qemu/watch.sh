@@ -70,10 +70,27 @@ if [ -n "${XDJUSB:-}" ]; then
   echo "usb: attaching $XDJUSB as usb-storage on usb-bus.0 (cold-plug)" >&2
 fi
 
+# Audio: route the deck's master output to a host sink so you actually hear it.
+# The deck playhead (and the PCM) is slaved to the audio clock (patch 11), and the
+# guest's ALSA ring is tiny (~2.9ms). QEMU's audio mixer polls voices on a timer
+# whose default period (10ms) is far too coarse to pace that ring -- the guest
+# then refills at ~27% of real time and the stream starves (very slow / silent).
+# timer-period=1451 (µs, ~689Hz = the 64-frame period rate) paces it at real time.
+# Override the backend for your OS with XDJAUDIO (e.g. pa / pipewire / sdl), keep
+# the timer-period; XDJAUDIO=none disables host audio (deck still plays, silent).
+case "$(uname)" in
+  Darwin) AUDIO_DEF="coreaudio,timer-period=1451" ;;
+  *)      AUDIO_DEF="pa,timer-period=1451" ;;
+esac
+AUDIO_OPT="${XDJAUDIO:-$AUDIO_DEF}"
+AUDIO_ARGS=()
+[ "$AUDIO_OPT" != "none" ] && AUDIO_ARGS=(-audio "$AUDIO_OPT")
+
 # sabresd console is ttymxc0 = serial 0 -> wire it to this terminal (Ctrl-A X quits).
 exec "$QEMU" -M sabrelite -smp "$SMP" -m 256 -no-reboot \
   -name "Pioneer XDJ-RX" \
   -display "$DISPLAY_OPT" \
+  ${AUDIO_ARGS[@]+"${AUDIO_ARGS[@]}"} \
   -device loader,file="$Q/vmlinux.bin",addr=0x10008000,force-raw=on \
   -device loader,file="$Q/atags.bin",addr=0x10000100,force-raw=on \
   -device loader,file="$Q/tramp.bin",addr=0x10000000,cpu-num=0 \
