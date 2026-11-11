@@ -1,14 +1,24 @@
 # Audio handover — making decks actually play
 
-**Status: IMPLEMENTED (Option A) and verified at the ALSA layer — 2026-11-11.**
+**Status: IMPLEMENTED (Options A + B) and verified — 2026-11-11.**
 The i.MX6 SDMA engine + SSI/AUDMUX are now modelled in QEMU
 ([qemu/patches/11-imx6-audio-sdma-ssi.patch](../qemu/patches/11-imx6-audio-sdma-ssi.patch)).
 SDMA probes, the ASoC card instantiates, and on the real `hw:ak4387audio` device
-ALSA's playback pointer now **advances in real time (~44100 frames/s, within
-~0.5%)** where it was previously frozen at 0 with `imx-pcm-audio hw params
-failed`. See **§8 Implemented — results** for the full writeup. The remaining
-end-to-end demo (rbp's on-screen `REMAIN` counting down) is gated on the separate
-browse/track-load feature, not on the audio time base — see §8.
+ALSA's playback pointer now **advances in real time** where it was previously
+frozen at 0 with `imx-pcm-audio hw params failed`.
+
+- **Option A** (time base): a BD-paced model makes the playhead advance (verified
+  ~44100 frames/s via `aplay`).
+- **Option B** (real sound): a host audio voice (`-audio`/`-audiodev`) pulls the
+  PCM at the real audio rate and that drives period completion — so there's
+  actual sound **and** hardware-accurate timing (no calibration). Verified with
+  `-audio wav`: the captured file is non-silent, stereo/44100, real-time
+  duration. Option B is the default clock; Option A's timer is the fallback when
+  no audio backend is available.
+
+See **§8 Implemented — results** for the full writeup. The remaining end-to-end
+demo (rbp's on-screen `REMAIN` counting down) is gated on the separate
+browse/track-load feature, not on the audio path — see §8.
 
 The diagnosis below (the original handover) is kept for context.
 
@@ -242,6 +252,37 @@ t=90.33 hw_ptr: 86016     t=93.34 hw_ptr: 221184
 exit (no under/overrun). Note the codec only accepts **`S24_LE`** (4-byte slots,
 8 bytes/frame); `S16_LE` is rejected.
 
+### Option B — real sound (callback-pull), done
+
+A single S32/stereo/44.1 kHz output voice is opened on the host audio backend
+(`audio_get_default_audio_be()`, i.e. whatever `-audio`/`-audiodev` provides). The
+backend **pulls** (`sdma_audio_cb`) at the real audio rate; we feed it the
+sonified channel's PCM — read from the channel's cyclic BD buffer at a
+`(son_idx, son_off)` cursor, rescaled from the codec's `S24_LE` 4-byte slot to
+`S32` (`<<8`) — in `≤avail` chunks. The frames the backend accepts become **the
+clock**: each chunk advances a frame counter, and every running cyclic channel
+completes periods (clears `BD_DONE`, raises its IRQ) as that counter crosses its
+per-channel period. So one real audio clock drives the whole linked set, the
+playhead is slaved to actual output (hardware-accurate), and the Option A
+`byte_rate` calibration is no longer used. Knobs: `XDJ_AUDIO_OUT_CH` selects the
+sonified channel (default: first stream started); `XDJ_AUDIO_NOSOUND=1` forces the
+timer fallback.
+
+The timer (Option A) remains as the fallback when no voice can be opened, so the
+playhead still advances even with audio fully disabled.
+
+**Verification (real sound):** launched with `-audio driver=wav,path=out.wav`,
+played noise to `hw:ak4387audio,0`, then inspected `out.wav`:
+```
+RIFF/WAVE  audfmt=1 channels=2 rate=44100 bits=16
+data: 710720 bytes  duration=4.029s   (for ~4 s of playback -> real-time)
+peak=32767 (100% FS)  nonzero=352788/355360  -> NON-SILENT
+```
+i.e. the guest's PCM reached the host sink, at the right rate, in real time.
+(QEMU's wav backend doesn't backpatch the RIFF/data size words on `quit`, so a
+strict parser may balk — the sample bytes are all present.) For live sound on
+macOS use `-audio driver=coreaudio`.
+
 ### What's NOT yet demonstrated, and why
 rbp holds **no** audio device open at idle — it opens `hw:ak4387audio,{0,1,2}`
 (+ capture) and links them only when a deck actually **plays a loaded track**.
@@ -257,5 +298,80 @@ base is complete; the end-to-end deck demo is unblocked by finishing browse/load
 - Headless verify: launch with `-serial unix:/tmp/a_con.sock,server,nowait`
   `-monitor unix:/tmp/a_mon.sock,server,nowait -display none`, log in root/empty
   (send bytes slowly — the emulated UART drops input at speed), run the `aplay`
-  one-liner above. `XDJ_AUDIO_BYTE_RATE=<n>` fine-tunes the drain rate without a
-  rebuild; raise it to speed the playhead up, lower it to slow it down.
+  one-liner above.
+- Real sound: add `-audio driver=coreaudio` (live, macOS) or
+  `-audio driver=wav,path=out.wav` (capture to file; inspect it is non-silent).
+  `XDJ_AUDIO_OUT_CH=<n>` pins which SDMA channel is sonified; `XDJ_AUDIO_NOSOUND=1`
+  forces the timer fallback.
+- Fallback tuning: `XDJ_AUDIO_BYTE_RATE=<n>` fine-tunes the timer-mode drain rate
+  without a rebuild (only used when no audio backend is active).
+
+---
+
+## 9. Routing the guest's audio to the host
+
+This is the "how does the sound actually come out of my speakers" path. Nothing
+in the guest changes — the hookup is entirely a QEMU launch option.
+
+### The chain
+
+```
+rbp / aplay (guest userspace, ALSA, hw:ak4387audio)
+  └─ writes PCM into the ALSA DMA ring buffer (guest DRAM), S24_LE stereo 44.1k
+i.MX6 SDMA (our model, hw/arm/fsl-imx6.c)
+  └─ sdma_audio_cb(): on each backend pull, reads the current period from the
+     guest DMA buffer, rescales S24_LE slot -> S32, and audio_be_write()s it
+QEMU audio subsystem (SWVoiceOut on the default AudioBackend)
+  └─ mixes/resamples to the backend's format
+Host audio driver  = the "audiodev"  (coreaudio / pipewire / pa / alsa / sdl /
+  └─ speakers, or a .wav file, or /dev/null                         wav / none)
+```
+
+Our output voice is opened with `audio_get_default_audio_be()`, so it binds to
+**the default audiodev** — the one set by the `-audio` option (NOT a named
+`-audiodev`, which only devices referencing it by `audiodev=<id>` would use).
+
+### Pick a host backend with `-audio driver=<drv>,<opts>`
+
+| Goal | Flag |
+|------|------|
+| **Live sound, macOS** | `-audio driver=coreaudio` |
+| **Live sound, Linux** | `-audio driver=pipewire` (or `pa`, or `alsa`) |
+| **Portable live sound** | `-audio driver=sdl` |
+| **Capture to a file** (headless/CI, no speakers) | `-audio driver=wav,path=out.wav` |
+| **Silent but still clocks the playhead** | `-audio driver=none` (the implicit default if `-audio` is omitted) |
+
+Add exactly one such flag to the launch line (e.g. in `qemu/watch.sh`, which
+currently passes none, so audio falls through to the `none`/default backend —
+playhead advances, no sound). Example live launch:
+
+```
+qemu-system-arm -M sabrelite ... -audio driver=coreaudio
+```
+
+Nothing else is required: the SDMA model lazily opens the voice the first time a
+deck starts playing and activates it; it idles the voice when playback stops.
+
+### Latency / tuning
+- Buffer/period of the *host* side are backend options, e.g.
+  `-audio driver=coreaudio,out.buffer-length=20000` (µs) to trade latency for
+  robustness. The guest-side period is fixed by rbp's ALSA config and is
+  independent of this.
+- `-audio driver=<drv>,out.frequency=48000` forces the backend rate; our voice is
+  44100/S32/stereo and QEMU resamples as needed.
+
+### Gotchas
+- **`-audio` vs `-audiodev`**: use `-audio driver=...`. A bare
+  `-audiodev coreaudio,id=a` is *not* the default backend and our voice won't find
+  it (it would need a device `audiodev=a` property, which the SoC doesn't expose).
+- **`wav` file size fields**: QEMU's wav backend doesn't backpatch the RIFF/`data`
+  length words on `quit`, so strict WAV parsers may reject the file even though the
+  samples are all present; read to EOF or fix the two length words if a player
+  refuses it.
+- **No sound but playhead moves**: that's the `none`/default backend (no `-audio`),
+  or `XDJ_AUDIO_NOSOUND=1`, or the host driver failed to open (QEMU prints an audio
+  warning and falls back) — pass an explicit working `-audio driver=`.
+- **Which stream you hear**: rbp opens deck1/deck2/master as separate SDMA
+  channels; we sonify one (`XDJ_AUDIO_OUT_CH`, default first-started). If the wrong
+  one is picked you may hear a single deck instead of the master mix — set
+  `XDJ_AUDIO_OUT_CH` to the master channel once identified.

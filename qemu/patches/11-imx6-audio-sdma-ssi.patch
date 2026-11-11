@@ -1,28 +1,49 @@
 # patches/11-imx6-audio-sdma-ssi.patch
-#     Audio time base (Option A, "real-time null sink"): a minimal i.MX6 SDMA
-#     engine model plus RAM-backed SSI1/2/3 and AUDMUX register files, so the
-#     stock dmaengine imx-sdma driver probes, the ASoC/ALSA imx-pcm path
-#     configures and starts a cyclic DMA channel, and a QEMUTimer then raises the
-#     SDMA period interrupt at the real-time audio rate. Each period interrupt
-#     hands one buffer descriptor back to the CPU (clears BD_DONE in guest DRAM)
-#     and advances ALSA's DMA pointer by one period -- so a playing deck's REMAIN
-#     counts down in real time. No PCM data is moved (silent); Option B would
-#     route it to a -audiodev sink.
+#     Audio for the XDJ-RX: a minimal i.MX6 SDMA engine model plus RAM-backed
+#     SSI1/2/3 and AUDMUX register files, so the stock dmaengine imx-sdma driver
+#     probes, the ASoC/ALSA imx-pcm path configures and starts a cyclic DMA
+#     channel, and the deck playhead (rbp REMAIN) advances. All in
+#     hw/arm/fsl-imx6.c; firmware/rootfs untouched.
 #
-#     The engine handshake reduces to one mechanism shared by probe and playback:
-#     "channel started (H_START bit n) -> raise its interrupt (H_INTR bit n + GIC
-#     SPI 2)". Channel 0 (SDMA command channel: context/script loads) is one-shot;
-#     channels >=1 (audio cyclic DMA) fire at the BD-derived period rate until
-#     stopped (write to H_STATSTOP). Period pacing = BD.count / byte_rate so the
-#     playhead tracks wall-clock regardless of the app's period size; byte_rate is
-#     env-tunable (XDJ_AUDIO_BYTE_RATE) and XDJ_AUDIO_DEBUG logs per-channel
-#     pacing. Verified on the real hw:ak4387audio device: ALSA hw_ptr advances
-#     ~44100 frames/s (was frozen at 0 with "imx-pcm-audio hw params failed"
-#     before). See docs/audio-handover.md.
+#     Engine handshake, one mechanism for probe and playback: "channel started
+#     (H_START bit n) -> raise its interrupt (H_INTR bit n + GIC SPI 2)".
+#     Channel 0 (command channel: context/script loads) is one-shot; channels
+#     >=1 (audio cyclic DMA) complete one period at a time. Each period
+#     completion hands one buffer descriptor back to the CPU (clears BD_DONE in
+#     guest DRAM, walking the CCB->BD ring from H_C0PTR, wrapping on BD_WRAP),
+#     which is what the cyclic ISR needs to advance ALSA's pointer.
+#
+#     Two clocks drive period completion:
+#       * Option B (preferred, real sound): a single S32/stereo/44.1k output
+#         voice is opened on the host audio backend (audio_get_default_audio_be /
+#         -audio). The backend pulls PCM at the real audio rate; we feed it the
+#         sonified channel's data (S24_LE slot -> S32) and use the frames it
+#         consumes as THE clock that completes periods on every running channel.
+#         Hardware-accurate timing, no calibration. XDJ_AUDIO_OUT_CH picks the
+#         sonified channel (default: first stream started); XDJ_AUDIO_NOSOUND
+#         forces the fallback.
+#       * Fallback (no audio backend / XDJ_AUDIO_NOSOUND): a BD-paced QEMU timer
+#         (period_ns = BD.count / byte_rate; byte_rate env XDJ_AUDIO_BYTE_RATE,
+#         default 318000 to absorb a constant ~10% guest-vs-virtual-clock TCG
+#         gap). XDJ_AUDIO_DEBUG traces pacing.
+#
+#     Verified on the real hw:ak4387audio device: SDMA loads firmware +
+#     initialises, card registers, no "hw params failed"; aplay (S24_LE/stereo/
+#     44100) drives ALSA hw_ptr forward (was frozen at 0). With -audio wav the
+#     captured file is non-silent at the correct rate and real-time duration.
+#     See docs/audio-handover.md section 8.
 #
 --- a/hw/arm/fsl-imx6.c
 +++ b/hw/arm/fsl-imx6.c
-@@ -526,11 +526,312 @@
+@@ -22,6 +22,7 @@
+ #include "qemu/osdep.h"
+ #include "qapi/error.h"
+ #include "qemu/timer.h"
++#include "qemu/audio.h"
+ #include "hw/ssi/ssi.h"
+ #include "hw/arm/fsl-imx6.h"
+ #include "hw/misc/unimp.h"
+@@ -526,6 +527,511 @@
  static const MemoryRegionOps ipu_cm_ops = {
      .read = ipu_cm_read,
      .write = ipu_cm_write,
@@ -88,12 +109,18 @@
 +#define SDMA_BD_WRAP      (0x02u << 16)   /* last BD of a cyclic ring  */
 +#define SDMA_BD_MAX       64              /* ring-walk safety cap      */
 +
++/* S24_LE (in a 4-byte slot) stereo == 8 bytes/frame, same as the S32 stereo
++ * output voice, so guest BD bytes and voice bytes share a 1:1 frame currency. */
++#define SDMA_FRAME_BYTES  8
++
 +typedef struct Imx6Sdma Imx6Sdma;
 +typedef struct {
 +    Imx6Sdma  *s;
 +    int        ch;
 +    uint32_t   bd_idx;      /* ring position for the cyclic BD walk */
-+    int64_t    period_ns;   /* this channel's real-time period interval */
++    int64_t    period_ns;   /* this channel's real-time period interval (timer) */
++    uint32_t   period_frames; /* BD.count / frame bytes (audio-clock mode)     */
++    uint64_t   frames_done; /* frame_clock value at this channel's last period */
 +    QEMUTimer *timer;
 +} SdmaChan;
 +
@@ -104,7 +131,17 @@
 +    uint32_t     intr;          /* H_INTR pending latch                        */
 +    uint32_t     running;       /* channels >=1 currently cyclic (H_STATSTOP)  */
 +    int64_t      period_ns;     /* fallback period interval (no BD info)       */
-+    uint32_t     byte_rate;     /* device consumption rate, bytes/sec          */
++    uint32_t     byte_rate;     /* fallback drain rate, bytes/sec (timer mode) */
++    /* Option B: callback-pull audio. When a voice opens, the host audio
++     * backend's consumption drives period completion (the real audio clock),
++     * so no QEMU timer and no byte_rate calibration are used. */
++    AudioBackend *be;
++    SWVoiceOut   *voice;        /* NULL => fall back to the timer clock        */
++    bool          voice_on;     /* voice currently active                      */
++    int           out_ch;       /* channel sonified to the voice (-1 = auto)   */
++    uint64_t      frame_clock;  /* frames the output voice has consumed        */
++    uint32_t      son_idx;      /* master sonification: current BD in the ring */
++    uint32_t      son_off;      /* master sonification: byte offset in period  */
 +    SdmaChan     chan[SDMA_NUM_CH];
 +};
 +
@@ -185,6 +222,176 @@
 +    }
 +}
 +
++/* ---- Option B: callback-pull real audio -------------------------------------
++ * A single S32/stereo/44.1k output voice is opened on the host audio backend.
++ * The backend pulls (calls sdma_audio_cb) at the real audio rate; we feed it the
++ * sonified channel's PCM and use the frames it consumes as THE clock that
++ * completes periods on every running cyclic channel. This slaves the playhead to
++ * the real audio output (hardware-accurate) and needs no byte_rate calibration.
++ * If no voice can be opened, the SDMA model falls back to the QEMU-timer clock.
++ */
++
++/* The channel whose PCM is sent to the output voice (out_ch if running, else the
++ * lowest running channel). */
++static int sdma_master_ch(Imx6Sdma *s)
++{
++    int ch;
++
++    if (s->out_ch > 0 && (s->running & (1u << s->out_ch))) {
++        return s->out_ch;
++    }
++    for (ch = 1; ch < SDMA_NUM_CH; ch++) {
++        if (s->running & (1u << ch)) {
++            return ch;
++        }
++    }
++    return -1;
++}
++
++static void sdma_audio_cb(void *opaque, int avail)
++{
++    Imx6Sdma *s = opaque;
++    static uint8_t pcm[8192];
++    static int dbg;
++    bool any = false;
++    int master = sdma_master_ch(s);
++    uint32_t bd_base;
++
++    if (master < 0) {
++        return;                          /* nothing playing */
++    }
++    bd_base = sdma_bd_base(s, master);
++    if (!bd_base) {
++        return;
++    }
++
++    /* Feed the voice in <=avail chunks, following the master's cyclic buffer at
++     * (son_idx, son_off).  The frames the backend accepts are THE clock that
++     * completes periods on every running channel. */
++    while (avail >= SDMA_FRAME_BYTES) {
++        uint32_t bd_addr = bd_base + s->son_idx * SDMA_BD_STRIDE;
++        uint32_t mode = address_space_ldl_le(&address_space_memory, bd_addr,
++                                             MEMTXATTRS_UNSPECIFIED, NULL);
++        uint32_t cnt = mode & 0xffff;
++        uint32_t buf, remaining, chunk, i;
++        size_t wrote;
++        int ch;
++
++        if (!(mode & SDMA_BD_DONE) || !cnt) {
++            break;                       /* guest hasn't produced this period */
++        }
++        if (s->son_off >= cnt) {
++            s->son_off = 0;
++        }
++        remaining = cnt - s->son_off;
++        chunk = remaining;
++        if (chunk > sizeof(pcm)) {
++            chunk = sizeof(pcm);
++        }
++        if ((int)chunk > avail) {
++            chunk = (uint32_t)avail & ~7u;
++        }
++        if (chunk < SDMA_FRAME_BYTES) {
++            break;
++        }
++
++        buf = address_space_ldl_le(&address_space_memory, bd_addr + 4,
++                                   MEMTXATTRS_UNSPECIFIED, NULL);
++        address_space_read(&address_space_memory, buf + s->son_off,
++                           MEMTXATTRS_UNSPECIFIED, pcm, chunk);
++        for (i = 0; i + 4 <= chunk; i += 4) {   /* S24_LE slot -> S32 full scale */
++            uint32_t v = pcm[i] | (pcm[i + 1] << 8) |
++                         (pcm[i + 2] << 16) | (pcm[i + 3] << 24);
++            int32_t o = (int32_t)(v << 8);
++            pcm[i]     = o & 0xff;
++            pcm[i + 1] = (o >> 8) & 0xff;
++            pcm[i + 2] = (o >> 16) & 0xff;
++            pcm[i + 3] = (o >> 24) & 0xff;
++        }
++        wrote = audio_be_write(s->be, s->voice, pcm, chunk);
++        if (dbg < 6 && getenv("XDJ_AUDIO_DEBUG")) {
++            fprintf(stderr, "[sdma-au] master=%d avail=%d cnt=%u off=%u "
++                    "chunk=%u wrote=%zu fc=%llu\n", master, avail, cnt,
++                    s->son_off, chunk, wrote,
++                    (unsigned long long)s->frame_clock);
++            dbg++;
++        }
++        if (!wrote) {
++            break;                       /* backend buffer full */
++        }
++        s->son_off += (uint32_t)wrote;
++        avail -= (int)wrote;
++        s->frame_clock += (uint64_t)wrote / SDMA_FRAME_BYTES;
++        if (s->son_off >= cnt) {         /* sonified a whole period: advance */
++            s->son_off = 0;
++            if ((mode & SDMA_BD_WRAP) || ++s->son_idx >= SDMA_BD_MAX) {
++                s->son_idx = 0;
++            }
++        }
++
++        /* Complete every running cyclic channel now a period behind the clock. */
++        for (ch = 1; ch < SDMA_NUM_CH; ch++) {
++            SdmaChan *c = &s->chan[ch];
++            if (!(s->running & (1u << ch)) || !c->period_frames) {
++                continue;
++            }
++            while (s->frame_clock - c->frames_done >= c->period_frames) {
++                sdma_consume_period(s, c);
++                c->frames_done += c->period_frames;
++                s->intr |= (1u << ch);
++                any = true;
++            }
++        }
++        if (wrote < chunk) {
++            break;                       /* backend buffer full */
++        }
++    }
++
++    if (any) {
++        sdma_update_irq(s);
++    }
++}
++
++/* Lazily open the output voice; returns false to use the timer fallback. */
++static bool sdma_audio_ensure_voice(Imx6Sdma *s)
++{
++    struct audsettings as;
++
++    if (s->voice) {
++        return true;
++    }
++    if (getenv("XDJ_AUDIO_NOSOUND")) {
++        return false;                    /* force the timer clock */
++    }
++    if (!s->be) {
++        Error *err = NULL;
++        s->be = audio_get_default_audio_be(&err);
++        if (!s->be) {
++            error_free(err);
++            return false;
++        }
++    }
++    as.freq = 44100;
++    as.nchannels = 2;
++    as.fmt = AUDIO_FORMAT_S32;
++    as.big_endian = 0;
++    s->voice = audio_be_open_out(s->be, NULL, "xdj.audio", s, sdma_audio_cb, &as);
++    return s->voice != NULL;
++}
++
++static void sdma_audio_set_active(Imx6Sdma *s, bool on)
++{
++    if (!s->voice || s->voice_on == on) {
++        return;
++    }
++    if (on) {
++        s->son_idx = 0;                  /* restart sonification at ring head */
++        s->son_off = 0;
++    }
++    audio_be_set_active_out(s->be, s->voice, on);
++    s->voice_on = on;
++}
++
 +/* One period-elapsed / completion interrupt for one channel. */
 +static void sdma_ch_tick(void *opaque)
 +{
@@ -249,14 +456,29 @@
 +                timer_mod(s->chan[0].timer,
 +                          qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1000);
 +            } else {
-+                /* Audio cyclic DMA: start the period-interrupt train, paced to
-+                 * the BD's period size so the playhead tracks real time. */
++                /* Audio cyclic DMA. Preferred clock: the host audio backend
++                 * pulls PCM at the real rate (Option B) and completes periods;
++                 * fallback: a BD-paced QEMU timer (Option A). */
++                uint32_t bd_base;
 +                s->running |= (1u << ch);
 +                s->chan[ch].bd_idx = 0;     /* start at the ring head */
-+                sdma_set_period(s, ch);
-+                timer_mod(s->chan[ch].timer,
-+                          qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL)
-+                              + s->chan[ch].period_ns);
++                sdma_set_period(s, ch);     /* period_ns for the timer fallback */
++                bd_base = sdma_bd_base(s, ch);
++                s->chan[ch].period_frames = bd_base ?
++                    (address_space_ldl_le(&address_space_memory, bd_base,
++                        MEMTXATTRS_UNSPECIFIED, NULL) & 0xffff) / SDMA_FRAME_BYTES
++                    : 0;
++                s->chan[ch].frames_done = s->frame_clock;
++                if (s->out_ch < 0) {
++                    s->out_ch = ch;         /* sonify the first stream started */
++                }
++                if (sdma_audio_ensure_voice(s)) {
++                    sdma_audio_set_active(s, true);
++                } else {
++                    timer_mod(s->chan[ch].timer,
++                              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL)
++                                  + s->chan[ch].period_ns);
++                }
 +            }
 +        }
 +        return;
@@ -267,6 +489,9 @@
 +                s->running &= ~(1u << ch);
 +                timer_del(s->chan[ch].timer);
 +            }
++        }
++        if (!s->running) {
++            sdma_audio_set_active(s, false);    /* idle the output voice */
 +        }
 +        return;
 +
@@ -282,11 +507,11 @@
 +static const MemoryRegionOps sdma_ops = {
 +    .read = sdma_read,
 +    .write = sdma_write,
-     .endianness = DEVICE_NATIVE_ENDIAN,
-     .valid = { .min_access_size = 4, .max_access_size = 4 },
- };
- 
- /*
++    .endianness = DEVICE_NATIVE_ENDIAN,
++    .valid = { .min_access_size = 4, .max_access_size = 4 },
++};
++
++/*
 + * SSI (imx-ssi) register file: RAM-backed so every config write the ASoC
 + * cpu-dai makes is retained and reads back, with SISR reporting the TX FIFO
 + * empty so nothing that polls it spins.  No audio behaviour is needed here --
@@ -327,15 +552,10 @@
 +static const MemoryRegionOps ssi_ops = {
 +    .read = ssi_read,
 +    .write = ssi_write,
-+    .endianness = DEVICE_NATIVE_ENDIAN,
-+    .valid = { .min_access_size = 4, .max_access_size = 4 },
-+};
-+
-+/*
-  * XDJ-RX front-panel microcontroller ("Subucom") - SPI slave stub.
-  *
-  * rbp handshakes with the panel MCU over /dev/subucom_spi1.0 (an ECSPI slave,
-@@ -1610,6 +1911,69 @@
+     .endianness = DEVICE_NATIVE_ENDIAN,
+     .valid = { .min_access_size = 4, .max_access_size = 4 },
+ };
+@@ -1610,6 +2116,74 @@
          memory_region_add_subregion(get_system_memory(), IPU1_CM_BASE, &ipu1_cm);
          ipu_irq_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, ipu_irq_fire, NULL);
          /* armed on demand when the driver writes the IPU interrupt registers */
@@ -369,6 +589,11 @@
 +            g_sdma.byte_rate = 318000;
 +        }
 +        g_sdma.irq = qdev_get_gpio_in(gic, FSL_IMX6_SDMA_IRQ);
++        {   /* Option B: which SDMA channel is sonified to the output voice.
++             * -1 = auto (first stream started); XDJ_AUDIO_OUT_CH pins it. */
++            const char *oc = getenv("XDJ_AUDIO_OUT_CH");
++            g_sdma.out_ch = oc ? atoi(oc) : -1;
++        }
 +        for (ch = 0; ch < SDMA_NUM_CH; ch++) {
 +            g_sdma.chan[ch].s = &g_sdma;
 +            g_sdma.chan[ch].ch = ch;
