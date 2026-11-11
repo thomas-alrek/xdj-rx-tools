@@ -192,12 +192,34 @@ only). So **MASTER LEVEL and CH FADER come from a different source than the subu
 analog section** — almost certainly the i.MX6 **SAR-ADC** (the control map's "separate
 ADC path", docs/xdj-rx-control-map.md ~L103), which QEMU does not model → reads 0.
 
-**⇒ Leading fix:** model the i.MX6 SAR-ADC (ADC1/ADC2) to return mid/max positions for
-the master-level + channel-fader (+ any other ADC-path) controls, so rbp latches
-non-zero gains at boot. Then trim/EQ/crossfader (subucom) just need realistic boot
-defaults (center), which already work. Verify the exact ADC channels by a boot-time
-write-watchpoint on the master-level field's writer, or by finding who writes `+0x4c`
-(RTTI of the master_settings object @ runtime `master=param_1[9]`).
+**⇒ Where master/fader actually come from (session-3 narrowing):**
+- They go through `MixerSkeleton::MasterAttHandler` / `SubRxFormat::tMixerData` — i.e.
+  they ARE **subucom** controls, not internal defaults.
+- But a boot-time sweep of EVERY analog offset `0x40..0x60` (and the guessed
+  0x44/0x46/0x4a) in the modeled panel frame drove **neither** `master+0x4c` NOR the
+  deck `fader+0x144` — whereas the EQ/trim at 0x24-0x3a DID (deck level 0→0.5). And the
+  i.MX6 **SAR-ADC is not modeled** in the harness, yet rbp has **no ADC strings/open**
+  → SAR-ADC is unlikely.
+- ⇒ **master level + channel fader are carried on a subucom message/channel the harness
+  does NOT present.** The harness models ONE SPI frame (EUP `subucom_spi1.0`); the RX
+  format is a *union* of message types (`SubRxFormat::tMixerData` is one) and the device
+  also has a **second SPI channel `subucom_spi2.0`** (control-map notes PLAY/CUE/pads +
+  likely the main faders ride it). Our frame carries the keys + EQ/trim/crossfader but
+  not the master-level / channel-fader fields.
+
+**⇒ The fix (two steps):**
+1. Decode **`SubRxFormat::tMixerData`** (find its function via `MixerSkeleton`/the
+   `MasterAttHandler` RTTI `0x426898`, or the " MASTER LEVEL %03X" test-mode reader)
+   to learn WHICH message/channel/offset carries master level + channel faders.
+2. Have the harness **present that message with realistic values** (master=max,
+   faders=max, trim/EQ center — EQ/trim already work via the panel frame). rbp latches
+   analog controls at init, and a gdb write to `master+0x4c` persists, so delivering
+   them in the boot frame is enough (runtime injection does NOT propagate — boot-latched).
+Then the deck's full-level 0.6 sums into master → sound. Do NOT patch rbp.
+
+This is the same **structured-subucom-frame decode** family as the rotary handover
+(`docs/rotary-encoder-handover.md`): the mixer-analog fields are a per-control
+descriptor protocol, not a flat byte array.
 
 **Sonification channel (separate, for "hear it"):** the QEMU probe reads all 6 SDMA
 channels (silence detection was unaffected), but the coreaudio *playback* sonifies
