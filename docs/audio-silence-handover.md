@@ -1,134 +1,268 @@
-# Handover: deck plays but produces NO SOUND (silent mix) — emulation gap
+# Handover: deck plays but produces NO SOUND (silent master mix) — emulation gap
 
-**For:** a focused session that only needs to find why a *playing* deck produces
-**silence** in the emulator. Everything else about audio is done: the i.MX6
-SDMA/SSI/AUDMUX is modelled (patch 11), the host sink is wired
-(`-audio coreaudio,timer-period=1451` in `qemu/watch.sh`), the **real-time pacing
-is fixed** (see [audio-handover.md](audio-handover.md) §10a), and the deck loads a
-track and its playhead/REMAIN counts down in real time. The ONE remaining problem:
-the audible output is pure silence.
+**For:** a focused session continuing ONLY the "a playing deck is silent" problem.
+Everything else about audio is done: the i.MX6 SDMA/SSI/AUDMUX is modelled (patch 11),
+the host sink is wired (`-audio coreaudio,timer-period=1451`), real-time pacing is fixed
+(audio-handover.md §10a), USB mounts, a track loads and plays, and REMAIN counts down in
+real time. The ONE remaining problem: the audible output is pure silence.
 
 > ## ⚠️ THIS MUST BE A GAP IN OUR EMULATION — DO NOT HUNT FOR AN rbp BUG
-> `rbp` is the **vanilla, unmodified XDJ-RX firmware**, and it **produces sound on the
-> real hardware**. The exact same binary runs here. Therefore any divergence — the
-> silence — is **by definition** caused by something our QEMU model does differently
-> from (or fails to provide versus) the real i.MX6 SoC. Do **not** go looking for a
-> logic bug in rbp, and do **not** patch rbp. The task is strictly: find which
-> hardware input/behaviour the real SoC gives rbp that our emulation does not, and
-> model it QEMU-side. Every "rbp does X / waits for Y" finding below is a *pointer to
-> the missing emulated behaviour*, never a firmware defect.
+> `rbp` is the **vanilla, unmodified XDJ-RX firmware** and it **produces sound on the real
+> hardware**. The exact same binary runs here. Any divergence — the silence — is **by
+> definition** something our QEMU model does differently from (or fails to provide versus)
+> the real i.MX6 SoC. Do **not** patch rbp. Every "rbp does X / waits for Y" finding is a
+> *pointer to the missing emulated behaviour*, never a firmware defect.
 
-## 0. One-paragraph status
-The whole JUCE audio graph is wired and running, but the master mix comes out all
-zeros. Proven with live gdb: the mixer callback's **output buffers are 0.0** and the
-per-channel **input peak meter is 0.0** — i.e. the decoded deck audio never enters
-the mix. Timing, mixer levels, the output/DMA path, the capture inputs, the
-callback-enable flag, **and the CPU core count** are all ruled out with evidence
-(below). The deck `Player` threads are command-driven and idle (not the continuous
-producer); the running continuous reader is `PcmReader:0`. Next step: find why the
-continuous producer (`PcmReader` / the source feeding the mixer) emits silence —
-most likely a timer/IRQ or decode-pacing input the emulation doesn't deliver.
+---
 
-## 1. What is SOLID (don't re-derive). rbp = `build/extract/rbp`, REA/ghidra.
-Audio output path, fully traced (all VAs; REA decompile needs file-offset = VA−0x8000
-for procedures it *has* defined, and several of these are indirect-only vtable
-targets it did NOT define — use objdump `--start-address` or the gdb reads below):
+## 0. One-paragraph status (UPDATED 2026-11-11 — supersedes the old framing below)
+
+**The deck is NOT the silent producer. The previous version of this handover was analysing
+the wrong channel.** Live gdb on a playing deck proves `playengine::Player` (DECK1) renders
+**real, full-level audio (peak ≈ 0.6)** into its per-channel buffer `0x02abfd08`. Decode,
+time-stretch and the deck source all work. The silence is introduced **downstream, in the
+playengine mix-down → master stage**: the three master/booth/phones output buffers are only
+ever `memset` to 0 — the deck's 0.6 is never summed into them, so the master that reaches
+ALSA/SDMA is silence. The leading hypothesis (shared with the owner) is that a mix gain is at
+0 (Deck1 trim / channel fader / EQ / crossfader / master level) **or** the deck's per-channel
+buffer is never wired into the master router. Those analog mixer controls arrive via the
+subucom MCU; if the emulator never delivers their position they may sit at 0. **Blocker:** we
+do not yet have reliable control of the analog gain controls, so the "sweep each control and
+watch what unmutes" test can't be run yet — wiring/driving those controls is a prerequisite
+(see §4).
+
+---
+
+## 1. CORRECTED signal-flow model (verified live — build this on, not the old §1)
+
+rbp has **two** mixing layers. The old handover traced the wrong one.
+
+### 1a. The deck path = the `playengine` mixer (THIS is where the deck lives)
 
 ```
-ALSAThread run loop  FUN_00303814   (juce::ALSAThread; the only snd_pcm_writei caller @ thunk 0xe184)
-  reads 3 CAPTURE streams (snd_pcm_readi, thunk 0xdc38) -> float input buffers @ (ALSAThread+0x1bc/0x1c0/0x1c4)
-  + 1 custom ioctl device (ioctl 0x800c4251, ALSAThread+0xb4) -> +0x1c8/0x1cc   (REC path; null if device absent)
-  calls the mixer callback:  (*(*(ALSAThread+0x90))->vtable[+8])(inputs=+0x1bc, nIn=+0x1b8, outputs=+0x8b8? +0xb8, nOut=+0x2bc, nSamples=+0x48)
-    -> AudioSourcePlayer cb  0x2f5a50  (forwarding stub: if inner->0x9c>0 call inner->0x94 source getNextAudioBlock; else leave output silent)
-       inner->0x9c = 1 (ENABLED), inner->0x94 = MixerAudioSource @ runtime
-    -> MixerAudioSource::getNextAudioBlock  FUN_000506b0 : memset outputs to 0, then render registered sources
-       (sources are REGISTERED — a live source list of 5 real getNextAudioBlock entries exists)
-    -> per-channel strip  FUN_00085bc0 (×2 = decks): pulls sub-source @ (chan+0xb8), then applies smoothed
-       trim/EQ/fader gains (chan+0x120/+0x158/+0x1f8, targets +0x118/+0x150/+0x1f0)
-       *** channel INPUT peak meter (chan+0x108) == 0.0  => audio is already silent BEFORE gains ***
-    -> sub-source / deck reader  0xa4530  (indirect-only; the leaf that emits zero)
-  converts the 3 output float buffers -> S24 (clamp) and snd_pcm_writei to master/booth/headphone (ALSAThread+0x9c/0xa0/0xa4)
+mixerengine render  FUN_000506b0
+  - memset the 3 OUTPUT buffers (master/booth/phones) to 0   [libc memset, lr=0x50708]
+  - lazily build 2 singletons: DAT_0107a1b0 (0x54B, FUN_00065350),
+                               DAT_01079cb0 (0x58B, FUN_00046d7c = the CHANNEL mixer)
+  - uVar1 = FUN_000635bc(DAT_0107a1b0, n)                     [work/accumulator buffer]
+  - FUN_00043a2c(DAT_01079cb0, n, uVar1)   = per-channel mix-down (iterate channel vector)
+  - FUN_00065270(DAT_0107a1b0, uVar1, n)   = output routing (3 router vectors) + FUN_00065028
+  - FUN_0005c28c(*(param_1+0x220), uVar1)  = position/counter bookkeeping (NOT audio)
+
+FUN_00043a2c: for each ch in [*mixer .. mixer[1]): FUN_0006a360(ch, n, uVar1, end)
+FUN_0006a360: (*(*(ch+8)->vtable+8))(ch+8 /*source obj*/, ch+0xc /*dst buf*/, n, end, extra)
+              i.e. a vtable dispatch (method +8) on the channel's SOURCE object (ch+8),
+              rendering into the channel's own dst buffer (ch+0xc).
 ```
-The 6 "running" SDMA channels = 3 capture (mixer inputs) + 3 playback (master/booth/
-phones). The QEMU-side peak probe (patch-11 build-tree debug, env `XDJ_AUDIO_DEBUG`)
-reads the master SDMA buffer and the per-channel buffers; **all 6 are zero** while a
-track plays.
 
-## 2. RULED OUT (with live evidence — don't re-test these)
-- **Timing / xrun storm**: FIXED via `timer-period=1451` (audio-handover §10a).
-- **Mixer level controls** (master/trim/EQ/crossfader): set TWO ways — debug console
-  (`masterv`/`knob`, confirmed working: `button browse` opened the browser) AND
-  subucom frame injection — no effect. Also the channel input peak is 0 *before* the
-  gains, so gains aren't the gate.
-- **Output / DMA / conversion path**: the callback OUTPUT float buffers are 0.0, so
-  nothing is lost downstream of rbp — rbp's mix is genuinely silent.
-- **Capture inputs**: the 3 capture float buffers are 0.0 (that's mic/line — expected).
-- **Callback skipped**: no — `inner->0x9c==1`, the mixer IS invoked; source list is
-  populated (decks registered).
-- **CPU core count** (owner's dual-core hypothesis): TESTED, negative. `-smp 2` now
-  **boots reliably and faster** (the old dual-core boot issue did not recur) with 2
-  online cores — this is now the **default** in `qemu/watch.sh` (real-HW config) — but
-  the deck `Player` threads are STILL stuck at 0 CPU and the output is STILL silent,
-  so core count is NOT the cause. Same binary either way: `rbp_solo` is a **symlink to
-  `rbp`**; the init script launches the `rbp_solo` symlink on single-core and `rbp` on
-  dual-core, so the silence is binary-identical and core-independent (the whole RE here
-  is valid for both). **Tooling note:** process listings show `rbp_solo` on `-smp 1`
-  vs `rbp` on `-smp 2` — `pidof rbp rbp_solo` to catch both. (Affinity reads are
-  uninformative on `-smp 1`: the kernel clamps all threads to the single online CPU.)
+**The channel vector (live this session), identified by C++ RTTI:**
 
-## 3. The thread picture (live, `pidof rbp`, /proc/<tid>/{comm,wchan,stat})
-- `Player:0`, `Player:1` = the deck command handlers. Loop `FUN_00077a30`: infinite-
-  wait queue pop `FUN_0003febc(q=player+0x58, timeout=0xffffffff)` → `WaitableEvent`
-  wait `FUN_002fdd58`. Switch on cmd: 0=load track (`FUN_00076fe4`), 1/2/3=play/seek,
-  4=EXIT. They sit at **0 CPU** (Player:0 ~4 ticks, Player:1 0 ticks) because their
-  queue is empty — **normal for a command handler**, so they are probably NOT the gate.
-  (Open lead: confirm a LOAD/PLAY from the panel actually posts a command here.)
-- `PcmReader:0` = **running** (hrtimer_nanosleep poll, ticks advancing). This is the
-  continuous PCM reader/decoder and the prime suspect for the silent producer.
-- Backtrace of a stuck Player (via gdb stack scan, see §4): `FUN_0003febc` ←
-  `FUN_00077a30` ← thread entry `FUN_00300e9c/eb0`. Pure command-wait, nothing exotic.
+| ch | class (`N10playengine…`) | source obj | source vtable | render m8 | dst buffer | peak |
+|----|--------------------------|-----------|---------------|-----------|------------|------|
+| 0  | **`Player` (DECK1)**     | 0x029cfe08 | 0x0037a9f0 | **0x00075eb0** | **0x02abfd08** | **≈0.6 ✓** |
+| 1  | `Player` (DECK2)         | 0x02a08718 | 0x0037a9f0 | 0x00075eb0 | 0x02abff10 | 0 (not loaded) |
+| 2  | `Microphone`             | …          | 0x0037a738 | 0x0006a7c4 | 0x02ac0118 | 0 |
+| 3  | `ExtIn` (line)           | …          | 0x0037a6f8 | 0x0006a4a8 | 0x02ac0320 | 0 |
+| 4  | `ExtIn` (line)           | …          | 0x0037a6f8 | 0x0006a4a8 | 0x02ac0528 | 0 |
+| 5  | `UsbAudio`               | …          | 0x0037b0f8 | 0x0007d108 | 0x02ac0730 | 0 |
+| 6  | `UsbAudio`               | …          | 0x0037b0f8 | 0x0007d108 | 0x02ac0938 | 0 |
 
-## 4. THE REMAINING TASK + method
-Find why the continuous producer emits silence. Two concrete leads:
-1. **`PcmReader:0`**: what does it read and where does it write? Is its output buffer
-   non-zero? If it reads from a kernel/driver FIFO or waits on a period IRQ that the
-   emulation doesn't deliver, that's the gap (fits the owner's "missing timer IRQ"
-   intuition). Find the thread fn (same method as §4 gdb below), decompile, check its
-   source (file/decoded-buffer/ioctl/capture) and its wake/pacing.
-2. **Leaf deck reader `0xa4530`** (indirect-only; objdump it): it feeds the channel
-   strip and emits 0. Walk it to the actual decoded-PCM buffer; check (gdb) whether
-   that buffer is non-zero (→ a read/transport-state gate) or zero (→ decode/producer
-   not running).
-Then whatever hardware input is missing, model it QEMU-side (do NOT patch rbp).
+- Mixer singleton `DAT_01079cb0` → obj `0x029a6ce8`; channel vector `[0x02a412f0 .. 0x02a4130c)`.
+- The per-channel dst buffers are a contiguous array, **stride 0x208**, base `0x02abfd08`.
+- The 3 **output** buffers (from `FUN_000506b0` param_4 = r3 at entry, array @ `0x02ab9bf0`):
+  master `0x02abcec8`, booth `0x02abd0d0`, phones `0x02abd2d8` — a DIFFERENT region, just
+  below the per-channel dsts.
+- The `Player` render (m8 `0x75eb0`) runs a **time-stretch/crossfade** (`TimeStretchManager`,
+  seen at `0x7ddfc`): `*acc = deck[i]*c + *acc*(1-c)`, where `c` is a coeff at `obj+0x48`
+  (`DAT_0107aa40` = 1.0f constant is the "max"). A 0 coeff here drops the deck from the mix.
 
-**gdb method that works here** (QEMU gdbstub = `tcp::1234`; it exposes CPU cores, NOT
-guest pthreads, so inspect by address/VA, and read guest user memory by VA — all rbp
-threads share one address space):
-- Helpers written this session in the scratchpad: `gdbx.py` (break + regs), `gdbout.py`
-  (read callback I/O float buffers), `gdblist.py` (walk the source list), `gdbgain.py`
-  (channel gains/sub-source), `gdbstk.py` (scan a thread stack for rbp `.text` return
-  addrs), `gdbread*.py` (pointer chasing). Reuse these.
-- Thread user-PC/SP: `/proc/<tid>/stat` field 30 = kstkeip, field 29 = kstkesp.
-  `/proc/<tid>/mem` reads EIO on a running thread — read the stack by **VA via the
-  gdbstub `m`** instead (shared address space).
-- The mixer callback object is at `*(ALSAThread+0x90)`; break at `0x303a98` (the
-  `blx` to the callback) to capture r0=callback obj, r5=ALSAThread, r12=callback VA.
-- Peak probes: launch with `XDJ_AUDIO_DEBUG=1`; `[sdma-au] … peak=` is the master
-  output peak, `[sdma-ch] … bufpeak=` per channel, `[sdma-rate] chN produced=…/s` the
-  real-time meter. (Build-tree-only instrumentation in `hw/arm/fsl-imx6.c`, env-gated,
-  not in patch 11.)
+### 1b. The line-input path = `FUN_00085bc0` (what the OLD handover wrongly called "the deck")
 
-## 5. How to run / drive (shared helpers)
-- Launch + boot + USB + load/play: see [usb-accept-handover.md](usb-accept-handover.md)
-  §1 (con4.py console helper, the hub-only boot + `device_add` + `touch /tmp/usb2_insert`,
-  the USB-Error clear via the USB2 source key `echo 158 > /tmp/mainkey`), and
-  [rotary-encoder-handover.md](rotary-encoder-handover.md). Load a track with PUSH
-  `b 5d 10` (single track on the test image), PLAY `b 13 40` (press until REMAIN
-  counts). Panel server: `python3 tools/xdj-panel/server.py` → :8765, `POST /ctrl`.
-- Audio launch is already in `qemu/watch.sh` (`XDJAUDIO`, default `coreaudio,timer-period=1451`).
+```
+FUN_00085bc0  (JUCE "channel strip") — ONLY ONE INSTANCE RUNS, and it is a LINE channel
+  chan object this session = 0x02a49ca0, chan+0x14 = idx 0
+  input  = DAT_0107acdc[idx].word0  (per-channel "bus"; idx0 -> 0x02ac0320 = ExtIn ch3 dst)
+         pulled via FUN_00085a54 (gain state machine) -> FUN_00085914 (gain multiply copy)
+  gains  : trim chan+0x120 / eq chan+0x158 / fader chan+0x1f8 (targets +0x118/+0x150/+0x1f0)
+  peak   : chan+0x108  (== 0 here, CORRECT: nothing is plugged into line-in)
+  sub    : chan+0xb8 = mixerengine::Equalizer (vtable 0x38a860, getNextAudioBlock = 0xa4530),
+           which runs 3x dsp::secondOrder_IIRFilter (vtable 0x376cd8)
+```
 
-## 6. Pointers
-- [audio-handover.md](audio-handover.md) §10 — the pacing fix (§10a, DONE) and the
-  first silence writeup (§10b); this doc supersedes §10b with the full graph+thread trace.
-- [docs/xdj-rx-control-map.md], [docs/subucom-frame-map.md] — mixer control codes/offsets.
-- [docs/debug-console-protocol.md] — UDP `127.0.0.1:20000` console (`knob`, `masterv`, …).
+Shared-buffer accessors (both are plain index→pointer helpers):
+- `FUN_00080ac0(idx) = &DAT_0107acdc + idx*12` (3 words/entry) — the per-channel **bus**
+  the line strip reads. `DAT_0107acdc[0] = {0x02ac0320, 3, 0}`.
+- `FUN_000808a4(idx) = &DAT_0107abc4 + idx*8` (2 words/entry) — the **capture staging**
+  descriptor; `[idx]+4` = capture float buffer (e.g. `0x02abcaf8`).
+
+### 1c. Capture + output (ALSA) layer
+
+```
+ALSAThread  FUN_00303814
+  reads the 3 CAPTURE streams, converts S24->float with a NEON loop @ 0x3039c0..0x3039e4
+     (vldmia int32 ; vshl.i32 #8 ; vcvt.f32.s32 ; vmul scale ; vstmia -> capture float buf)
+  ...calls the mix/output path and writes master/booth/phones to ALSA (-> SDMA).
+```
+
+**ALSA topology (`/proc/asound/pcm`, all RUNNING):**
+- pcm0 = **MasterOut** (playback) & **Input2** (capture), codecs ak4382(DAC)/ak5358(ADC)
+- pcm1 = **HeadphoneOut** (playback) & **MicInput** (capture), ak4387/ak5358
+- pcm2 = **BoothOut** (playback) & **Input1** (capture), ak4387/ak5358
+
+The 3 captures are **real external analog inputs** (ADC) and correctly read 0 (nothing
+plugged in). They are NOT a deck loopback. MasterOut playback (pcm0p) is healthy
+(delay≈128). So the deck audio does NOT travel via ALSA capture — it is pure software in
+the playengine, and the loss is before ALSA.
+
+---
+
+## 2. What is SOLID — verified LIVE this session (don't re-derive)
+
+- **The deck decodes and produces audio.** DECK1 `playengine::Player` → buffer `0x02abfd08`,
+  peak ≈ 0.6 (measured repeatedly at the mixer render). Decode + time-stretch work.
+- **The MP3 is read fully into RAM and played from RAM** (not streamed): rbp fd (this session
+  fd 66) → `…/Contents/BITCRUSHR/Play It Hard/BITCRUSHR - Play It Hard.mp3`, 5,910,103 bytes,
+  valid ID3+frames, and `/proc/<pid>/fdinfo/<fd>` pos == file size (read to EOF). So the
+  source file and USB/vfat read path are fine.
+- **The silence is in the mix-down → master.** The 3 playengine output buffers
+  (master `0x02abcec8`, booth `0x02abd0d0`, phones `0x02abd2d8`) are **only ever `memset`
+  to 0** (write-watchpoint: the only writer is libc `memset`, value 0, called from `0x50708`
+  inside `FUN_000506b0`). Nothing ever sums the deck's 0.6 into them. SDMA MasterOut peak = 0.
+- **All 6 SDMA channels run at ~44100 frames/s with bufpeak = 0** (3 playback = master/booth/
+  phones, 3 capture = Input2/Mic/Input1). The QEMU peak probe reads the BD buffers directly
+  (env `XDJ_AUDIO_DEBUG=1`).
+
+## 3. What the OLD handover got WRONG (corrected — do not repeat)
+
+- ❌ "channel strip `FUN_00085bc0` (×2 = decks)" → it is the **line-input** path, and **only
+  one** instance runs (a `playengine::ExtIn` channel, chan `0x02a49ca0`, idx 0).
+- ❌ "channel input peak (chan+0x108)=0 ⇒ the deck audio is silent before gains" → that peak
+  is the **line channel's** input, correctly 0 (no line-in signal). It says nothing about the
+  deck.
+- ❌ "`0xa4530` = sub-source / deck reader" → `0xa4530` is
+  `mixerengine::Equalizer::getNextAudioBlock` on the **line** channel. The deck never calls it.
+- ❌ "`PcmReader:0` is the continuous deck decoder / prime suspect" → `PcmReader`
+  (`FUN_0003c3bc`) is the **hot-cue buffer cacher** ("ERR HotCueBuffer store",
+  `FUN_000393d4`→`FUN_0003b46c`). `FUN_0003b46c` fired **0 times** in 8s of playback; it is
+  not the realtime deck decoder.
+- ⚠️ "Mixer level controls ruled out (set via console/subucom, no effect)" → re-open this.
+  Those tests were made under the wrong model; the mix gains are now the prime suspect (§4).
+  The "callback output float buffers are 0.0" observation is consistent with the master mix
+  being zero and does NOT contradict the deck producing 0.6 upstream.
+
+What still holds from before: timing/xrun fixed (§10a); CPU core count irrelevant; the deck
+"plays" (REMAIN counts) but is silent.
+
+---
+
+## 4. THE REMAINING TASK + how to close it
+
+The deck renders 0.6 into `0x02abfd08`; the master output is 0. Find the step that should
+sum/route the deck into the master and show why it emits 0. Two hypotheses:
+
+1. **A mix GAIN is 0** (owner's hypothesis): Deck1 trim, channel fader, EQ, crossfader
+   assign, or master level. In the `Player` render the deck is summed with a crossfade coeff
+   at `source+0x48`; the channel/master routers in `FUN_00065270`/`FUN_00065028` apply the
+   fader/assign. If any is 0 the deck sums in at ×0. These are **analog** controls read via
+   the subucom MCU analog section — if the emulator never delivers their position they may
+   default to 0 (= the emulation gap).
+2. **Buffer-wiring / "shared buffer" gap**: the deck's per-channel buffer `0x02abfd08` is
+   never linked into the master router's input list (so the router sums only silent channels),
+   because some setup rbp does on real hardware didn't run here.
+
+**Decisive tests (in priority order):**
+
+- **(blocked) Control sweep.** With the analog controls drivable, set Deck1 CH-fader → max,
+  then trim, master level, crossfader to Deck1, EQ to center, one at a time, while watching
+  `0x02abfd08` (deck, expect ~0.6), the master buffer `0x02abcec8`, and the SDMA peak. The
+  control that flips the master non-zero is the gate. **Prerequisite: reliable control of the
+  analog mixer gains — not available yet** (owner, 2026-11-11). Wiring/driving the trim/fader/
+  EQ/crossfader/master via the subucom analog continuous section is step 0.
+- **Find the TRUE master buffer.** It is unconfirmed whether `0x02abcec8` (param_4[0]) is the
+  buffer the ALSAThread actually sends to SDMA MasterOut, or a scratch/legacy buffer. Confirm
+  by write-watching the SDMA MasterOut BD buffer (or the ALSA mmap region for pcm0p) to catch
+  rbp's final S24 store, then walk BACK from that writer. If that true master is non-zero but
+  our SDMA reads 0 → the bug is in our SDMA/ALSA-mmap buffer addressing (QEMU side), not a
+  gain. If it is zero → confirm which gain/route zeroed it (hypothesis 1 or 2).
+- **Read the router gains.** Decompile `FUN_00065270`'s router objects (3 vectors at
+  mixer-singleton `DAT_0107a1b0[0..1]/[3..4]/[6..7]`) and `FUN_00065028`; read their per-input
+  gain/assign for the deck channel live. A 0 there is the smoking gun.
+
+Then model the missing hardware input QEMU-side (likely: deliver the analog mixer-control
+positions so the deck's fader/trim/master aren't stuck at 0), or fix the buffer wiring.
+Do NOT patch rbp.
+
+---
+
+## 5. How to run / drive (this session's working setup)
+
+Launch (headless, instrumented) — hub-only so the USB inserts after rbp is polling:
+
+```bash
+XDJ_AUDIO_DEBUG=1 build/qemu-src/qemu-11.1.0/build/qemu-system-arm \
+  -M sabrelite -smp 2 -m 256 -no-reboot -display none \
+  -audio coreaudio,timer-period=1451 \
+  -drive if=none,id=usbstick,file=test/usb/rekordbox_new.img,format=raw,snapshot=on \
+  -device usb-hub,bus=usb-bus.1,port=1,id=xdjhub \
+  -device loader,file=build/qemu/vmlinux.bin,addr=0x10008000,force-raw=on \
+  -device loader,file=build/qemu/atags.bin,addr=0x10000100,force-raw=on \
+  -device loader,file=build/qemu/tramp.bin,addr=0x10000000,cpu-num=0 \
+  -drive if=none,id=xdjsd,file=build/qemu/nand.img,format=raw,snapshot=on \
+  -nic user \
+  -monitor unix:/tmp/d_mon4.sock,server,nowait \
+  -serial unix:/tmp/d_con4.sock,server,nowait -serial null -gdb tcp::1234  > qemu_audio.log 2>&1 &
+```
+
+Endpoints: monitor `/tmp/d_mon4.sock`, serial `/tmp/d_con4.sock`, gdb `tcp::1234`,
+`XDJ_AUDIO_DEBUG=1` traces `[sdma-ch] … bufpeak=` (per-channel BD peak), `[sdma-au] … peak=`
+(master), `[sdma-rate] … frames/s` to the log.
+
+Mount the USB (after `pidof rbp`'s `UsbMountManager` thread is at `poll_schedule_timeout`):
+```
+# monitor:  device_add usb-storage,bus=usb-bus.1,port=1.1,drive=usbstick,id=xdjusb,removable=on
+# host:     touch /tmp/usb2_insert
+# press USB2 source:  echo 158 > /tmp/mainkey   (then rm)  — opens the browser
+```
+NB a **"USB Error. Remove the device."** modal often appears on insert (the cold-plug
+rendezvous race, usb-accept-handover §0c), but opening the USB2 browser clears it and the
+library loads fine — rbp opens `export.pdb` and `Contents/.../track.mp3`.
+
+Panel web UI (drive load/play/loop): `python3 tools/xdj-panel/server.py --port 8765
+--mon /tmp/d_mon4.sock` → http://127.0.0.1:8765 (writes `/tmp/subucom_ctrl` + `/tmp/mainkey`,
+screendumps via the monitor socket). Load a track with PUSH, PLAY with `b 13 40`.
+
+Console helper `con4.py` and monitor helper `monc.py`: in this session's scratchpad (recreate
+from usb-accept-handover.md §1 if gone). The guest serial is flooded with benign guest-side
+`ALSA: Resolve xrun` messages — grep them out; QEMU logs 0 xruns and drains at realtime.
+
+## 6. gdb method + scratchpad probe inventory (reuse these)
+
+QEMU gdbstub = `tcp::1234`; it exposes CPU cores, not pthreads, so inspect by VA (all rbp
+threads share one address space). rbp-VA hardware breakpoints (`Z1,<va>,4`) fire in rbp
+context; memory reads (`m<addr>,<len>`) and write-watchpoints (`Z2,<addr>,4`) work. Always
+remove breakpoints and `c` (continue) before disconnecting, or the next probe can wedge.
+
+Probes written this session (session scratchpad `…/2803848f-…/scratchpad/`):
+- `gdbh.py` — generic RSP client (regs / read / bphit / bpread).
+- `probe_chan.py` — break `FUN_00085bc0`, map a channel-strip object graph.
+- `probe3.py` — leaf render-vs-skip path + decision fields.
+- `probe4.py` — dump deck reader objects / count decode-fn hits.
+- `probe5.py` — generic **write-watchpoint** on an address (finds producers).
+- `probe6.py` — the `DAT_0107acdc` bus buffer + watch its writer.
+- `probe7.py` — **enumerate the mixer channel vector + RTTI** (the key tool: found the decks).
+- `probe8.py` — break `FUN_000506b0`, read deck buf + the 3 output buffers' peak.
+- `probe10.py` — enumerate `FUN_00085bc0` strips + gains/peak.
+- `rtti.py` — C++ RTTI name + vtable[+8] for a vptr.
+
+REA notes: Ghidra image base 0x8000 (VA = file-offset + 0x8000). Some leaves (e.g. 0xa4530)
+are indirect-only and not Ghidra-defined — disassemble from the ELF with
+`objdump -d build/extract/rbp --start-address=… --stop-address=…`. `resolve_containing_procedure`
+and `procedure_pseudo_code` take real VAs; a bare value that isn't a defined proc may be
+reinterpreted as a file-offset (watch the `selection` field).
+
+## 7. Pointers
+- `docs/audio-handover.md` §8/§9/§10 — SDMA/SSI/AUDMUX model, host sink, pacing fix.
+- `docs/xdj-rx-control-map.md`, `docs/subucom-frame-map.md` — mixer control codes/offsets
+  (needed to drive the analog gains for the §4 sweep test).
+- `docs/debug-console-protocol.md` — UDP `127.0.0.1:20000` console (`knob`, `masterv`, …).
+- memory `deck-playback-audio-gated.md` — the running RE trail (addresses, corrections).
