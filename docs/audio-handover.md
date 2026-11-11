@@ -1,8 +1,16 @@
 # Audio handover — making decks actually play
 
-**Status:** not started. This is the last unimplemented feature on the
-[emulator roadmap](../). Everything below is the result of a diagnosis session
-(2026-11-11); no audio code has been written yet.
+**Status: IMPLEMENTED (Option A) and verified at the ALSA layer — 2026-11-11.**
+The i.MX6 SDMA engine + SSI/AUDMUX are now modelled in QEMU
+([qemu/patches/11-imx6-audio-sdma-ssi.patch](../qemu/patches/11-imx6-audio-sdma-ssi.patch)).
+SDMA probes, the ASoC card instantiates, and on the real `hw:ak4387audio` device
+ALSA's playback pointer now **advances in real time (~44100 frames/s, within
+~0.5%)** where it was previously frozen at 0 with `imx-pcm-audio hw params
+failed`. See **§8 Implemented — results** for the full writeup. The remaining
+end-to-end demo (rbp's on-screen `REMAIN` counting down) is gated on the separate
+browse/track-load feature, not on the audio time base — see §8.
+
+The diagnosis below (the original handover) is kept for context.
 
 **One-line goal:** press PLAY on a loaded deck and have the `REMAIN` time count
 down in real time (and, ideally, produce sound). Today the deck latches "play"
@@ -180,3 +188,74 @@ on a QEMU `-audiodev`.
 - Memory: `deck-playback-audio-gated`, `emulator-roadmap`, `panel-and-usb-bringup`.
 - Prior QEMU-device work to mirror in style: galcore GPU stub and the USB wakeup
   patch (`qemu/patches/`) — same "model just enough of the i.MX6 block" approach.
+
+---
+
+## 8. Implemented — results (2026-11-11)
+
+Option A was implemented as
+[qemu/patches/11-imx6-audio-sdma-ssi.patch](../qemu/patches/11-imx6-audio-sdma-ssi.patch)
+(all in `hw/arm/fsl-imx6.c`; reuses the SSI/SDMA/AUDMUX addresses already in the
+header). The firmware/rootfs are untouched, per the hard constraint.
+
+### What was built
+- **SDMA engine model** (`imx-sdma`, mainline dmaengine register map at
+  `0x020EC000`). The entire probe+playback handshake collapses to **one**
+  mechanism: *a channel is started (write `H_START` bit n) → raise its interrupt
+  (`H_INTR` bit n + GIC SPI 2)*.
+  - **Channel 0** (SDMA command channel — context/script loads during probe and
+    channel config) is **one-shot**: fire its completion interrupt once. `H_RESET`
+    reads back 0 (reset done); `H_STATSTOP` reads the running set so the ch0
+    readiness poll passes.
+  - **Channels ≥1** (audio cyclic DMA) run a **period-interrupt train** at the
+    real-time rate until stopped (write to `H_STATSTOP`).
+- **Per-period work = hand one BD back to the CPU.** The cyclic ISR
+  (`sdma_update_channel_loop`) only advances ALSA's pointer for buffer
+  descriptors whose `BD_DONE` bit the *hardware* has cleared. So each period
+  interrupt walks the channel's CCB→BD ring (base from `H_C0PTR`), clears
+  `BD_DONE` on the current BD in guest DRAM, and wraps on `BD_WRAP` — in lockstep
+  with the driver's own `buf_tail`. **This was the non-obvious bit**: without it
+  the stream reached `RUNNING` but `hw_ptr` stayed 0 and the app got `-EIO`.
+- **Real-time pacing.** Each channel's period interval is derived from its BD:
+  `period_ns = BD.count(bytes) / byte_rate`, so the playhead tracks wall-clock
+  regardless of the app's chosen period/buffer size. `byte_rate` default
+  **318000** (env `XDJ_AUDIO_BYTE_RATE`); `XDJ_AUDIO_DEBUG=1` logs per-channel
+  pacing. (The ideal 44.1 kHz·S24_LE·stereo rate is 352800 B/s, but the guest
+  clocksource runs ~10% slow vs `QEMU_CLOCK_VIRTUAL`, a constant TCG calibration
+  gap that 318000 compensates — the drain rate scales linearly with `byte_rate`.)
+- **SSI1/2/3** RAM-backed register files (cpu-dai config scratch; `SISR` reports
+  TX FIFO empty) and **AUDMUX** pure-RAM region. No behaviour needed — the time
+  base is entirely the SDMA period interrupts.
+
+### Verification (direct, at the ALSA layer)
+Boot dmesg now shows `imx-sdma: loaded firmware 1.1` / `initialized`, all three
+`asoc: … mapping ok`, card `#0: ak4387-audio` — and **no `hw params failed`**.
+(The rootfs ships the SDMA firmware; ch0 context loads complete via the stub.)
+
+Playing to the real device and sampling `/proc/asound/card0/pcm0p/sub0/status`:
+```
+# head -c 3000000 /dev/zero | aplay -t raw -f S24_LE -c 2 -r 44100 -D hw:ak4387audio,0
+t=89.32 hw_ptr: 43008     t=91.33 hw_ptr: 131072
+t=90.33 hw_ptr: 86016     t=93.34 hw_ptr: 221184
+```
+→ **44323 frames/s over 4 s (target 44100, ~0.5% fast)**, state `RUNNING`, clean
+exit (no under/overrun). Note the codec only accepts **`S24_LE`** (4-byte slots,
+8 bytes/frame); `S16_LE` is rejected.
+
+### What's NOT yet demonstrated, and why
+rbp holds **no** audio device open at idle — it opens `hw:ak4387audio,{0,1,2}`
+(+ capture) and links them only when a deck actually **plays a loaded track**.
+Showing the on-screen `REMAIN` tick therefore needs BROWSE → navigate → **LOAD**,
+which is the **separate, currently-blocked** browse/track-load path
+(`iPodMgr` load-sensitive SIGSEGV; the RX nav/LOAD key mapping is still unfound —
+see [xdj-rx-control-map.md](xdj-rx-control-map.md) §"Deck transport & jog"). Since
+rbp's playhead is slaved to exactly the ALSA clock proven above, the audio time
+base is complete; the end-to-end deck demo is unblocked by finishing browse/load.
+
+### Reproduce / tune
+- Rebuild: `ninja -C build/qemu-src/qemu-11.1.0/build qemu-system-arm`.
+- Headless verify: launch with `-serial unix:/tmp/a_con.sock,server,nowait`
+  `-monitor unix:/tmp/a_mon.sock,server,nowait -display none`, log in root/empty
+  (send bytes slowly — the emulated UART drops input at speed), run the `aplay`
+  one-liner above. `XDJ_AUDIO_BYTE_RATE=<n>` fine-tunes the drain rate without a
+  rebuild; raise it to speed the playhead up, lower it to slow it down.

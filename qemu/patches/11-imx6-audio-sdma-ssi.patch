@@ -1,0 +1,407 @@
+# patches/11-imx6-audio-sdma-ssi.patch
+#     Audio time base (Option A, "real-time null sink"): a minimal i.MX6 SDMA
+#     engine model plus RAM-backed SSI1/2/3 and AUDMUX register files, so the
+#     stock dmaengine imx-sdma driver probes, the ASoC/ALSA imx-pcm path
+#     configures and starts a cyclic DMA channel, and a QEMUTimer then raises the
+#     SDMA period interrupt at the real-time audio rate. Each period interrupt
+#     hands one buffer descriptor back to the CPU (clears BD_DONE in guest DRAM)
+#     and advances ALSA's DMA pointer by one period -- so a playing deck's REMAIN
+#     counts down in real time. No PCM data is moved (silent); Option B would
+#     route it to a -audiodev sink.
+#
+#     The engine handshake reduces to one mechanism shared by probe and playback:
+#     "channel started (H_START bit n) -> raise its interrupt (H_INTR bit n + GIC
+#     SPI 2)". Channel 0 (SDMA command channel: context/script loads) is one-shot;
+#     channels >=1 (audio cyclic DMA) fire at the BD-derived period rate until
+#     stopped (write to H_STATSTOP). Period pacing = BD.count / byte_rate so the
+#     playhead tracks wall-clock regardless of the app's period size; byte_rate is
+#     env-tunable (XDJ_AUDIO_BYTE_RATE) and XDJ_AUDIO_DEBUG logs per-channel
+#     pacing. Verified on the real hw:ak4387audio device: ALSA hw_ptr advances
+#     ~44100 frames/s (was frozen at 0 with "imx-pcm-audio hw params failed"
+#     before). See docs/audio-handover.md.
+#
+--- a/hw/arm/fsl-imx6.c
++++ b/hw/arm/fsl-imx6.c
+@@ -526,11 +526,312 @@
+ static const MemoryRegionOps ipu_cm_ops = {
+     .read = ipu_cm_read,
+     .write = ipu_cm_write,
++    .endianness = DEVICE_NATIVE_ENDIAN,
++    .valid = { .min_access_size = 4, .max_access_size = 4 },
++};
++
++/* ============================================================================
++ * Audio time base: minimal i.MX6 SDMA + SSI + AUDMUX model (Option A).
++ *
++ * The CDJ/XDJ deck playhead is slaved to the audio sample clock: rbp's REMAIN
++ * only counts down as PCM frames are consumed by the hardware.  Stock QEMU
++ * models no audio peripheral, so ALSA's "imx-pcm-audio hw params failed"
++ * (the SDMA DMA layer) and the playhead stays frozen even while PLAY is latched.
++ *
++ * This is the "real-time null sink": we model *just enough* of the SDMA engine
++ * (plus RAM-backed SSI/AUDMUX register files) that the dmaengine imx-sdma
++ * driver probes, imx-pcm can configure/start a cyclic DMA channel, and a timer
++ * then raises the per-channel "period elapsed" interrupt at the audio period
++ * rate.  Each such interrupt makes ALSA advance the DMA pointer by one period,
++ * which advances rbp's playhead -> REMAIN counts down.  No PCM data is moved
++ * (silent); Option B would route it to a -audiodev sink.
++ *
++ * The whole handshake reduces to ONE mechanism, shared by probe and playback:
++ *   "a channel is started (H_START bit n) -> raise its interrupt (H_INTR bit n
++ *    + GIC line)".
++ * Channel 0 is the SDMA command channel (context/script loads during probe and
++ * channel config): it is one-shot, so we fire its completion interrupt once.
++ * Channels >= 1 carry the audio cyclic DMA: we fire their interrupt repeatedly
++ * at the period rate until the driver stops them (write to H_STATSTOP).
++ *
++ * Register offsets are the mainline drivers/dma/imx-sdma.c map (device
++ * "imx-sdma", firmware "imx/sdma/sdma-imx6q-to1.bin"), which is what this
++ * kernel's SDMA driver uses.
++ * ========================================================================== */
++
++#define SDMA_H_C0PTR      0x000  /* channel 0 control block pointer            */
++#define SDMA_H_INTR       0x004  /* interrupt status, write-1-to-clear         */
++#define SDMA_H_STATSTOP   0x008  /* R: running channels; W: stop channel(bit)  */
++#define SDMA_H_START      0x00c  /* W: start channel (bit n)                   */
++#define SDMA_H_EVTOVR     0x010
++#define SDMA_H_DSPOVR     0x014
++#define SDMA_H_HOSTOVR    0x018
++#define SDMA_H_EVTPEND    0x01c
++#define SDMA_H_RESET      0x024  /* W1 then self-clears (reads 0 = done)       */
++#define SDMA_H_EVTERR     0x028
++#define SDMA_H_INTRMASK   0x02c
++#define SDMA_H_CONFIG     0x038
++#define SDMA_NUM_CH       32
++
++/*
++ * SDMA channel control block (CCB) and buffer descriptor (BD) layout, as the
++ * imx-sdma driver builds them in guest DRAM.  H_C0PTR holds the physical base
++ * of the CCB array (one 16-byte CCB per channel); CCB.base_bd_ptr (+4) points
++ * at that channel's BD array (12 bytes each).  The BD's first word packs
++ * count[15:0] | status[23:16] | command[31:24]; the status byte carries the
++ * ownership/flags we care about (shifted << 16 in the word).
++ */
++#define SDMA_CCB_STRIDE   16
++#define SDMA_CCB_BASE_BD  4
++#define SDMA_BD_STRIDE    12
++#define SDMA_BD_DONE      (0x01u << 16)   /* 1 = owned by SDMA (armed) */
++#define SDMA_BD_WRAP      (0x02u << 16)   /* last BD of a cyclic ring  */
++#define SDMA_BD_MAX       64              /* ring-walk safety cap      */
++
++typedef struct Imx6Sdma Imx6Sdma;
++typedef struct {
++    Imx6Sdma  *s;
++    int        ch;
++    uint32_t   bd_idx;      /* ring position for the cyclic BD walk */
++    int64_t    period_ns;   /* this channel's real-time period interval */
++    QEMUTimer *timer;
++} SdmaChan;
++
++struct Imx6Sdma {
++    MemoryRegion iomem;
++    qemu_irq     irq;
++    uint32_t     regs[FSL_IMX6_SDMA_SIZE / 4]; /* generic backing store       */
++    uint32_t     intr;          /* H_INTR pending latch                        */
++    uint32_t     running;       /* channels >=1 currently cyclic (H_STATSTOP)  */
++    int64_t      period_ns;     /* fallback period interval (no BD info)       */
++    uint32_t     byte_rate;     /* device consumption rate, bytes/sec          */
++    SdmaChan     chan[SDMA_NUM_CH];
++};
++
++static Imx6Sdma g_sdma;
++
++static void sdma_update_irq(Imx6Sdma *s)
++{
++    qemu_set_irq(s->irq, s->intr ? 1 : 0);
++}
++
++/*
++ * Emulate the engine finishing one cyclic period: hand the current buffer
++ * descriptor back to the CPU by clearing its BD_DONE bit, then advance the ring
++ * tail (wrapping on BD_WRAP).  The driver's sdma_update_channel_loop() collects
++ * exactly the BDs whose DONE bit is clear and re-arms them, so clearing one per
++ * interrupt advances ALSA's pointer by exactly one period -- in lockstep with
++ * the driver's own buf_tail.
++ */
++/* Physical base of channel ch's buffer-descriptor array (0 if not set up). */
++static uint32_t sdma_bd_base(Imx6Sdma *s, int ch)
++{
++    uint32_t ccb = s->regs[SDMA_H_C0PTR >> 2];   /* CCB array base (phys) */
++
++    if (!ccb) {
++        return 0;
++    }
++    return address_space_ldl_le(&address_space_memory,
++                                ccb + ch * SDMA_CCB_STRIDE + SDMA_CCB_BASE_BD,
++                                MEMTXATTRS_UNSPECIFIED, NULL);
++}
++
++/*
++ * Compute a cyclic channel's real-time period interval from the BD it was
++ * programmed with: BD.count is the period size in bytes, and the device drains
++ * byte_rate bytes/sec, so one period lasts count/byte_rate seconds.  Deriving
++ * it from the BD (rather than a fixed rate) keeps the playhead real-time
++ * regardless of the app's chosen period/buffer size.  Falls back to the global
++ * default if the BD isn't readable yet.
++ */
++static void sdma_set_period(Imx6Sdma *s, int ch)
++{
++    uint32_t bd_base = sdma_bd_base(s, ch);
++    uint32_t count;
++
++    s->chan[ch].period_ns = s->period_ns;        /* default */
++    if (!bd_base || !s->byte_rate) {
++        return;
++    }
++    count = address_space_ldl_le(&address_space_memory, bd_base,
++                                 MEMTXATTRS_UNSPECIFIED, NULL) & 0xffff;
++    if (count) {
++        s->chan[ch].period_ns =
++            (int64_t)count * NANOSECONDS_PER_SECOND / s->byte_rate;
++    }
++    if (getenv("XDJ_AUDIO_DEBUG")) {
++        fprintf(stderr, "[sdma] ch%d period: count=%u bytes byte_rate=%u "
++                "period_ns=%lld\n", ch, count, s->byte_rate,
++                (long long)s->chan[ch].period_ns);
++    }
++}
++
++static void sdma_consume_period(Imx6Sdma *s, SdmaChan *c)
++{
++    uint32_t bd_base = sdma_bd_base(s, c->ch);
++    uint32_t bd_addr, mode;
++
++    if (!bd_base) {
++        return;
++    }
++    bd_addr = bd_base + c->bd_idx * SDMA_BD_STRIDE;
++    mode = address_space_ldl_le(&address_space_memory, bd_addr,
++                                MEMTXATTRS_UNSPECIFIED, NULL);
++    address_space_stl_le(&address_space_memory, bd_addr, mode & ~SDMA_BD_DONE,
++                         MEMTXATTRS_UNSPECIFIED, NULL);
++
++    if ((mode & SDMA_BD_WRAP) || ++c->bd_idx >= SDMA_BD_MAX) {
++        c->bd_idx = 0;
++    }
++}
++
++/* One period-elapsed / completion interrupt for one channel. */
++static void sdma_ch_tick(void *opaque)
++{
++    SdmaChan *c = opaque;
++    Imx6Sdma *s = c->s;
++
++    /* Cyclic audio channel: finish a period in guest memory, keep the train
++     * running.  Channel 0 (one-shot command channel) just signals completion. */
++    if (s->running & (1u << c->ch)) {
++        sdma_consume_period(s, c);
++    }
++
++    s->intr |= (1u << c->ch);
++    sdma_update_irq(s);
++
++    if (s->running & (1u << c->ch)) {
++        timer_mod(c->timer,
++                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + c->period_ns);
++    }
++}
++
++static uint64_t sdma_read(void *opaque, hwaddr off, unsigned size)
++{
++    Imx6Sdma *s = opaque;
++
++    switch (off) {
++    case SDMA_H_INTR:
++        return s->intr;
++    case SDMA_H_STATSTOP:
++        /* Channel 0 completes instantly (never "running"); audio channels run
++         * until stopped.  The driver polls this for channel 0 readiness. */
++        return s->running;
++    case SDMA_H_RESET:
++        return 0;               /* reset always already complete */
++    case SDMA_H_EVTERR:
++        return 0;
++    default:
++        return s->regs[(off >> 2) & (FSL_IMX6_SDMA_SIZE / 4 - 1)];
++    }
++}
++
++static void sdma_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
++{
++    Imx6Sdma *s = opaque;
++    uint32_t v = (uint32_t)val;
++    int ch;
++
++    switch (off) {
++    case SDMA_H_INTR:                           /* write-1-to-clear */
++        s->intr &= ~v;
++        sdma_update_irq(s);
++        return;
++
++    case SDMA_H_START:
++        for (ch = 0; ch < SDMA_NUM_CH; ch++) {
++            if (!(v & (1u << ch))) {
++                continue;
++            }
++            if (ch == 0) {
++                /* Command channel (context/script load): one-shot completion a
++                 * hair later, so the driver's wait_for_completion is armed. */
++                timer_mod(s->chan[0].timer,
++                          qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1000);
++            } else {
++                /* Audio cyclic DMA: start the period-interrupt train, paced to
++                 * the BD's period size so the playhead tracks real time. */
++                s->running |= (1u << ch);
++                s->chan[ch].bd_idx = 0;     /* start at the ring head */
++                sdma_set_period(s, ch);
++                timer_mod(s->chan[ch].timer,
++                          qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL)
++                              + s->chan[ch].period_ns);
++            }
++        }
++        return;
++
++    case SDMA_H_STATSTOP:                        /* write stops channel(s) */
++        for (ch = 1; ch < SDMA_NUM_CH; ch++) {
++            if (v & (1u << ch)) {
++                s->running &= ~(1u << ch);
++                timer_del(s->chan[ch].timer);
++            }
++        }
++        return;
++
++    case SDMA_H_RESET:                           /* self-clearing */
++        return;
++
++    default:
++        s->regs[(off >> 2) & (FSL_IMX6_SDMA_SIZE / 4 - 1)] = v;
++        return;
++    }
++}
++
++static const MemoryRegionOps sdma_ops = {
++    .read = sdma_read,
++    .write = sdma_write,
+     .endianness = DEVICE_NATIVE_ENDIAN,
+     .valid = { .min_access_size = 4, .max_access_size = 4 },
+ };
+ 
+ /*
++ * SSI (imx-ssi) register file: RAM-backed so every config write the ASoC
++ * cpu-dai makes is retained and reads back, with SISR reporting the TX FIFO
++ * empty so nothing that polls it spins.  No audio behaviour is needed here --
++ * the time base comes entirely from the SDMA period interrupts above.
++ */
++#define SSI_SISR  0x14   /* status: TFE0|TFE1 = TX FIFO(s) empty */
++#define SSI_REGS  (0x100 / 4)
++
++typedef struct {
++    MemoryRegion mr;
++    uint32_t     regs[SSI_REGS];
++} Imx6Ssi;
++
++static Imx6Ssi g_ssi[3];
++
++static uint64_t ssi_read(void *opaque, hwaddr off, unsigned size)
++{
++    Imx6Ssi *s = opaque;
++
++    if (off == SSI_SISR) {
++        return 0x00000003;      /* TFE0 | TFE1: TX FIFOs always ready */
++    }
++    if ((off >> 2) < SSI_REGS) {
++        return s->regs[off >> 2];
++    }
++    return 0;
++}
++
++static void ssi_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
++{
++    Imx6Ssi *s = opaque;
++
++    if ((off >> 2) < SSI_REGS) {
++        s->regs[off >> 2] = (uint32_t)val;
++    }
++}
++
++static const MemoryRegionOps ssi_ops = {
++    .read = ssi_read,
++    .write = ssi_write,
++    .endianness = DEVICE_NATIVE_ENDIAN,
++    .valid = { .min_access_size = 4, .max_access_size = 4 },
++};
++
++/*
+  * XDJ-RX front-panel microcontroller ("Subucom") - SPI slave stub.
+  *
+  * rbp handshakes with the panel MCU over /dev/subucom_spi1.0 (an ECSPI slave,
+@@ -1610,6 +1911,69 @@
+         memory_region_add_subregion(get_system_memory(), IPU1_CM_BASE, &ipu1_cm);
+         ipu_irq_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, ipu_irq_fire, NULL);
+         /* armed on demand when the driver writes the IPU interrupt registers */
++    }
++
++    /*
++     * Audio time base (Option A): SDMA engine model + RAM-backed SSI/AUDMUX.
++     * Makes the ASoC/ALSA path configure and start a cyclic DMA channel; the
++     * SDMA period interrupt then advances ALSA's pointer -> rbp's REMAIN counts
++     * down.  See the Imx6Sdma block above for the mechanism.
++     */
++    {
++        int ch;
++        const char *e = getenv("XDJ_AUDIO_PERIOD_HZ");
++        const char *br = getenv("XDJ_AUDIO_BYTE_RATE");
++        int hz = e ? atoi(e) : 86;      /* fallback pacing if no BD info */
++
++        if (hz < 1) {
++            hz = 86;
++        }
++        g_sdma.period_ns = NANOSECONDS_PER_SECOND / hz;
++        /* Device drain rate used to pace period interrupts: period_ns =
++         * BD.count / byte_rate.  The ideal 44.1 kHz S24_LE stereo rate is
++         * 352800 B/s, but the guest's clocksource runs ~8.6% slow relative to
++         * QEMU_CLOCK_VIRTUAL (a constant TCG calibration gap), so the guest
++         * would see the playhead ~10% fast at that value.  Measured on the real
++         * hw:ak4387audio device: 318000 B/s yields ~44100 frames/s (the drain
++         * rate scales linearly with byte_rate); env-tunable for fine-tuning. */
++        g_sdma.byte_rate = br ? (uint32_t)strtoul(br, NULL, 0) : 318000;
++        if (!g_sdma.byte_rate) {
++            g_sdma.byte_rate = 318000;
++        }
++        g_sdma.irq = qdev_get_gpio_in(gic, FSL_IMX6_SDMA_IRQ);
++        for (ch = 0; ch < SDMA_NUM_CH; ch++) {
++            g_sdma.chan[ch].s = &g_sdma;
++            g_sdma.chan[ch].ch = ch;
++            g_sdma.chan[ch].timer =
++                timer_new_ns(QEMU_CLOCK_VIRTUAL, sdma_ch_tick, &g_sdma.chan[ch]);
++        }
++        memory_region_init_io(&g_sdma.iomem, OBJECT(dev), &sdma_ops, &g_sdma,
++                              "imx6.sdma", FSL_IMX6_SDMA_SIZE);
++        memory_region_add_subregion(get_system_memory(), FSL_IMX6_SDMA_ADDR,
++                                    &g_sdma.iomem);
++
++        /* SSI1/2/3 register files (cpu-dai config scratch; no behaviour) */
++        memory_region_init_io(&g_ssi[0].mr, OBJECT(dev), &ssi_ops, &g_ssi[0],
++                              "imx6.ssi1", FSL_IMX6_SSI1_SIZE);
++        memory_region_add_subregion(get_system_memory(), FSL_IMX6_SSI1_ADDR,
++                                    &g_ssi[0].mr);
++        memory_region_init_io(&g_ssi[1].mr, OBJECT(dev), &ssi_ops, &g_ssi[1],
++                              "imx6.ssi2", FSL_IMX6_SSI2_SIZE);
++        memory_region_add_subregion(get_system_memory(), FSL_IMX6_SSI2_ADDR,
++                                    &g_ssi[1].mr);
++        memory_region_init_io(&g_ssi[2].mr, OBJECT(dev), &ssi_ops, &g_ssi[2],
++                              "imx6.ssi3", FSL_IMX6_SSI3_SIZE);
++        memory_region_add_subregion(get_system_memory(), FSL_IMX6_SSI3_ADDR,
++                                    &g_ssi[2].mr);
++
++        /* AUDMUX: dumb RAM-backed register file (routing, no behaviour) */
++        {
++            static MemoryRegion audmux;
++            memory_region_init_ram(&audmux, OBJECT(dev), "imx6.audmux",
++                                   FSL_IMX6_AUDMUX_SIZE, &error_abort);
++            memory_region_add_subregion(get_system_memory(),
++                                        FSL_IMX6_AUDMUX_ADDR, &audmux);
++        }
+     }
+ 
+     /* IPU1 CPMEM capture: back the channel-parameter memory with RAM so the
