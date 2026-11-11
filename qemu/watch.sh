@@ -19,8 +19,11 @@
 # (hw/arm/fsl-imx6.c) reads the live IPU display-channel stride and decodes
 # whichever depth is active, so both render with no firmware changes.
 #
-# Single-core by default (fast; XDJSMP=2 for the real dual-core config, slower
-# under TCG). The window is resizable (aspect locked 800:480) -- drag a corner.
+# Dual-core by default = the real XDJ-RX config (boots reliably now, and faster);
+# XDJSMP=1 forces single-core. NOTE: the init script launches /root/pioneer/rbp on
+# dual-core but the rbp_solo symlink (same binary) on single-core, so process
+# listings show "rbp" vs "rbp_solo" depending on XDJSMP -- `pidof` both to be safe.
+# The window is resizable (aspect locked 800:480) -- drag a corner.
 # SUBUCOM_TRACE=1 logs the panel-MCU SPI frames to stderr (for panel reversing).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -32,7 +35,10 @@ for f in vmlinux.bin tramp.bin atags.bin; do
   [ -f "$Q/$f" ] || { echo "missing $Q/$f — run: python3 qemu_prepare.py" >&2; exit 1; }
 done
 [ -f "$SD" ] || { echo "no nand image: $SD  (run qemu/build-nand.sh)" >&2; exit 1; }
-SMP="${XDJSMP:-1}"            # single-core (fast) by default; XDJSMP=2 for dual-core
+SMP="${XDJSMP:-2}"            # dual-core by default = real XDJ-RX config (boots fine now,
+                             # and faster); the init script launches /root/pioneer/rbp.
+                             # XDJSMP=1 boots single-core (launches the rbp_solo symlink ->
+                             # SAME binary; a bit slower under TCG).
 DISPLAY_OPT="${XDJDISPLAY:-cocoa,zoom-to-fit=on,zoom-interpolation=on}"
 # Network backend attached to the i.MX6 FEC (eth0). The firmware runs a DHCP
 # client on eth0 at boot (see qemu/build-nand.sh). Default: user-mode NAT -- it

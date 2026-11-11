@@ -65,12 +65,16 @@ track plays.
 - **Capture inputs**: the 3 capture float buffers are 0.0 (that's mic/line — expected).
 - **Callback skipped**: no — `inner->0x9c==1`, the mixer IS invoked; source list is
   populated (decks registered).
-- **CPU core count** (owner's dual-core hypothesis): TESTED. `-smp 2` **boots fine**
-  now (the old boot issue did not recur) and brings up 2 online cores, but the deck
-  `Player` threads are STILL stuck at 0 CPU and the output is STILL silent. So it is
-  NOT the core count. (Single-core clamps every thread's affinity to CPU0, which hides
-  any intended CPU1 pinning — so affinity reads are uninformative on `-smp 1`; the
-  `-smp 2` run is the real test, and it was negative.) Default stays `-smp 1`.
+- **CPU core count** (owner's dual-core hypothesis): TESTED, negative. `-smp 2` now
+  **boots reliably and faster** (the old dual-core boot issue did not recur) with 2
+  online cores — this is now the **default** in `qemu/watch.sh` (real-HW config) — but
+  the deck `Player` threads are STILL stuck at 0 CPU and the output is STILL silent,
+  so core count is NOT the cause. Same binary either way: `rbp_solo` is a **symlink to
+  `rbp`**; the init script launches the `rbp_solo` symlink on single-core and `rbp` on
+  dual-core, so the silence is binary-identical and core-independent (the whole RE here
+  is valid for both). **Tooling note:** process listings show `rbp_solo` on `-smp 1`
+  vs `rbp` on `-smp 2` — `pidof rbp rbp_solo` to catch both. (Affinity reads are
+  uninformative on `-smp 1`: the kernel clamps all threads to the single online CPU.)
 
 ## 3. The thread picture (live, `pidof rbp`, /proc/<tid>/{comm,wchan,stat})
 - `Player:0`, `Player:1` = the deck command handlers. Loop `FUN_00077a30`: infinite-
