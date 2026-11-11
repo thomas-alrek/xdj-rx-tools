@@ -338,3 +338,82 @@ reinterpreted as a file-offset (watch the `selection` field).
   (needed to drive the analog gains for the §4 sweep test).
 - `docs/debug-console-protocol.md` — UDP `127.0.0.1:20000` console (`knob`, `masterv`, …).
 - memory `deck-playback-audio-gated.md` — the running RE trail (addresses, corrections).
+
+---
+
+## Session (2026-11-11, LIVE runtime proof via gdb inferior-calls) — mixer 0-init is NECESSARY but NOT SUFFICIENT; the real remaining gap is upstream deck-audio content
+
+**Method.** Instead of synthesising subucom frames, drove the firmware's own DjEngineIF
+setters *in rbp's context* over the QEMU gdbstub: break at the on-air gate `FUN_00065028`
+(r0 = MixerEngine singleton), then inferior-call the leaf setters with the ELF entry point
+(`0x1dea4`, runs once) as the return trap. Soft-float ABI (`e_flags=0x05000002`, no hard-float
+bit) ⇒ float args are IEEE-754 bit patterns in core regs. **Resume caveat:** a bare gdb `c`
+after the calls leaves the VM *paused* (observed: halts at a kernel PC); must follow with a
+monitor `cont` (`info status` → `cont`) or the whole machine freezes (UI + REMAIN frozen,
+no audio). Scripts: scratchpad `gdbcall.py`, `gdbmixfull.py`.
+
+**Every mixer control is 0-initialised (confirms Thomas's hypothesis in full).** Leaf setters
+(all write nominal + recompute a derived gain; a raw field write does NOT work):
+- master level   `FUN_00066bb8(master,1.0)`  → `master+0x4c`     (master = `*(mixer+0x24)`)
+- crossfader     `FUN_00066c2c(master,0.5)`  → `master+0x64`
+- channel level  `FUN_00083df8(ch,1.0)`      → `ch+0xd0`  (digital TRIM; was 0 on both decks)
+- channel fader  `FUN_00083fcc(ch,1.0)`      → `ch+0x144` (was 0 on both decks)
+- 3-band EQ      `FUN_000836dc(ch,band,0.5)` → EQ obj `*(ch+0xb8)+0x10+band*4` (band 0/1/2 = hi/mid/low; all 0)
+
+Public APIs (lookup-by-id, with debug printf): setMasterVolume `0x59760`, setChannelFader
+`0x5744c`, setDigitalTrim `0x5775c`, setCrossFader `0x578c8`, setEqualizer `0x57d38`.
+
+**The on-air gate `FUN_00065028` decoded** (per input channel, result → `on-air` byte):
+1. master level  `(master+0x4c)*1023 > 22`
+2. channel level `(ch+0xd0)*256-1 > 2`
+3. **EQ**: if `ch+0xc8 != 0`, and BOTH mid & hi map `<3/255`, require low `>2/255` — i.e. all
+   three bands ~0 ⇒ OFF-AIR. (This is exactly Thomas's "set lo/mid/hi EQ to at least medium
+   or there's no audio.")
+4. channel fader `(ch+0x144)*1023 >= 6`
+5. crossfader: if `master+0x58 != 0`, uses xfader assign `FUN_000843c8(ch)` (1/2) vs position
+   `FUN_00066c74(master)*1023`; assign 1 & pos>999, or assign 2 & pos<4 ⇒ OFF-AIR.
+With all five driven to unity the gate passes (deck channel on-air).
+
+**THE KEY NEGATIVE RESULT.** With the mixer fully open AND a track loaded+looping on deck 1
+(verified on screen; playhead in loop), **all six SDMA channels still read `bufpeak=0`** and the
+sonified master stream `peak=0` — i.e. rbp is DMA'ing pure silence to all 3 playback PCMs
+(pcm0/1/2 are `state: RUNNING`, `appl_ptr` advancing, 0 kernel xruns — rbp *is* delivering, but
+the content is zeros). Therefore the mixer 0-init, while real and fully characterised here, is
+**NOT the final gate**: the deck's decoded PCM never reaches the MixerEngine input channel.
+
+**Remaining gap = deck-audio CONTENT upstream of the mixer** (PlayEngine → MixerEngine input
+buffer, or the un-modelled digital-input/ADC path). Next: locate the channel's input PCM buffer
+(the data the on-air/summing path reads) and the deck decode output, and find where the samples
+are lost (decode-produces-silence vs routing-not-wired vs reads-unmodelled-ADC). Boot for this
+session was `-smp 1` + `XDJ_AUDIO_DEBUG=1` (gdb-safe); permanent config stays `-smp 2`. rbp
+untouched.
+
+### Deeper (same session) — the loss is in the OUTPUT-channel stage, a nested 0-init cascade
+
+Traced the full render: `FUN_000506b0` memsets the master/booth/phones output buffers, the
+**playengine mixdown** renders into a work buffer, and **`FUN_00065270`** (output router) renders
+that work buffer into the output buffers via three vtable-dispatched lists.
+
+**LIVE PROOF the deck audio survives the mixdown:** broke at the timestretch→bus crossfade
+`FUN_0007ddfc` (coeff `obj+0x48` already = 1.0, done) — the output **bus peak = 0.293**. So the
+decoded deck IS mixed into the work buffer. The loss is strictly in the **output stage**.
+
+**`FUN_00065270`'s three lists (r0 = MixerEngine 0x02a47250):**
+- list0 `param_1[0..1]` = **5 INPUT channels** (render `FUN_00085bc0`) — carry the gains I set
+  (`+0x58/+0x60/+0x64 = 1.0`). on-air flags `param_1+0x48 = 1`, `+0x49 = 1` (both decks on-air).
+- list1 `param_1[3..4]` = 2 objs incl. `master_settings 0x02a57210` (my `+0x4c=1.0`, xfader `+0x64=0.5`).
+- list2 `param_1[6..7]` = **3 OUTPUT channels** `0x02a7ffd8 / 0x02a80050 / 0x02a80290`
+  (renders `0x68388 / 0x68328 / 0x67740`) — **ALL gain fields `+0x40..+0x70` = 0.0.**
+
+**The output channels are a separate object set with their own 0-init gains that nothing drove.**
+Their render (VA `0x68388`, indirect-only so Ghidra-undefined — objdump it) delegates deeper still:
+`r12 = [obj+0x1c]; FUN_000437a4(obj+0x1c, …, workbuf, …, param_3)` — the gain is one more
+indirection down. i.e. the output path is a **nested chain of objects each with a 0-init gain**.
+
+**CONCLUSION / STRATEGY.** Hand-setting gains over gdb is whack-a-mole through an unbounded nested
+chain (master→input EQ/fader/level/xfader→output-channel→its sub-renderer→…). Every level is 0
+because the real analog mixer state arrives as a **subucom mixer-data message the harness never
+delivers**. The right fix is NOT more gdb pokes — it is to **deliver that subucom message** (decode
+`SubRxFormat::tMixerData`; see the master/fader note earlier) so rbp initialises the whole mix
+chain coherently, exactly as the hardware does; or, failing that, model sane defaults. The gdb
+inferior-call method is proven and reusable for verification, but the production fix is the message.
