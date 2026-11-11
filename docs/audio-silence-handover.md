@@ -155,6 +155,56 @@ What still holds from before: timing/xrun fixed (§10a); CPU core count irreleva
 
 ---
 
+## 3b. SESSION 3 (2026-11-11) — root cause CONFIRMED at the mixer gate; the last gap
+
+Live-RE of the mix-down pinned the exact silence gate and the emulation root cause.
+
+**The gate = `MixerEngine` on-air + per-channel gains, all 0 because the mixer controls
+are 0.** `FUN_00065270` (output router) → `FUN_00065028` computes each channel's
+"on-air" flag from the real mix controls:
+- `bVar1 = master_settings[+0x4c]×1023 > 22` — **MASTER LEVEL** (gates EVERYTHING).
+- channel level `FUN_00083e0c`=`ch[+0xd0]`, fader `ch[+0x144]×1023≥6`,
+  crossfader-assign `FUN_000843c8`=`ch[+0x178]` (1=A,2=B,0=thru) + position
+  `FUN_00066c74`, EQ-kill `FUN_000836fc(0/1/2)` (only if `ch[+0xc8]≠0`).
+Live values on a *playing* deck: **MASTER LEVEL `+0x4c` = 0.0**, deck ch0/ch1
+**fader `+0x144` = 0.0**. With master=0, every channel is off-air → nothing is summed
+into master → silence. (The two decks are the channels with xfader-assign 1 and 2.)
+
+**Root cause (code-level, exactly the owner's hypothesis):** the harness
+`memset(rbp, 0, sizeof(rbp))` (fsl-imx6.c ~L1329) starts every subucom analog control
+at 0, and `tools/xdj-panel/panel.html` only defines EQ/trim/color/crossfader knobs
+(all `val:512`) — it is **missing the channel-fader and master-level controls
+entirely** — so those are never delivered and stay 0. rbp reads the control **once**
+(a gdb write to `master+0x4c` persists; it is not re-read every frame).
+
+**The fix mechanism WORKS for the mapped controls, at BOOT.** Booting with the
+mixer holds present in `/tmp/subucom_ctrl` from frame 1 drove the deck **channel level
+`+0xd0` from 0.0 → 0.5** (via the trim hold `A 26 0200`). So delivering a realistic
+value in the boot frame *does* propagate into rbp's gains — for the controls that live
+in the subucom analog frame.
+
+**The remaining gap — the two CRITICAL controls are NOT in the subucom analog frame.**
+Setting `master+0x4c` and `ch+0x144` via gdb flips the on-air flags to 1 but the master
+buffer stays 0 (there are separate audio-summation + EQ-IIR gain copies, also derived
+from the 0 controls). And a full sweep of frame offsets `0x0c..0x5c` moved **neither**
+`master+0x4c` nor `ch+0x144` (runtime hold changes also don't propagate — boot-latched
+only). So **MASTER LEVEL and CH FADER come from a different source than the subucom
+analog section** — almost certainly the i.MX6 **SAR-ADC** (the control map's "separate
+ADC path", docs/xdj-rx-control-map.md ~L103), which QEMU does not model → reads 0.
+
+**⇒ Leading fix:** model the i.MX6 SAR-ADC (ADC1/ADC2) to return mid/max positions for
+the master-level + channel-fader (+ any other ADC-path) controls, so rbp latches
+non-zero gains at boot. Then trim/EQ/crossfader (subucom) just need realistic boot
+defaults (center), which already work. Verify the exact ADC channels by a boot-time
+write-watchpoint on the master-level field's writer, or by finding who writes `+0x4c`
+(RTTI of the master_settings object @ runtime `master=param_1[9]`).
+
+**Sonification channel (separate, for "hear it"):** the QEMU probe reads all 6 SDMA
+channels (silence detection was unaffected), but the coreaudio *playback* sonifies
+`out_ch` = first-started (maybe booth/phones). Once audio flows, set `XDJ_AUDIO_OUT_CH`
+to the real MasterOut SDMA channel so the master is what you hear. gdb verification
+reads the master float buffer `0x02abcec8` directly (correct).
+
 ## 4. THE REMAINING TASK + how to close it
 
 The deck renders 0.6 into `0x02abfd08`; the master output is 0. Find the step that should
