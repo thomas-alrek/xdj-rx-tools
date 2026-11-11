@@ -8,9 +8,15 @@ is fixed** (see [audio-handover.md](audio-handover.md) §10a), and the deck load
 track and its playhead/REMAIN counts down in real time. The ONE remaining problem:
 the audible output is pure silence.
 
-**This is an emulation gap, not an rbp bug** (the device owner is right: rbp is the
-real, working firmware — it is waiting for / not being driven by something the real
-i.MX6 provides that our QEMU model does not). The job is to find that missing input.
+> ## ⚠️ THIS MUST BE A GAP IN OUR EMULATION — DO NOT HUNT FOR AN rbp BUG
+> `rbp` is the **vanilla, unmodified XDJ-RX firmware**, and it **produces sound on the
+> real hardware**. The exact same binary runs here. Therefore any divergence — the
+> silence — is **by definition** caused by something our QEMU model does differently
+> from (or fails to provide versus) the real i.MX6 SoC. Do **not** go looking for a
+> logic bug in rbp, and do **not** patch rbp. The task is strictly: find which
+> hardware input/behaviour the real SoC gives rbp that our emulation does not, and
+> model it QEMU-side. Every "rbp does X / waits for Y" finding below is a *pointer to
+> the missing emulated behaviour*, never a firmware defect.
 
 ## 0. One-paragraph status
 The whole JUCE audio graph is wired and running, but the master mix comes out all
