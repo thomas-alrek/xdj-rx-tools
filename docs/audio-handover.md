@@ -375,3 +375,76 @@ deck starts playing and activates it; it idles the voice when playback stops.
   channels; we sonify one (`XDJ_AUDIO_OUT_CH`, default first-started). If the wrong
   one is picked you may hear a single deck instead of the master mix — set
   `XDJ_AUDIO_OUT_CH` to the master channel once identified.
+
+## 10. Real-time pacing fix + the remaining silence (2026-11-11, session 2)
+
+End-to-end testing on `-audio coreaudio` revealed TWO separate problems. The first
+is **fixed**; the second is isolated and handed off.
+
+### 10a. FIXED — the stream starved (very slow / glitchy / silent): `timer-period`
+**Symptom:** with a track playing, the on-screen playhead advanced but audio was
+"very slow", then dropped out; the guest console flooded with `ALSA … Resolve xrun`
+(~90/s).
+**Root cause (measured, not guessed):** the guest CPU was **86% idle**, so it was
+*not* CPU-bound. rbp's playback ring is tiny (`period_size=64`, `buffer_size=128`
+frames ⇒ **2.9 ms**). QEMU's audio **mixer-timer** polls the output voice (our
+`sdma_audio_cb`) on a period that **defaults to 10 ms (100 Hz)** — far too coarse to
+wake rbp's audio thread at the ~689 Hz its 64-frame period needs. So rbp refilled at
+only **~27% of real time** (11.9k vs 44.1k frames/s, identical idle-vs-playing and
+on both the `wav` and `coreaudio` backends → not CPU, not a backend artifact), and
+the real-time sink starved.
+**Fix (config only, no code/patch change):** set the audio mixer timer period to the
+guest's period rate:
+```
+-audio coreaudio,timer-period=1451      # 1451 µs ≈ 689 Hz = 44100/64
+```
+**Result:** production **11.9k → 44.2k frames/s (real time)**, xruns **~90/s → 0/s**,
+playhead real-time. Now baked into `qemu/watch.sh` (`XDJAUDIO`/`timer-period`);
+`coreaudio` on macOS, `pa` elsewhere, `XDJAUDIO=none` to disable.
+- `timer-period` is a generic `-audio`/`-audiodev` param (not backend-specific).
+  `out.period-length`/`out.buffer-length` are **rejected by coreaudio** (callback
+  backend) — use `timer-period`.
+- Diagnostics used (all `XDJ_AUDIO_DEBUG=1`, env-gated, added to the *build tree*
+  only, not patch 11): per-chunk `peak=`, per-channel `bufpeak=`, and a
+  `[sdma-rate] chN produced=… frames/s` meter in `sdma_consume_period`. Re-add if
+  you need to re-measure; they're inert without the env var.
+
+### 10b. OPEN (handed off) — decoded audio never enters the mix (true silence)
+After the pacing fix the stream is clean (0 xruns) but **every one of the 6 SDMA
+output channels still carries pure silence** (`bufpeak=0`) while a track plays. The
+mix output rbp writes to ALSA is zero.
+
+**Ruled out — it is NOT the mixer level controls.** The physical conditions for audio
+(per the device owner: **master level max, deck TRIM + HI/MID/LOW at half,
+crossfader centered**) were set TWO independent ways with no effect:
+1. **Debug console** (confirmed working — `button browse` opened the browser):
+   `masterv 1.0`, `knob master_att 0`, `knob trim/eqh/eqm/eql 512 {0,1}`,
+   `knob xfader 512`, `knob fader 1023 {0,1}`, plus `mixeron`/`route`/`play`.
+2. **Direct subucom frame injection** of the analog offsets (below).
+
+So the gate is **upstream of the mixer gains** — in rbp's player→`MixerEngine`
+input feed / decode path. rbp *does* open the MP3 fd and advance position, but the
+decoded PCM is not reaching the `MixerEngine` input (or the input channel gain /
+routing is zero by a path other than the knobs tried).
+
+**Mixer control map recovered this session (for the follow-up):**
+- Debug console: **UDP `127.0.0.1:20000`**, text lines; `knob <type> value(0-1023)`,
+  `masterv <float>`; see [debug-console-protocol.md](debug-console-protocol.md).
+  (`master_att` is *attenuation*: 0 = 0 dB / full, 1023 = full cut.)
+- Hardware-test code→label table @ rbp `0x476620`+ (strings @ `0x423450`+):
+  `0x4405`=MASTER LEVEL, `0x600f`=CROSS FADER, `0x440c`=BOOTH, `0x4402`=HP MIXING,
+  `0x4403`=HP LEVEL, `0x448b`=LEVEL DEPTH; per-channel `0x5007`=TRIM, `0x5008`=EQ HI,
+  `0x5009`=EQ MID, `0x500a`=EQ LOW, `0x5011`=CH FADER, `0x508b`=COLOR.
+- Subucom analog inject offsets (16-bit LE, `A <off> <val16>`, value/1023), from
+  [subucom-frame-map.md](subucom-frame-map.md): EQ HI 0x24/0x34, TRIM 0x26/0x36,
+  EQ MID 0x28/0x38, EQ LOW 0x2a/0x3a, COLOR 0x2c/0x3c; BOOTH 0x48, **MASTER 0x4a**,
+  LEVEL DEPTH 0x4c, **CROSSFADER 0x4e**, HP LEVEL 0x50, HP MIXING 0x52.
+- rbp side: `SubRxFormat::tMixerData()` parses the RX frame → mixer values;
+  `mixerengine::{MasterOut,OutputChannel,InputChannel,UsbChannel}` + `DjEngineIF::
+  setMasterVolume/setCrossFader`. The owner notes rbp likely holds the loaded track
+  **fully in memory** (so the MP3 fd offset won't advance during playback).
+
+**Next step:** find where the player's decoded PCM is (or isn't) handed to the
+`MixerEngine` input channel — e.g. break on the master-out mix write and walk back to
+the input-channel buffer; confirm whether the decoded buffer is non-zero (→ routing/
+input-gain gate) or zero (→ decode/feed not running under emulation).
