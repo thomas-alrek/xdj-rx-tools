@@ -143,10 +143,9 @@ Replaced the per-frame `/tmp` file poll with **two QEMU chardevs** the harness r
 that spawns `xdj-host`, waits for the panel port, then opens on the live UI (panel skin +
 noVNC screen). On exit it sends `xdj-host` SIGTERM so the whole tree (QEMU + sidecar +
 sockets) tears down cleanly (a hard kill would orphan them). Verified: builds + launches,
-spawns and supervises the full stack, and the URL it loads serves the live 800×480 UI
-(captured via its own bridge). The native window itself wasn't screenshot-verified here —
-`screencapture` needs Screen Recording permission this session lacks; it renders on the
-user's display.
+spawns and supervises the full stack, the URL it loads serves the live 800×480 UI
+(captured via its own bridge), and the **native window launches on the user's display
+(confirmed 2026-11-12)**.
 
 **Phase 2 remaining / follow-ups:** climb the screen-rendering ladder only if noVNC feel
 isn't tight enough (rung 2/3, §Screen rendering); a small splash while QEMU boots; multi-
