@@ -31,6 +31,9 @@ import argparse, http.server, socketserver, socket, time, os, threading, json
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(HERE, "assets")
 CAL = os.path.join(ASSETS, "calibration.json")
+# Vendored noVNC (served at /novnc/* so panel.html's screen pane can use RFB-over-
+# WebSocket when launched with ?vnc=ws://... -- the standalone-app Phase 2 path).
+NOVNC = os.path.normpath(os.path.join(HERE, "..", "..", "app", "ui", "novnc"))
 CTRL = "/tmp/subucom_ctrl"
 MAINKEY = "/tmp/mainkey"        # MAIN-UCOM direct-key GPIO (USB1/USB2/rekordbox/MIDI)
 MON = "/tmp/d_mon4.sock"
@@ -299,6 +302,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_file("index.html")
         elif path.startswith("/assets/"):
             self._send_file(path[len("/assets/"):], base=ASSETS)
+        elif path.startswith("/novnc/"):
+            self._send_file(path[len("/novnc/"):], base=NOVNC)
         elif path == "/cal":
             if os.path.isfile(CAL):
                 self._send_file("calibration.json", base=ASSETS)

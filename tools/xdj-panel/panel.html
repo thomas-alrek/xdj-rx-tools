@@ -409,11 +409,40 @@ function pt(e){ return {x:e.clientX, y:e.clientY}; }
 function clamp(v,a,b){ return v<a?a:v>b?b:v; }
 
 // ---- live screen ----------------------------------------------------------
+// Two sources: noVNC (push, dirty-rects) when launched with ?vnc=ws://... (the
+// standalone-app Phase 2 path), else the legacy /raw screendump poll. The same
+// SCREEN calibration rect positions whichever is active.
+const VNC = new URLSearchParams(location.search).get('vnc');   // ws URL, or null
 const cv=document.getElementById('screen'), cx2=cv.getContext('2d'),
       conn=document.getElementById('conn'), fps=document.getElementById('fps');
-function layoutScreen(){ cv.style.left=SCREEN.x+'%'; cv.style.top=SCREEN.y+'%';
-  cv.style.width=SCREEN.w+'%'; cv.style.height=SCREEN.h+'%'; positionHandle(); }
+let vncview=null, rfb=null;                                     // noVNC mount + client
+function layoutScreen(){ for(const el of [cv, vncview]){ if(!el) continue;
+    el.style.left=SCREEN.x+'%'; el.style.top=SCREEN.y+'%';
+    el.style.width=SCREEN.w+'%'; el.style.height=SCREEN.h+'%'; }
+  positionHandle(); }
 let imgData=null, frames=0, lastFps=performance.now();
+
+async function startVnc(){
+  let RFB;
+  try{ ({default:RFB} = await import('/novnc/core/rfb.js')); }
+  catch(e){ conn.textContent='screen: noVNC load failed'; return; }
+  vncview=document.createElement('div'); vncview.id='vncview';
+  vncview.style.position='absolute'; vncview.style.background='#000'; vncview.style.overflow='hidden';
+  stage.appendChild(vncview); layoutScreen();
+  const connect=()=>{
+    conn.className='conn'; conn.textContent='screen: connecting…';
+    rfb=new RFB(vncview, VNC);
+    rfb.viewOnly=true;            // the deck has no pointer input; controls go via sub-ucom
+    rfb.scaleViewport=true;       // fit the 800x480 remote into the calibrated rect
+    rfb.clipViewport=false;
+    rfb.background='#000';
+    rfb.addEventListener('connect',()=>{ conn.className='conn up';
+      conn.textContent='screen: live (vnc)'; if(!calib) cv.style.display='none'; });
+    rfb.addEventListener('disconnect',()=>{ conn.className='conn';
+      conn.textContent='screen: no QEMU'; cv.style.display=''; setTimeout(connect,1000); });
+  };
+  connect();
+}
 async function pump(){
   try{
     const r=await fetch('/raw?t='+Date.now(),{cache:'no-store'});
@@ -455,6 +484,7 @@ function setCal(on){ calib=on; document.body.classList.toggle('cal',on);
   document.getElementById('bsave').style.display=on?'':'none';
   document.getElementById('breset').style.display=on?'':'none';
   positionHandle();
+  if(VNC) cv.style.display = on ? '' : (rfb ? 'none' : '');  // show the drag target while calibrating
   log(on?'calibration ON — drag controls & screen, then Save':'calibration off'); }
 document.getElementById('bcal').onclick=()=>setCal(!calib);
 document.getElementById('brel').onclick=()=>{ release(); document.querySelectorAll('.hs.down').forEach(e=>e.classList.remove('down')); log('⏹ release all'); };
@@ -474,7 +504,7 @@ async function init(){
     if(j.screen) SCREEN=Object.assign({},SCREEN0,j.screen);
     if(j.ctrls) for(const c of CTRLS){ const o=j.ctrls[c.id]; if(o) Object.assign(c,o); }
     if(j.screen||j.ctrls) log('loaded saved calibration'); } }catch(e){}
-  build(); pump();
+  build(); if(VNC) startVnc(); else pump();
   for(const ch of [0,1]){ const b=document.getElementById('src'+ch);
     if(b) b.addEventListener('click', ()=>toggleSrc(ch)); }
   setSrc(0,'DECK'); setSrc(1,'DECK');   // assert default DECK (UI + server agree)
