@@ -4,6 +4,9 @@
 # All files the scripts pull down or extract (key cache, ISOs, unpacked trees)
 build/
 
+# Stray QEMU source extraction (the real patched build tree is build/qemu-src/)
+/qemu-11.1.0/
+
 # Large firmware artifacts (wherever they land)
 *.iso
 *.UPD
