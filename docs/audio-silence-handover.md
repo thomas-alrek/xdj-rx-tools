@@ -30,10 +30,12 @@
 > each channel's source** `DAT_0107acdc[0]`→deck1 buffer, `DAT_0107acdc[12]`→deck2 buffer.
 > Master DMA buffer went 0 → ~0.3–1.5; both decks audible.
 >
-> **Still to productionise** (so it's not a gdb poke): deliver the **sub-ucom INPUT SWITCH
-> in the DECK position** (code 0x1013 / `LinePhonoSW`) so the firmware sets the channel
-> source pointer itself — the real emulation fix. Frame bit for 0x1013 not yet mapped.
-> See memory `[[deck-playback-audio-gated]]`.
+> **✅ Productionised (2026-11-12):** the sub-ucom INPUT SWITCH is now mapped — it is a frame
+> bit, **`rbp[0x33]` bit 7 = CH0 / `rbp[0x43]` bit 7 = CH1** (`1`=DECK, `0`=LINE), injectable
+> + live (`B 33 80`/`B 43 80`), so the firmware sets the channel source itself (no gdb poke).
+> (It is NOT the `0x1013`/`LinePhonoSW` control — that + GPIO 119/120 are the separate
+> LINE-vs-PHONO EXT-TYPE switch.) See `docs/subucom-frame-map.md` SOLVED section + memory
+> `[[input-source-switch]]`, `[[deck-playback-audio-gated]]`.
 
 **For:** a focused session continuing ONLY the "a playing deck is silent" problem.
 Everything else about audio is done: the i.MX6 SDMA/SSI/AUDMUX is modelled (patch 11),

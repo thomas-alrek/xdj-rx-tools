@@ -1,5 +1,15 @@
 # Booting the XDJ-RX firmware in QEMU
 
+> 🔄 **Status update (2026-11-12): this document describes an earlier bring-up milestone.**
+> The emulator now boots to the **live interactive rekordbox UI**, the **sub-ucom panel is
+> fully decoded** (frame→control map + inject harness), and **real deck audio reaches the
+> host**. The patch set is now **11 patches** (not "two"); see the `qemu-imx6-patches` skill /
+> `docs/emulator-status.md` for the current state. Two corrections to the narrative below:
+> the "front-panel MCU handshake / interactive main screen is the next step" and "GUI does not
+> yet render under SABRE-SD" statements are **obsolete**; and the sub-ucom frame check is a
+> **CRC-16/X-25 (poly 0x8408)**, not an "XOR checksum". The bring-up history below is accurate
+> and kept for reference.
+
 **Status: the firmware boots fast to its real on-screen UI in QEMU.** The kernel
 runs through full device init, hands off to the firmware's own embedded-initramfs
 `/init`, which boots the real rootfs from an **SD card** (the firmware's own

@@ -241,10 +241,12 @@ What it took (all **emulator-side, firmware untouched** except one removed file)
   supplies the real board's machine id **3980 (SABRE-SD)** + hand-built ATAGs
   (incl. `ATAG_REVISION=0x500`, which binds the `sub-ucom` panel MCU) via
   `-device loader`.
-- **Three i.MX6 QEMU patches** (`qemu/patches/`) — self-clearing SRC GPU-reset
+- **Eleven i.MX6 QEMU patches** (`qemu/patches/01..11`) — self-clearing SRC GPU-reset
   bits; a Vivante GPU register stub + a live framebuffer scanout (reads the IPU
-  display stride, decodes 32bpp splash / 16bpp RGB565 UI) + IPU vsync IRQ; and the
-  SABRE-SD board wiring (uSDHC3 nand, ECSPI2 sub-ucom slave).
+  display stride, decodes 32bpp splash / 16bpp RGB565 UI) + IPU vsync IRQ; the
+  SABRE-SD board wiring (uSDHC3 nand, ECSPI2 sub-ucom slave); the sub-ucom inject
+  harness; USB detect/insert/hub/wakeup; main-ucom GPIO keys; and the audio
+  SDMA/SSI/AUDMUX path. See the `qemu-imx6-patches` skill for the full list.
 - **nand image** (`qemu/build-nand.sh`) — assembled from the firmware's own
   payloads (`rootfs.cramfs` + `pioneer.tar.gz` + `gui.tar.gz`) as a 256 MB ext4
   image. The **one** change vs. a byte-for-byte rootfs: the Vivante GAL DirectFB
@@ -316,11 +318,18 @@ build/qemu-src/          the patched QEMU source + build
 - [x] Update mechanism, boot flow, NAND layout, component inventory mapped
 - [x] **Firmware boots in QEMU to its live UI** (one gfxdriver removed) — [QEMU.md](QEMU.md)
 - [x] **GUI bringup** done: IPU display model, framebuffer scanout, app runs (software render)
-- [~] **Button input**: Sub-ucom panel-MCU SPI frame injection working; browse encoder
-  (push + rotate, both directions), USB STOP, and several nav keys mapped and live-verified.
-  Full control map in [docs/xdj-rx-control-map.md](docs/xdj-rx-control-map.md); remaining
-  buttons/jogs/faders in progress — see [docs/rx3-panel-crossref.md](docs/rx3-panel-crossref.md).
+- [~] **Panel input**: Sub-ucom SPI frame injection working; browse encoder (push + rotate),
+  USB STOP, nav keys, channel faders/EQ/trim/color/master/crossfader, and the per-channel
+  **DECK/LINE source switch** (`rbp[0x33].7`/`[0x43].7`) mapped and live-verified.
+  Full control map in [docs/subucom-frame-map.md](docs/subucom-frame-map.md); remaining
+  deck transport/jogs need a loaded track — see [docs/rx3-panel-crossref.md](docs/rx3-panel-crossref.md).
+- [x] **Audio**: i.MX6 SDMA/SSI/AUDMUX modelled (patch 11); **real deck audio to the host**,
+  both decks — see [docs/audio-handover.md](docs/audio-handover.md).
 - [ ] exFAT mod: patch `12-usb-memory-auto-mount.rules`; cross-compile `fuse-exfat`
+
+> For AI sessions: see **[CLAUDE.md](CLAUDE.md)** and the task skills in `.claude/skills/`
+> (`run-xdj-emulator`, `map-{gpio,subucom-*}-control`, `rbp-binary-internals`,
+> `upd-firmware-format`, `qemu-imx6-patches`).
 
 ## Acknowledgements / references
 

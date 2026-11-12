@@ -82,9 +82,12 @@ flags which frame bits do something and **where**. But several hard limits cap w
 - **Audio-only controls have NO on-screen feedback** → unverifiable by screendump: EQ (HI/MID/LOW),
   channel faders, trim, crossfader, headphone level/mix, channel CUE. These can only ever be
   "plausible", not confirmed, in this emulator (no audio path). ~1/3 of the panel is like this.
-- **PLAY / CUE / performance pads are on the SUB SPI channel** (`subucom_spi2.0`), which the current
-  harness does **not** inject (it builds the EUP frame only). So deck transport/pads can't be driven
-  yet — would need a SUB-channel injection path in the harness.
+- ~~**PLAY / CUE / performance pads are on the SUB SPI channel** (`subucom_spi2.0`)…~~
+  **CORRECTED (2026-11-12):** there is **no SUB channel on the RX** — rbp opens only
+  `/dev/subucom_spi1.0` (see the "Single sub-ucom channel" note above). PLAY/CUE/pads live in
+  the **one 100-byte frame** (e.g. PLAY = `0x13.6`, deck section). The earlier SUB-channel
+  theory (an RX3 trait) was wrong; deck transport/pads are injectable on the single frame — the
+  open issue is mapping each bit + that most need a **loaded track** to show an effect.
 - **Deck function buttons need a LOADED track** to show an effect, and each press **drifts deck state**
   (sync on, tempo range cycled, cues set), so cross-deck/bit comparison is noisy. Only *distinctive*
   effects are reliably labelled. Confirmed clean this pass: `[0x12]/[0x22]` bit3 = TEMPO RANGE,

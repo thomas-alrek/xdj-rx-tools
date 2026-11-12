@@ -39,7 +39,13 @@ Read first: `docs/subucom-frame-map.md` (authoritative frame→control map),
 
 ## The gdb hacks that must become real panel operations
 
-### 1. INPUT SELECT — the #1 blocker (deck→channel routing)
+### 1. INPUT SELECT — ✅ SOLVED (was the #1 blocker) (deck→channel routing)
+> **SOLVED 2026-11-12:** the per-channel source select is a **sub-ucom frame bit** —
+> **`rbp[0x33]` bit 7 = CH0, `rbp[0x43]` bit 7 = CH1** (`1`=DECK, `0`=LINE), injectable + live
+> (`B 33 80`/`B 43 80`). It is NOT a GPIO and NOT the `LinePhonoSW`/`0x1013` control (that name +
+> GPIO 119/120 are the separate **EXT-TYPE = LINE-vs-PHONO** switch, `switchState +0xa0/+0xb0`).
+> The panel just holds both bits (default DECK). The "find the frame bit" task below is done.
+
 **The gdb hack:** `wr32(DAT_0107acdc + chan*12, <deck Player buffer>)` — repoint each
 channel's source pointer to its deck.
 **Why:** the per-channel **INPUT SELECT switch** (firmware **`LinePhonoSW`, control code
@@ -51,6 +57,22 @@ confirm; the code→name table at `FUN @0x2a60e0` maps code `0x1013`→`LinePhon
 by the analog/button decoders in `0x282000–0x28b000` (no `movw #0x1013` there — those hits
 are the numeric constant `0x1013`, not the control code). So the switch is decoded elsewhere
 or sets a state the engine queries.
+
+**2026-11-12 — the routing engine is now decoded (static RE; see `docs/subucom-frame-map.md`
+"INPUT SELECT / deck→channel routing").** The gdb poke writes the *result*; the engine path is:
+source table `DAT_0107ac88` (7 slots) + channel table `DAT_0107acdc` (6 ch), 12-byte `{buf,idx,flag}`
+stride; `FUN_000809ec(src,buf)` registers a source's buffer, `FUN_00080a74(src,chan)` routes
+source→channel. **Boot-silence root cause found:** the graph init `FUN_00080920` seeds every
+channel's routed-source index to **7 (empty/self) → all channels route to nothing.** The clean
+lever (no raw poke): a channel object holds **requested source idx at `+0x254`**, applied idx at
+`+0x250`; per-frame `FUN_00085a10` re-routes when they differ (`FUN_00080a74(+0x254,chan)`), and
+`FUN_00085d44` = setChannelSource (writes `+0x188` + routes). **Both are vtable-dispatched (C++),
+so the static walk back to a frame byte dead-ends** — confirming LINE/PHONO is not a plain decoder
+bit. **Remaining = live loop only:** gdb `Z2` on a channel's `+0x254` (and on `DAT_0107acdc`) while
+loading/playing a deck and toggling sources → read off (a) which index is deck1/deck2 and (b) whether
+`+0x254` is ever panel-driven or only set by deck-load logic. If only deck-load: routing is NOT a
+panel op — fix by seeding `channel[n].src_idx` to the deck source (patch the init's `7`) or by the
+deck-active path setting `+0x254`.
 **Approach options:**
   - Find the firmware handler that writes the channel source pointer / selects deck-vs-line
     (start from the ExtIn render `FUN_0006a4a8` and the source table `DAT_0107acdc`; find who

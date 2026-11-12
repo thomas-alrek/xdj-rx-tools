@@ -140,8 +140,13 @@ FUSE** — so the old "fuse-exfat" plan won't work; exFAT needs an out-of-tree k
 module (e.g. exfat-nofuse) built against this kernel + a mount rule. (FAT32 is used
 for the current bring-up test image.)
 
-## ⬜ E. Audio
-Not started. Need to model the i.MX6 audio path (SSI/codec) + `-audiodev`.
+## ✅ E. Audio
+**DONE (2026-11-11/12).** The i.MX6 audio path is modelled in `qemu/patches/11` (a minimal
+SDMA engine + RAM-backed SSI1/2/3 + AUDMUX), so imx-sdma/ASoC/ALSA run and the ALSA playhead
+advances in real time. A host sonifier pinned to SDMA **ch1 = MasterOut** emits **real deck
+audio to the host** (both decks, user-confirmed). Gated on: routing = DECK (source switch
+`B 33 80`/`B 43 80`) + gains up (on-air gate `FUN_00065028`). See `docs/audio-handover.md`,
+`docs/audio-silence-handover.md`, memory `[[deck-playback-audio-gated]]`.
 
 ## ⬜ F. FLAC playback
 rbp decodes **MP3 (libmpg123), AAC, M4A, AIFF, WAV — no FLAC** (two decoder slots
