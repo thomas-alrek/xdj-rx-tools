@@ -78,14 +78,14 @@ inj = `b <rbp_off> <mask>` for buttons, `A <rbp_off> <val16>` for analog.
 | 0x26 / 0x36 | 0x5007 | TRIM | ○ (audio-only) |
 | 0x28 / 0x38 | 0x500a | EQ LOW | ◆ (was mislabelled MID) |
 | 0x2a / 0x3a | 0x5009 | EQ MID | ◆ (was mislabelled LOW) |
-| **0x2c / 0x3c** | **0x5011** | **CH FADER (d1/d2)** | ◆ (was mislabelled COLOR — see 2026-11-12 note) |
+| **0x2c / 0x3c** | **0x5011** | **CH FADER (d1/d2)** | ✅ **LIVE** (inject→`setChannelFader(ch,1.0)`) |
 | 0x2e / 0x3e | 0x508b | COLOR / FILTER pot | ◆ (block+0xa) |
 | 0x48 | 0x440c | BOOTH MONITOR | ○ |
-| 0x4a | 0x4405 | HEADPHONE MIXING | ◆ (RX3-match) |
-| 0x4c | 0x448b | HEADPHONE LEVEL | ○ |
+| **0x4a** | **0x4405** | **MASTER LEVEL** | ✅ **LIVE** (inject→`setMasterVolume(m,1.0)`; was mislabelled HP MIXING) |
+| 0x4c | 0x448b | LEVEL DEPTH | ○ (code 0x448b; was mislabelled HP LEVEL) |
 | 0x4e | 0x600f | CROSSFADER | ✅ (offset, 0x600f) |
-| 0x50 | 0x4403 | MASTER LEVEL | ◆ (RX3-match) |
-| 0x52 | 0x4402 | BOOTH/MASTER-BAL | ○ |
+| 0x50 | 0x4403 | HP LEVEL | ○ (code 0x4403; was mislabelled MASTER LEVEL) |
+| 0x52 | 0x4402 | HP MIXING | ○ (code 0x4402; was mislabelled BOOTH/MASTER-BAL) |
 | 0x44 / 0x46 | 0x805/0x804 | MIC1 / MIC2 level | ○ (CH-fader ruled out — it's 0x2c/0x3c) |
 
 *(All analog are audio-only — no emulator feedback — so these are firmware-decoded, not screen-verified.)*
@@ -106,6 +106,19 @@ watch `ch+0x144` via gdb. If still 0, the gate is the code→`setChannelFader` d
 decoder emits 0x5011 only on *change*; the first accepted frame transitions via the
 complement-seeded history, so runtime injection after boot may need a value *different from the
 stored sample* to emit).
+
+**2026-11-12 — ✅ LIVE CONFIRMED (fresh boot, gdb Z0 on the setter leaves + sub-ucom frame inject).**
+Breaking at the setter *leaves* and injecting a `0→0x3ff` transition proved the mapping end-to-end
+(the decoder-entry breakpoint at 0x282800 is NOT reached as a clean call on a changed frame — the
+setter leaves are the real semantic endpoint, and Z0 software breakpoints catch them):
+- `A 2c 3ff` → **`setChannelFader`** (`FUN_00083fcc`) fired, `r0=0x02a49ca0` (deck1 input ch),
+  `r1=0x3f800000` = **1.0f**. ⇒ **frame 0x2c = CH FADER**, confirmed.
+- `A 4a 3ff` → **`setMasterVolume`** (`FUN_00066bb8`) fired, `r0=0x02a571f0` (master obj),
+  `r1=0x3f800000` = **1.0f**. ⇒ **frame 0x4a = MASTER LEVEL** (code 0x4405), confirmed — this also
+  corrected the master/HP block labels (0x4a was mislabelled HP MIXING; 0x50=HP LEVEL, 0x52=HP
+  MIXING, 0x4c=LEVEL DEPTH — the code column was right, the labels were scrambled).
+Significance: the **real sub-ucom event path drives the mixer setters** (not just gdb pokes), so the
+whole analog mix can be initialised through the frame like hardware — the production route to audio.
 
 ## Analog (16-bit LE, inj `A <off> <val16>`, value/1023)
 - Deck1 continuous @ rbp 0x04,0x06,0x08,0x0a,0x0c,0x0e,0x12 — TEMPO fader = **0x04 (neg) + 0x0a
