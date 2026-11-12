@@ -1,37 +1,38 @@
-XDJ-RX patch 13 -- auto-init the mixer to an audible default on boot.
+XDJ-RX patch 13 -- auto-init the mixer to an audible default on boot (merge model).
 
 End goal: the packaged emulator "just works" -- a loaded deck is audible without
-the operator first injecting gains/routing by hand. Rather than scrape the guest
-console or run an external helper (fragile, and wrong for a self-contained app),
-trigger it entirely inside the machine: rbp only polls the panel MCU once its
-panel thread is up, so the SPI burst that drives xdj_subucom_frame_start() every
-frame IS the "rbp is running" signal. A short settle after the first poll lets the
-MixerEngine finish initialising, then -- whenever the operator is NOT driving the
-panel (no /tmp/subucom_ctrl) -- the harness asserts a persistent default hold set:
-both channels routed to DECK (rbp[0x33].7 / rbp[0x43].7) plus unity-ish gains
-(channel fader, MASTER, trim up; EQ + crossfader centred) -- the same values the
-manual inj.py "base" uses. Because holds are re-applied every frame, timing is
-forgiving and the levels stay set; the manual ctrl file still overrides it
-frame-for-frame when present (debug / web-panel path unaffected).
+the operator first injecting gains/routing by hand. Trigger it entirely inside the
+machine: rbp only polls the panel MCU once its panel thread is up, so the SPI burst
+that drives xdj_subucom_frame_start() every frame IS the "rbp is running" signal --
+no console scraping, no external helper, no persistent /tmp files required. A short
+settle after the first poll lets the MixerEngine come up, then the harness asserts a
+default hold set: both channels routed to DECK (rbp[0x33].7 / rbp[0x43].7) plus
+unity-ish gains (channel fader, MASTER, trim up; EQ + crossfader centred), the same
+values inj.py "base" uses.
 
-  XDJ_AUTOLEVEL=0            disable entirely (idle routing stays LINE).
-  XDJ_AUTOLEVEL_DELAY_MS=N   settle delay after the first panel poll (default 4000).
+MERGE, not replace: the default is applied per-control for every offset the operator
+is NOT currently driving. A /tmp/subucom_ctrl hold (web panel / inj.py) overrides the
+baseline for the specific offsets it sets -- so faders etc. stay fully controllable
+at runtime -- while an unrelated leftover hold (e.g. a browse-encoder value `A 54 0`)
+can no longer silence the deck by suppressing the whole set (the earlier bug: with a
+stray browse hold present, routing fell back to LINE and the master mix went to 0).
+MAXHOLD raised 8 -> 20 so the operator holds and the merged baseline both fit.
 
-MAXHOLD is raised 8 -> 12 to fit the 9-entry default set (the file parser shares
-the same cap). Verified live: with no /tmp/subucom_ctrl, the rbp routing tables
-flip to DECK on their own (ch0 routed_src 3->0, ch1 4->1) a few seconds after the
-UI comes up, and the DECK on-air indicator lights. QEMU-side only; firmware
-untouched.
+  XDJ_AUTOLEVEL=0            disable entirely (idle routing stays LINE)
+  XDJ_AUTOLEVEL_DELAY_MS=N   settle delay after first poll (default 4000)
+
+Verified live: (1) fresh boot, no ctrl file -> routing tables flip to DECK on their
+own (ch0 routed_src 3->0, ch1 4->1), deck plays to the host (master SDMA peak ~85%
+FS). (2) With an unrelated `A 54 0` hold present, routing STAYS DECK (old all-or-
+nothing build fell back to LINE here). QEMU-side only; firmware untouched. Full
+series 01..13 builds from scratch.
 
 --- a/hw/arm/fsl-imx6.c	2026-11-12 19:36:28
-+++ b/hw/arm/fsl-imx6.c	2026-11-12 19:31:55
-@@ -1184,6 +1184,59 @@
-         crc = (uint16_t)(xdj_crc16_tab[(crc ^ d[i]) & 0xff] ^ (crc >> 8));
-     }
-     return (uint16_t)~crc;
-+}
-+
-+/*
++++ b/hw/arm/fsl-imx6.c	2026-11-12 20:13:37
+@@ -1187,6 +1187,59 @@
+ }
+ 
+ /*
 + * Auto-init the mixer to an audible default so the device "just works" on boot
 + * (XDJ-RX patch 13). rbp only polls the panel MCU once its panel thread is up, so
 + * the SPI burst that calls xdj_subucom_frame_start() is itself the "rbp is
@@ -82,35 +83,73 @@ untouched.
 +        return false;
 +    }
 +    return (now - t0) >= delay_ns;
- }
- 
- /*
++}
++
++/*
+  * Called by the ECSPI (imx_spi_flush_txfifo) at the start of every SPI burst so
+  * the panel's SubRxData frame is presented byte-aligned on MISO. We build the
+  * frame in rbp's buffer coordinates (rbp_buf[j]), compute the CRC rbp expects,
 @@ -1284,7 +1337,7 @@
       * frame fields (the tempo fader = 0x04 negative half + 0x0a positive half) must
       * set both at once: with only one field forced rbp reads the pot as fully pegged.
       */
 -    enum { MAXHOLD = 8 };
-+    enum { MAXHOLD = 12 };
++    enum { MAXHOLD = 20 };   /* room for operator holds + the merged auto-level set */
      static int  hold_off[MAXHOLD];
      static long hold_val[MAXHOLD];              /* >=0: 16-bit analog; <0: button bit */
      static int  hold_bit[MAXHOLD];
-@@ -1316,6 +1369,19 @@
+@@ -1293,8 +1346,9 @@
+     static long inj_val = -1;
+     {
+         FILE *cf = fopen("/tmp/subucom_ctrl", "r");
++        int newn = 0, had_file = (cf != NULL);
+         if (cf) {
+-            char line[64]; int newn = 0, did_oneshot = 0;
++            char line[64]; int did_oneshot = 0;
+             while (fgets(line, sizeof(line), cf)) {
+                 char kind = 0; unsigned off = 0, a = 0;
+                 if (sscanf(line, " %c %x %x", &kind, &off, &a) < 2) continue;
+@@ -1314,14 +1368,37 @@
+                 }
+             }
              fclose(cf);
-             nhold = newn;                        /* replace the held set each frame */
+-            nhold = newn;                        /* replace the held set each frame */
              if (newn == 0 && did_oneshot) remove("/tmp/subucom_ctrl");
-+        } else if (xdj_autolevel_armed()) {
-+            /* No operator ctrl file: assert the audible default mixer state. */
-+            int k;
-+            for (k = 0; k < (int)ARRAY_SIZE(xdj_autolevel); k++) {
-+                hold_off[k] = xdj_autolevel[k].off;
-+                hold_val[k] = xdj_autolevel[k].val;
-+                hold_bit[k] = xdj_autolevel[k].bit;
-+            }
-+            nhold = ARRAY_SIZE(xdj_autolevel);
-+            if (s->press == 0 && access("/tmp/subucom_menu", F_OK) == 0) {
-+                inj_off = 0x1b; inj_bit = 0x01; inj_val = -1; /* MENU (code 0x20a) */
-+                s->press = 30; remove("/tmp/subucom_menu");
-+            }
-         } else {
-             nhold = 0;                            /* file gone -> release all holds */
-             if (s->press == 0 && access("/tmp/subucom_menu", F_OK) == 0) {
+-        } else {
+-            nhold = 0;                            /* file gone -> release all holds */
+-            if (s->press == 0 && access("/tmp/subucom_menu", F_OK) == 0) {
+-                inj_off = 0x1b; inj_bit = 0x01; inj_val = -1; /* MENU (code 0x20a) */
+-                s->press = 30; remove("/tmp/subucom_menu");
++        }
++        /*
++         * Auto-level baseline (MERGE, not replace). Once armed, assert the audible
++         * default for every control the operator is NOT currently driving, so the
++         * initial mixer state "just works" for testing while the web panel / inj
++         * can still override ANY individual control at runtime (its hold for that
++         * offset wins) -- and an unrelated leftover hold (e.g. a browse-encoder
++         * value) can no longer silence the deck by suppressing the whole set.
++         */
++        if (xdj_autolevel_armed()) {
++            int d;
++            for (d = 0; d < (int)ARRAY_SIZE(xdj_autolevel) && newn < MAXHOLD; d++) {
++                int j, overridden = 0;
++                for (j = 0; j < newn; j++) {
++                    if (hold_off[j] == xdj_autolevel[d].off) { overridden = 1; break; }
++                }
++                if (overridden) {
++                    continue;                    /* operator is driving this control */
++                }
++                hold_off[newn] = xdj_autolevel[d].off;
++                hold_val[newn] = xdj_autolevel[d].val;
++                hold_bit[newn] = xdj_autolevel[d].bit;
++                newn++;
+             }
++        }
++        nhold = newn;
++        /* legacy MENU one-shot shortcut (only when no ctrl file is present) */
++        if (!had_file && s->press == 0 && access("/tmp/subucom_menu", F_OK) == 0) {
++            inj_off = 0x1b; inj_bit = 0x01; inj_val = -1; /* MENU (code 0x20a) */
++            s->press = 30; remove("/tmp/subucom_menu");
+         }
+     }
+ 

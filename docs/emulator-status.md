@@ -24,10 +24,13 @@ mounts. Firmware untouched.
 **Auto-level:** the mixer is auto-initialised to an audible default on boot
 (`qemu/patches/13-imx6-subucom-autolevel.patch`) so a loaded deck plays without a
 manual gain/routing inject. The sub-ucom harness uses the panel SPI poll itself as
-the "rbp is up" signal and, after a short settle, holds both channels to DECK +
-unity-ish gains whenever no `/tmp/subucom_ctrl` override is present. Verified: the
-routing tables flip to DECK on their own. `XDJ_AUTOLEVEL=0` disables it;
-`XDJ_AUTOLEVEL_DELAY_MS` tunes the settle (default 4000).
+the "rbp is up" signal and, after a short settle, **merges** an audible default
+(both channels → DECK + unity-ish gains) into the frame per-control: a
+`/tmp/subucom_ctrl` hold overrides the baseline for the offsets it sets (web panel
+keeps full runtime control), while an unrelated leftover hold can't silence the
+deck. Verified: routing flips to DECK on its own (and stays DECK with an unrelated
+hold present); deck plays to the host (master SDMA peak ~85% FS).
+`XDJ_AUTOLEVEL=0` disables it; `XDJ_AUTOLEVEL_DELAY_MS` tunes the settle (default 4000).
 
 ## ✅ A. galcore / Vivante GPU — fully initialises (default path)
 The built-in galcore (Vivante) driver now fully initialises on the default boot path:
@@ -136,6 +139,13 @@ and writes `mount /media/usb1/sda1` into `/proc/udev_usb1`, which is exactly wha
 rbp's `DBSA_Task_USB` thread watches. Verified with the rekordbox test image
 (`test/usb/`, PIONEER/rekordbox/export.pdb etc.). The earlier "doesn't enumerate"
 note was from the pre-SABRE-SD wiring and is obsolete.
+
+**TODO bugfix (2026-11-12):** a *correct* post-boot insert still sometimes raises
+the `USB Error. Remove the device.` modal even though the drive enumerated and
+mounted. It is mostly misleading — "pressing" USB2 (`inj.py mainkey 158`) clears it
+and the library browses normally. Root cause (spurious USB-error path in rbp's
+mount/accept) not yet tracked down. Don't `device_del` to retry (it tears down the
+`id=usbstick` drive backend); reboot + insert once instead.
 
 Two live caveats:
 - **Hot-plug does NOT enumerate.** `device_add usb-storage` after boot leaves

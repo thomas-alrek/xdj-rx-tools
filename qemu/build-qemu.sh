@@ -104,12 +104,15 @@
 #       boot (no manual gain/routing inject). rbp only polls the panel MCU once its
 #       panel thread is up, so the SPI burst that drives the sub-ucom harness every
 #       frame is itself the "rbp is running" signal -- no console scraping, no
-#       external helper, no /tmp files. A short settle after the first poll, then --
-#       whenever no /tmp/subucom_ctrl override exists -- the harness holds both
-#       channels to DECK + unity-ish gains (same values as inj.py "base"). Disable
-#       with XDJ_AUTOLEVEL=0; settle delay XDJ_AUTOLEVEL_DELAY_MS (default 4000).
-#       Verified: routing tables flip to DECK on their own a few seconds after the
-#       UI comes up. QEMU-side only.
+#       external helper, no persistent /tmp files. A short settle after the first
+#       poll, then the harness MERGES an audible default (both channels -> DECK +
+#       unity-ish gains, the inj.py "base" values) into the frame per-control: a
+#       /tmp/subucom_ctrl hold overrides the baseline for the offsets it sets (so
+#       the web panel keeps full runtime control of faders etc.), while an
+#       unrelated leftover hold can no longer silence the deck. Disable with
+#       XDJ_AUTOLEVEL=0; settle delay XDJ_AUTOLEVEL_DELAY_MS (default 4000).
+#       Verified: routing flips to DECK on its own, and stays DECK even with an
+#       unrelated hold present; deck plays to the host. QEMU-side only.
 #
 #   patches/03-sabrelite-sabresd-sd.patch
 #       The XDJ-RX firmware's real board is SABRE-SD (MACH_TYPE 3980), which
