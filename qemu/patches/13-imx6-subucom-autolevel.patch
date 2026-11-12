@@ -1,0 +1,116 @@
+XDJ-RX patch 13 -- auto-init the mixer to an audible default on boot.
+
+End goal: the packaged emulator "just works" -- a loaded deck is audible without
+the operator first injecting gains/routing by hand. Rather than scrape the guest
+console or run an external helper (fragile, and wrong for a self-contained app),
+trigger it entirely inside the machine: rbp only polls the panel MCU once its
+panel thread is up, so the SPI burst that drives xdj_subucom_frame_start() every
+frame IS the "rbp is running" signal. A short settle after the first poll lets the
+MixerEngine finish initialising, then -- whenever the operator is NOT driving the
+panel (no /tmp/subucom_ctrl) -- the harness asserts a persistent default hold set:
+both channels routed to DECK (rbp[0x33].7 / rbp[0x43].7) plus unity-ish gains
+(channel fader, MASTER, trim up; EQ + crossfader centred) -- the same values the
+manual inj.py "base" uses. Because holds are re-applied every frame, timing is
+forgiving and the levels stay set; the manual ctrl file still overrides it
+frame-for-frame when present (debug / web-panel path unaffected).
+
+  XDJ_AUTOLEVEL=0            disable entirely (idle routing stays LINE).
+  XDJ_AUTOLEVEL_DELAY_MS=N   settle delay after the first panel poll (default 4000).
+
+MAXHOLD is raised 8 -> 12 to fit the 9-entry default set (the file parser shares
+the same cap). Verified live: with no /tmp/subucom_ctrl, the rbp routing tables
+flip to DECK on their own (ch0 routed_src 3->0, ch1 4->1) a few seconds after the
+UI comes up, and the DECK on-air indicator lights. QEMU-side only; firmware
+untouched.
+
+--- a/hw/arm/fsl-imx6.c	2026-11-12 19:36:28
++++ b/hw/arm/fsl-imx6.c	2026-11-12 19:31:55
+@@ -1184,6 +1184,59 @@
+         crc = (uint16_t)(xdj_crc16_tab[(crc ^ d[i]) & 0xff] ^ (crc >> 8));
+     }
+     return (uint16_t)~crc;
++}
++
++/*
++ * Auto-init the mixer to an audible default so the device "just works" on boot
++ * (XDJ-RX patch 13). rbp only polls the panel MCU once its panel thread is up, so
++ * the SPI burst that calls xdj_subucom_frame_start() is itself the "rbp is
++ * running" signal -- no guest-console scraping, no filter chardev, no /tmp files.
++ * A short settle after the FIRST poll lets the MixerEngine finish coming up, then
++ * -- whenever the operator is NOT driving the panel (no /tmp/subucom_ctrl) -- we
++ * assert a sensible persistent hold set: both channels routed to DECK plus
++ * unity-ish gains (the same values the manual inj.py "base" uses), so a loaded
++ * deck is audible the moment it plays, with no manual inject. The /tmp ctrl file
++ * (debug/web-panel path) still overrides it frame-for-frame when present.
++ *   XDJ_AUTOLEVEL=0            disables it entirely (idle routing stays LINE).
++ *   XDJ_AUTOLEVEL_DELAY_MS=N   settle delay after the first poll (default 4000).
++ * {off, val, bit}: val>=0 = LE 16-bit analog; else a button bitmask (bit).
++ */
++static const struct { int off; long val; int bit; } xdj_autolevel[] = {
++    { 0x2c, 0x3ff, -1 },   /* channel fader (up)      */
++    { 0x4a, 0x3ff, -1 },   /* MASTER level (up)       */
++    { 0x4e, 0x200, -1 },   /* crossfader (centre)     */
++    { 0x24, 0x200, -1 },   /* EQ HI  (centre/flat)    */
++    { 0x2a, 0x200, -1 },   /* EQ MID (centre/flat)    */
++    { 0x28, 0x200, -1 },   /* EQ LOW (centre/flat)    */
++    { 0x26, 0x3ff, -1 },   /* TRIM / gain (up)        */
++    { 0x33,    -1, 0x80 }, /* CH0 source -> DECK      */
++    { 0x43,    -1, 0x80 }, /* CH1 source -> DECK      */
++};
++
++/* True once rbp has been polling the panel for the settle delay (and enabled). */
++static bool xdj_autolevel_armed(void)
++{
++    static int      disabled = -1;   /* -1 unknown; 0 enabled; 1 disabled */
++    static int64_t  delay_ns;
++    static int64_t  t0;              /* virtual time of the first panel poll */
++    int64_t now;
++
++    if (disabled < 0) {
++        const char *e = getenv("XDJ_AUTOLEVEL");
++        const char *d = getenv("XDJ_AUTOLEVEL_DELAY_MS");
++        int ms = d ? atoi(d) : 4000;
++        disabled = (e && e[0] == '0') ? 1 : 0;
++        delay_ns = (int64_t)(ms < 0 ? 0 : ms) * 1000000;
++    }
++    if (disabled) {
++        return false;
++    }
++    now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    if (t0 == 0) {                   /* first poll: start the settle timer */
++        t0 = now;
++        return false;
++    }
++    return (now - t0) >= delay_ns;
+ }
+ 
+ /*
+@@ -1284,7 +1337,7 @@
+      * frame fields (the tempo fader = 0x04 negative half + 0x0a positive half) must
+      * set both at once: with only one field forced rbp reads the pot as fully pegged.
+      */
+-    enum { MAXHOLD = 8 };
++    enum { MAXHOLD = 12 };
+     static int  hold_off[MAXHOLD];
+     static long hold_val[MAXHOLD];              /* >=0: 16-bit analog; <0: button bit */
+     static int  hold_bit[MAXHOLD];
+@@ -1316,6 +1369,19 @@
+             fclose(cf);
+             nhold = newn;                        /* replace the held set each frame */
+             if (newn == 0 && did_oneshot) remove("/tmp/subucom_ctrl");
++        } else if (xdj_autolevel_armed()) {
++            /* No operator ctrl file: assert the audible default mixer state. */
++            int k;
++            for (k = 0; k < (int)ARRAY_SIZE(xdj_autolevel); k++) {
++                hold_off[k] = xdj_autolevel[k].off;
++                hold_val[k] = xdj_autolevel[k].val;
++                hold_bit[k] = xdj_autolevel[k].bit;
++            }
++            nhold = ARRAY_SIZE(xdj_autolevel);
++            if (s->press == 0 && access("/tmp/subucom_menu", F_OK) == 0) {
++                inj_off = 0x1b; inj_bit = 0x01; inj_val = -1; /* MENU (code 0x20a) */
++                s->press = 30; remove("/tmp/subucom_menu");
++            }
+         } else {
+             nhold = 0;                            /* file gone -> release all holds */
+             if (s->press == 0 && access("/tmp/subucom_menu", F_OK) == 0) {

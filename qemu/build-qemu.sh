@@ -99,6 +99,18 @@
 #       bits; the W1C interrupt bits stay 0 (no spurious OTG IRQ). Verified: the
 #       timeout message is gone, OTG + Host1 register together, USB still mounts.
 #
+#   patches/13-imx6-subucom-autolevel.patch
+#       Auto-inits the mixer to an audible default so the device "just works" on
+#       boot (no manual gain/routing inject). rbp only polls the panel MCU once its
+#       panel thread is up, so the SPI burst that drives the sub-ucom harness every
+#       frame is itself the "rbp is running" signal -- no console scraping, no
+#       external helper, no /tmp files. A short settle after the first poll, then --
+#       whenever no /tmp/subucom_ctrl override exists -- the harness holds both
+#       channels to DECK + unity-ish gains (same values as inj.py "base"). Disable
+#       with XDJ_AUTOLEVEL=0; settle delay XDJ_AUTOLEVEL_DELAY_MS (default 4000).
+#       Verified: routing tables flip to DECK on their own a few seconds after the
+#       UI comes up. QEMU-side only.
+#
 #   patches/03-sabrelite-sabresd-sd.patch
 #       The XDJ-RX firmware's real board is SABRE-SD (MACH_TYPE 3980), which
 #       registers ECSPI2 (bus 1) for the panel MCU + audio codecs, on a

@@ -21,6 +21,14 @@ timeout. Fixed by `qemu/patches/12-imx6-otg-vbus-valid.patch` (OTGSC reports a
 settled host VBUS/session); the OTG core now registers with no gap and USB still
 mounts. Firmware untouched.
 
+**Auto-level:** the mixer is auto-initialised to an audible default on boot
+(`qemu/patches/13-imx6-subucom-autolevel.patch`) so a loaded deck plays without a
+manual gain/routing inject. The sub-ucom harness uses the panel SPI poll itself as
+the "rbp is up" signal and, after a short settle, holds both channels to DECK +
+unity-ish gains whenever no `/tmp/subucom_ctrl` override is present. Verified: the
+routing tables flip to DECK on their own. `XDJ_AUTOLEVEL=0` disables it;
+`XDJ_AUTOLEVEL_DELAY_MS` tunes the settle (default 4000).
+
 ## ✅ A. galcore / Vivante GPU — fully initialises (default path)
 The built-in galcore (Vivante) driver now fully initialises on the default boot path:
 the QEMU GPU stub (patch 02) + GC355 VG core + DVFS GPT kick (patch 05) carry it through
