@@ -45,6 +45,17 @@ host:     touch /tmp/usb2_insert
 ```
 Mounts `/media/usb2/sda1`. Cold-plugging at boot → "USB Error" modal; always insert post-boot.
 
+**Caveat — the "USB Error" modal also appears on a *correct* post-boot insert** (a
+`USB Error. Remove the device.` popup, even though the drive enumerated and
+mounted fine). It is **mostly misleading**: clear it by **"pressing" USB2**
+(`python3 tools/xdj-panel/debug/inj.py mainkey 158`) and the USB2 browser then
+shows the library (ARTIST/ALBUM/TRACK/… categories). Verified live 2026-11-12.
+**→ TODO bugfix:** track down why a valid mount still raises the modal (spurious
+USB-error path in rbp's mount/accept handling). **Do NOT retry by `device_del`** —
+that tears down the `-drive if=none,id=usbstick` backend (later `device_add`s then
+fail `can't find value 'usbstick'`); if a mount won't take, **reboot and insert
+once** instead.
+
 ## Inject sub-ucom panel controls
 Write one spec per line to **`/tmp/subucom_ctrl`** (harness reads it per frame, recomputes CRC):
 `A <off> <val16>` = hold 16-bit analog (fader/knob); `a` one-shot; `B <off> <mask>` = hold a
