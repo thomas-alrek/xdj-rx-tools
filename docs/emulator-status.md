@@ -254,6 +254,17 @@ Verification tooling: guest shell (root, empty pw, `-serial` socket), `pidof`/`/
 the **working** gdbstub (`-gdb tcp::1234`, resume with gdb `c`), `scratchpad/launch_live.sh`
 (visible window), `scratchpad/sweep_btn.py` (md5-diff sweep).
 
+**Control transport (standalone-app Phase 1, ✅ 2026-11-12).** Panel control input can now
+reach the harness over **per-instance QEMU chardevs** instead of the global `/tmp` files:
+`id=xdjctrl` carries the sub-ucom snapshot (patches 07/13), `id=xdjkey` the main-ucom key int
+(patch 09). QEMU is the socket server; the client writes the ENTIRE state as a NUL-terminated
+record (one record == one atomic ctrl-file write; empty = release). The text spec and parsing
+are unchanged — only the byte source moved (shared `xdj_parse_ctrl`). Enable by launching with
+`XDJ_RUNTIME_DIR=<dir>` (sockets at `<dir>/ctrl.sock`,`key.sock`) and point the panel at them:
+`server.py --ctrl-sock <dir>/ctrl.sock --key-sock <dir>/key.sock`. Unset `XDJ_RUNTIME_DIR` =
+the old `/tmp`-file behavior (env override `XDJ_CTRL_PATH`/`XDJ_KEY_PATH`), so inj.py and the
+sweep tools are unchanged. See `docs/standalone-app-roadmap.md` §Phase 1.
+
 ## RE tooling notes
 - Kernel: link base **0x80008000** (PAGE_OFFSET 0x80000000); wrap `vmlinux.bin` as
   an ELF at that base for objdump/Ghidra. Ghidra-via-REA times out on the 13MB

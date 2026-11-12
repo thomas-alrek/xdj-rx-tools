@@ -92,6 +92,19 @@ AUDIO_OPT="${XDJAUDIO:-$AUDIO_DEF}"
 AUDIO_ARGS=()
 [ "$AUDIO_OPT" != "none" ] && AUDIO_ARGS=(-audio "$AUDIO_OPT")
 
+# Phase 1 control sockets (opt-in, per-instance). Set XDJ_RUNTIME_DIR to push panel
+# controls over the QEMU chardevs (id=xdjctrl = sub-ucom snapshot, id=xdjkey =
+# mainkey GPIO) instead of the global /tmp/subucom_ctrl + /tmp/mainkey files. UNSET =
+# today's behavior: no chardevs, so the harness falls back to the /tmp files (or
+# XDJ_CTRL_PATH/XDJ_KEY_PATH), and existing panel/inject workflows are unchanged.
+CTRL_ARGS=()
+if [ -n "${XDJ_RUNTIME_DIR:-}" ]; then
+  mkdir -p "$XDJ_RUNTIME_DIR"
+  CTRL_ARGS=(-chardev socket,id=xdjctrl,path="$XDJ_RUNTIME_DIR/ctrl.sock",server=on,wait=off
+             -chardev socket,id=xdjkey,path="$XDJ_RUNTIME_DIR/key.sock",server=on,wait=off)
+  echo "ctrl: xdjctrl=$XDJ_RUNTIME_DIR/ctrl.sock  xdjkey=$XDJ_RUNTIME_DIR/key.sock" >&2
+fi
+
 # sabresd console is ttymxc0 = serial 0 -> wire it to this terminal (Ctrl-A X quits).
 exec "$QEMU" -M sabrelite -smp "$SMP" -m 256 -no-reboot \
   -name "Pioneer XDJ-RX" \
@@ -103,4 +116,5 @@ exec "$QEMU" -M sabrelite -smp "$SMP" -m 256 -no-reboot \
   -drive if=none,id=xdjsd,file="$SD",format=raw \
   -nic "$NIC" \
   ${USB_ARGS[@]+"${USB_ARGS[@]}"} \
+  ${CTRL_ARGS[@]+"${CTRL_ARGS[@]}"} \
   -serial mon:stdio -serial null

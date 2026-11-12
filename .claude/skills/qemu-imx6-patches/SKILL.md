@@ -50,13 +50,13 @@ Regenerate after *any* build-tree edit so the committed patches reproduce the ru
 | 04 | `imx6-usb-detect-gpio` | `psr-reset` for USB-detect pad-status pins (idle HIGH; avoids false "USB present") |
 | 05 | `imx6-dvfs-gpt-kick` | keeps the GPT/clock path moving (DVFS) so boot doesn't stall |
 | 06 | `imx6-usb-insert-hook` | detect-GPIO insert hooks: `touch /tmp/usb_insert` / `/tmp/usb2_insert` asserts a slot's insert line |
-| 07 | `imx6-multifield-holds` | up to MAXHOLD **persistent** A/B inject holds parsed from all ctrl-file lines; supports complementary two-field faders (tempo = `0x04` neg + `0x0a` pos) |
+| 07 | `imx6-multifield-holds` | up to MAXHOLD **persistent** A/B inject holds parsed from all ctrl lines (complementary two-field faders, tempo = `0x04` neg + `0x0a` pos); **Phase 1 control socket**: reads the snapshot from chardev `id=xdjctrl` (NUL-framed) when present, else file `XDJ_CTRL_PATH`/`/tmp/subucom_ctrl`. Shared `xdj_parse_ctrl` + chardev receive (also used by 09); BQL-serialized, no locks |
 | 08 | `usb-highspeed-hub` | a **USB-2.0** hub (stock `usb-hub` is USB-1.1 and HOST1 rejects it) |
-| 09 | `imx6-mainucom-keys` | drives i.MX6 GPIO lines rbp reads via `/dev/gpiodrv` (top-panel source/DECK keys); `g_xdj_gpio[8]` + `/tmp/mainkey` (momentary) + `psr-reset` idle levels |
+| 09 | `imx6-mainucom-keys` | drives i.MX6 GPIO lines rbp reads via `/dev/gpiodrv` (top-panel source/DECK keys); `g_xdj_gpio[8]` + `psr-reset` idle levels; key int from chardev `id=xdjkey` (Phase 1) when present, else `XDJ_KEY_PATH`/`/tmp/mainkey` (momentary) |
 | 10 | `imx6-usbnc-wakeup` | USBNC OWIR wakeup so a **post-boot** USB insert resumes a suspended HOST1 and enumerates |
 | 11 | `imx6-audio-sdma-ssi` | minimal **SDMA** engine + RAM-backed **SSI1/2/3 + AUDMUX** so imx-sdma/ASoC/ALSA run; a host **sonifier** pinned to SDMA **ch1=MasterOut** (`XDJ_AUDIO_OUT_CH`/`XDJ_AUDIO_DEBUG` peak/rate meters) emits real audio to the host |
 | 12 | `imx6-otg-vbus-valid` | chipidea **OTGSC** (0x1A4) reports a settled host VBUS/session so the OTG driver skips its multi-second VBUS wait (`wait otg vbus change timeout!`) at the splash |
-| 13 | `imx6-subucom-autolevel` | **auto-levels** the mixer on boot (both ch → DECK + unity-ish gains) so a loaded deck is audible with no manual inject; MERGES per-control with `/tmp/subucom_ctrl` (panel still overrides); `XDJ_AUTOLEVEL=0`, `XDJ_AUTOLEVEL_DELAY_MS` |
+| 13 | `imx6-subucom-autolevel` | **auto-levels** the mixer on boot (both ch → DECK + unity-ish gains) so a loaded deck is audible with no manual inject; MERGES per-control with the ctrl snapshot (chardev `xdjctrl` or `/tmp/subucom_ctrl`; panel still overrides); `XDJ_AUTOLEVEL=0`, `XDJ_AUTOLEVEL_DELAY_MS` |
 
 ## Key machine file
 `build/qemu-src/qemu-11.1.0/hw/arm/fsl-imx6.c` holds most hooks: the per-frame sub-ucom hook

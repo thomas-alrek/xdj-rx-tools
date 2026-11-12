@@ -1,6 +1,6 @@
 # Standalone app roadmap — packaging the XDJ-RX emulator
 
-**Status: PLANNED — 2026-11-12. Not started.**
+**Status: IN PROGRESS — Phase 1 (control socket) done 2026-11-12; Phases 2–5 planned.**
 The goal: turn today's "custom QEMU + web UI + `/tmp` files" setup into a single
 self-contained, cross-platform desktop app. The user drops a `.UPD` firmware onto
 the app; the app prepares the boot image and runs the emulator, with a native
@@ -90,19 +90,35 @@ live UI renders over RFB. Skipped by decision — it's the same console surface,
 treated as given. (If anything downstream surprises us, this is the first thing to
 sanity-check.)
 
-### Phase 1 — Control socket (QEMU patch rework) ⬜
-Replace the per-frame `/tmp` file poll with a QEMU **chardev** the harness reads.
-- Add `-chardev socket,id=xdjctrl,...` and wire the sub-ucom/main-ucom harness
-  (patches 07/09/13) to read framed commands from that chardev ring instead of
-  `fopen("/tmp/subucom_ctrl")` / `access("/tmp/mainkey")`.
-- **Keep the exact text spec** (`B 12 08`, `A 54 <hex>`, …) and all parsing — only
-  the *source* changes. The compose/hold/browse-ramp logic in server.py is the
-  reference for what to send.
-- Transition aid: keep an env-var path (`XDJ_CTRL_PATH`) fallback so the file path
-  works per-instance during the port.
-- Touch: [qemu/patches/07-imx6-multifield-holds.patch](../qemu/patches/07-imx6-multifield-holds.patch),
+### Phase 1 — Control socket (QEMU patch rework) ✅ (2026-11-12)
+Replaced the per-frame `/tmp` file poll with **two QEMU chardevs** the harness reads
+(one per legacy file), keeping the exact text spec and parsing.
+- **Two channels**: `id=xdjctrl` = the sub-ucom snapshot (patches 07/13);
+  `id=xdjkey` = the main-ucom key GPIO int (patch 09). QEMU is the socket **server**
+  (`-chardev socket,...,server=on,wait=off`); the harness connects as a client.
+- **Framing = NUL-terminated snapshots**: each write is the ENTIRE desired state, so
+  one record == one atomic ctrl-file write (preserves "the whole snapshot replaces the
+  held set"). Empty record = release. Last snapshot is kept on client disconnect.
+- **Parsing byte-identical**: the old inline `fopen`/`fgets`/`sscanf` loop was extracted
+  into a shared `xdj_parse_ctrl()`; only the byte *source* changed. One-shots fire once
+  per fresh record. chardev handlers + the SPI-flush hook both run under the BQL → no locks.
+- **Fallback**: when a channel's chardev is absent the harness reads its env path
+  (`XDJ_CTRL_PATH` / `XDJ_KEY_PATH`, default the legacy `/tmp` names) — also makes the file
+  path per-instance. So existing file-based tooling (inj.py, sweep_*.py) is unchanged.
+- **Opt-in**: both launchers add the chardevs only when `XDJ_RUNTIME_DIR` is set
+  (sockets land in that per-instance dir); unset = today's `/tmp`-file behavior.
+- **Client**: `server.py --ctrl-sock/--key-sock` pushes snapshots to the sockets (file mode
+  stays the default); it remains the reference for the Phase 2 Rust port.
+- **Verified live** (2026-11-12): over `xdjctrl`, a TEMPO-RANGE one-shot cycled DECK1 ±10→±16
+  (direct) and DECK2 via server.py HTTP; over `xdjkey`, a mainkey press toggled the deck
+  time display. File fallback still works with no chardevs. Full patch series reproduces the
+  live tree byte-for-byte + builds from scratch.
+- Touched: [qemu/patches/07-imx6-multifield-holds.patch](../qemu/patches/07-imx6-multifield-holds.patch),
   [09](../qemu/patches/09-imx6-mainucom-keys.patch),
-  [13](../qemu/patches/13-imx6-subucom-autolevel.patch). See skill `qemu-imx6-patches`.
+  [13](../qemu/patches/13-imx6-subucom-autolevel.patch),
+  [tools/xdj-panel/server.py](../tools/xdj-panel/server.py),
+  [qemu/watch.sh](../qemu/watch.sh), [relaunch.sh](../tools/xdj-panel/debug/relaunch.sh).
+  See skill `qemu-imx6-patches`.
 
 ### Phase 2 — Tauri shell + orchestrator ⬜
 - Scaffold the Tauri app. Rust host spawns & supervises the qemu child and owns

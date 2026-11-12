@@ -1,6 +1,19 @@
---- a/hw/arm/fsl-imx6.c	2026-11-09 20:27:41
-+++ b/hw/arm/fsl-imx6.c	2026-11-09 20:54:07
-@@ -561,6 +561,12 @@
+XDJ-RX patch 09 -- MAIN-UCOM direct-key GPIOs (+ Phase 1 key socket).
+
+USB1/USB2/rekordbox/MIDI/DECK1-2/TIME MODE are NOT sub-ucom keys: they are i.MX6
+GPIO switches rbp reads via /dev/gpiodrv (idle HIGH, pressed LOW) -- Linux GPIO
+numbers 119,120,146,149,158,159,160,161 (rbp FUN_00274a38). g_xdj_gpio[] captures
+each bank at realize; the keys idle HIGH from reset (psr-reset) so no boot-time
+LOW->HIGH edge is seen as a spurious release during USB init. The per-frame hook
+drives the selected pin LOW on press / back HIGH on release.
+
+Phase 1: the pressed key number now arrives over the QEMU chardev id=xdjkey when
+present (shared receive/accumulate with patch 07), else from XDJ_KEY_PATH (default
+/tmp/mainkey). Empty record / absent file = release.
+
+--- a/hw/arm/fsl-imx6.c
++++ b/hw/arm/fsl-imx6.c
+@@ -562,6 +562,12 @@
   * insertion at runtime by driving the line LOW (see xdj_subucom_frame_start).
   */
  static DeviceState *g_xdj_usb_gpio[2];
@@ -13,13 +26,10 @@
  
  /*
   * CRC-16/X-25 (poly 0x1021, reflected 0x8408, init 0xffff, refin/refout, xorout
-@@ -639,7 +645,40 @@
-                 qemu_set_irq(qdev_get_gpio_in(g_xdj_usb_gpio[u], det_pin[u]),
-                              want ? 0 : 1);
-                 usb_present[u] = want;
-+            }
-+        }
-+    }
+@@ -791,6 +797,52 @@
+             }
+         }
+     }
 +    /*
 +     * MAIN-UCOM direct-key simulation. The service manual shows USB1/USB2 (and
 +     * rekordbox/MIDI/DECK1-2/TIME MODE) are NOT subucom keys -- they are i.MX6
@@ -34,12 +44,25 @@
 +    {
 +        static int pressed = -1;
 +        int want = -1;
-+        FILE *kf = fopen("/tmp/mainkey", "r");
-+        if (kf) {
-+            if (fscanf(kf, "%d", &want) != 1) {
-+                want = -1;
++        if (xdj_ctrl_bind(&xdj_key_chan)) {         /* socket mode: xdjkey chardev */
++            if (xdj_key_chan.cur[0]) {
++                if (sscanf(xdj_key_chan.cur, "%d", &want) != 1) {
++                    want = -1;
++                }
 +            }
-+            fclose(kf);
++        } else {                                    /* fallback: XDJ_KEY_PATH / file */
++            const char *path = getenv("XDJ_KEY_PATH");
++            FILE *kf;
++            if (!path || !path[0]) {
++                path = "/tmp/mainkey";
++            }
++            kf = fopen(path, "r");
++            if (kf) {
++                if (fscanf(kf, "%d", &want) != 1) {
++                    want = -1;
++                }
++                fclose(kf);
++            }
 +        }
 +        if (want != pressed) {
 +            if (pressed >= 0 && pressed < 256 && g_xdj_gpio[pressed >> 5]) {
@@ -49,12 +72,14 @@
 +            if (want >= 0 && want < 256 && g_xdj_gpio[want >> 5]) {
 +                qemu_set_irq(qdev_get_gpio_in(g_xdj_gpio[want >> 5],
 +                                              want & 31), 0);      /* press */
-             }
++            }
 +            pressed = want;
-         }
-     }
++        }
++    }
      if (getenv("SUBUCOM_BURST") && s->pos) {
-@@ -1148,11 +1187,29 @@
+         fprintf(stderr, "SUBUCOM msg_size=%u\n", s->pos);
+     }
+@@ -1312,10 +1364,28 @@
           * never comes up. deck1 = GPIO4_IO30 (gpiodrv id 126/0x7e), deck2 =
           * GPIO7_IO12 (id 204/0xcc).
           */
@@ -76,18 +101,17 @@
 +                                     (1u << 30) | (1u << 23) | (1u << 24),
 +                                     &error_abort);
 +        } else if (i == 4) { /* GPIO5: keys 18,21,30,31 */
-             object_property_set_uint(OBJECT(&s->gpio[i]), "psr-reset",
++            object_property_set_uint(OBJECT(&s->gpio[i]), "psr-reset",
 +                                     (1u << 18) | (1u << 21) | (1u << 30) |
 +                                     (1u << 31), &error_abort);
 +        } else if (i == 5) { /* GPIO6: keys 00,01 */
 +            object_property_set_uint(OBJECT(&s->gpio[i]), "psr-reset",
 +                                     (1u << 0) | (1u << 1), &error_abort);
 +        } else if (i == 6) { /* GPIO7: USB2 detect (GPIO7_IO12) */
-+            object_property_set_uint(OBJECT(&s->gpio[i]), "psr-reset",
+             object_property_set_uint(OBJECT(&s->gpio[i]), "psr-reset",
                                       1u << 12, &error_abort);
          }
-         if (!sysbus_realize(SYS_BUS_DEVICE(&s->gpio[i]), errp)) {
-@@ -1163,6 +1220,9 @@
+@@ -1327,6 +1397,9 @@
          } else if (i == 6) { /* GPIO7: USB2 detect (GPIO7_IO12) */
              g_xdj_usb_gpio[1] = DEVICE(&s->gpio[i]);
          }

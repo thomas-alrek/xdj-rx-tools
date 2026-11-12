@@ -27,9 +27,9 @@ FS). (2) With an unrelated `A 54 0` hold present, routing STAYS DECK (old all-or
 nothing build fell back to LINE here). QEMU-side only; firmware untouched. Full
 series 01..13 builds from scratch.
 
---- a/hw/arm/fsl-imx6.c	2026-11-12 19:36:28
-+++ b/hw/arm/fsl-imx6.c	2026-11-12 20:13:37
-@@ -1187,6 +1187,59 @@
+--- a/hw/arm/fsl-imx6.c
++++ b/hw/arm/fsl-imx6.c
+@@ -1188,6 +1188,59 @@
  }
  
  /*
@@ -86,10 +86,10 @@ series 01..13 builds from scratch.
 +}
 +
 +/*
-  * Called by the ECSPI (imx_spi_flush_txfifo) at the start of every SPI burst so
-  * the panel's SubRxData frame is presented byte-aligned on MISO. We build the
-  * frame in rbp's buffer coordinates (rbp_buf[j]), compute the CRC rbp expects,
-@@ -1284,7 +1337,7 @@
+  * Phase 1 control channel (XDJ-RX standalone-app roadmap). Read panel control
+  * input from a QEMU chardev instead of polling a /tmp file every SPI frame. Two
+  * independent channels, each a socket the harness (server.py now, the Tauri host
+@@ -1446,7 +1499,7 @@
       * frame fields (the tempo fader = 0x04 negative half + 0x0a positive half) must
       * set both at once: with only one field forced rbp reads the pot as fully pegged.
       */
@@ -98,29 +98,10 @@ series 01..13 builds from scratch.
      static int  hold_off[MAXHOLD];
      static long hold_val[MAXHOLD];              /* >=0: 16-bit analog; <0: button bit */
      static int  hold_bit[MAXHOLD];
-@@ -1293,8 +1346,9 @@
-     static long inj_val = -1;
-     {
-         FILE *cf = fopen("/tmp/subucom_ctrl", "r");
-+        int newn = 0, had_file = (cf != NULL);
-         if (cf) {
--            char line[64]; int newn = 0, did_oneshot = 0;
-+            char line[64]; int did_oneshot = 0;
-             while (fgets(line, sizeof(line), cf)) {
-                 char kind = 0; unsigned off = 0, a = 0;
-                 if (sscanf(line, " %c %x %x", &kind, &off, &a) < 2) continue;
-@@ -1314,14 +1368,37 @@
+@@ -1494,6 +1547,30 @@
                  }
              }
-             fclose(cf);
--            nhold = newn;                        /* replace the held set each frame */
-             if (newn == 0 && did_oneshot) remove("/tmp/subucom_ctrl");
--        } else {
--            nhold = 0;                            /* file gone -> release all holds */
--            if (s->press == 0 && access("/tmp/subucom_menu", F_OK) == 0) {
--                inj_off = 0x1b; inj_bit = 0x01; inj_val = -1; /* MENU (code 0x20a) */
--                s->press = 30; remove("/tmp/subucom_menu");
-+        }
+         }
 +        /*
 +         * Auto-level baseline (MERGE, not replace). Once armed, assert the audible
 +         * default for every control the operator is NOT currently driving, so the
@@ -143,13 +124,8 @@ series 01..13 builds from scratch.
 +                hold_val[newn] = xdj_autolevel[d].val;
 +                hold_bit[newn] = xdj_autolevel[d].bit;
 +                newn++;
-             }
++            }
 +        }
-+        nhold = newn;
-+        /* legacy MENU one-shot shortcut (only when no ctrl file is present) */
-+        if (!had_file && s->press == 0 && access("/tmp/subucom_menu", F_OK) == 0) {
-+            inj_off = 0x1b; inj_bit = 0x01; inj_val = -1; /* MENU (code 0x20a) */
-+            s->press = 30; remove("/tmp/subucom_menu");
-         }
-     }
- 
+         nhold = newn;
+         /* legacy MENU one-shot shortcut (only when no ctrl input is present) */
+         if (!had_input && s->press == 0 && access("/tmp/subucom_menu", F_OK) == 0) {
