@@ -590,9 +590,15 @@
 +        }
 +        g_sdma.irq = qdev_get_gpio_in(gic, FSL_IMX6_SDMA_IRQ);
 +        {   /* Option B: which SDMA channel is sonified to the output voice.
-+             * -1 = auto (first stream started); XDJ_AUDIO_OUT_CH pins it. */
++             * Default = 1: SDMA channel 1 is the XDJ-RX MasterOut (pcm0) and is
++             * deterministic per firmware -- verified by playing a loaded track
++             * through the mixer and watching ch1's cyclic-buffer peak track the
++             * master mix while ch2..6 stayed silent (the old -1 "first stream
++             * started" default grabbed ch3 = a silent booth/phones/input stream,
++             * so nothing was audible). XDJ_AUDIO_OUT_CH overrides for diagnostics;
++             * -1 restores the legacy first-started auto-pick. */
 +            const char *oc = getenv("XDJ_AUDIO_OUT_CH");
-+            g_sdma.out_ch = oc ? atoi(oc) : -1;
++            g_sdma.out_ch = oc ? atoi(oc) : 1;
 +        }
 +        for (ch = 0; ch < SDMA_NUM_CH; ch++) {
 +            g_sdma.chan[ch].s = &g_sdma;

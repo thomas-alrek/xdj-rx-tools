@@ -1,5 +1,40 @@
 # Handover: deck plays but produces NO SOUND (silent master mix) — emulation gap
 
+> ## ✅ SOLVED 2026-11-12 — REAL DECK AUDIO HEARD ON THE HOST (both decks)
+> Playing a loaded rekordbox track on the stock `rbp` firmware now produces **real,
+> audible master-out audio on the Mac speakers** — verified on **both decks** mixed
+> together. There were **two** independent gaps, neither an rbp bug:
+>
+> 1. **Sonifier was on the wrong SDMA channel.** patch 11's `-1` "first stream started"
+>    default picked **ch3** (a silent booth/phones/input stream). The XDJ-RX **MasterOut
+>    (pcm0) is SDMA channel 1** — fixed & deterministic per firmware. Confirmed with
+>    `XDJ_AUDIO_DEBUG=1`: when the deck mix reached master, **ch1's `bufpeak` tracked it to
+>    full scale while ch2..6 stayed 0**, and `[sdma-au] master=1` then fed the voice.
+>    **Fix: pin the sonifier to ch1** (`XDJ_AUDIO_OUT_CH=1`); now **hard-coded as the patch
+>    11 default** (was `-1`).
+> 2. **The deck was never routed into its mixer channel.** Root cause = the per-channel
+>    **INPUT SELECT switch** (firmware `LinePhonoSW`, control code **0x1013**; HW-diagram
+>    "INPUT SWITCH", MIXER item 11). It defaults to **LINE**, so the channel reads the
+>    silent ExtIn/line capture instead of the deck. (Strings `"INPUT : LINE"`,
+>    `"EXT TYPE : LINE1/2"`, `"LinePhonoSW"` confirm.)
+>
+> **The audio data path (fully traced, verified live):**
+> deck **Player** render (`FUN_00075eb0`, mixdown src list of `FUN_00043a2c`; per-deck
+> output buffers, this boot `0x02abfa58` deck1 / `0x02abfc60` deck2) → the channel's
+> **source pointer** `DAT_0107acdc[chan*3]` (deck1=entry0, deck2=entry1) → channel strip
+> `FUN_00085bc0` (EQ/trim/fader) → playengine mixdown → **master output DMA buffer**
+> (`FUN_000506b0` arg `param_4[0]`) → ALSA pcm0/MasterOut → SSI → **SDMA ch1** → host.
+>
+> **Proof method (gdb, rbp untouched):** set the mix to unity via the firmware's own
+> setters (`gdbmixfull.py`: master `FUN_00066bb8`, fader `FUN_00083fcc`, …), then **repoint
+> each channel's source** `DAT_0107acdc[0]`→deck1 buffer, `DAT_0107acdc[12]`→deck2 buffer.
+> Master DMA buffer went 0 → ~0.3–1.5; both decks audible.
+>
+> **Still to productionise** (so it's not a gdb poke): deliver the **sub-ucom INPUT SWITCH
+> in the DECK position** (code 0x1013 / `LinePhonoSW`) so the firmware sets the channel
+> source pointer itself — the real emulation fix. Frame bit for 0x1013 not yet mapped.
+> See memory `[[deck-playback-audio-gated]]`.
+
 **For:** a focused session continuing ONLY the "a playing deck is silent" problem.
 Everything else about audio is done: the i.MX6 SDMA/SSI/AUDMUX is modelled (patch 11),
 the host sink is wired (`-audio coreaudio,timer-period=1451`), real-time pacing is fixed
