@@ -1,6 +1,6 @@
 # Standalone app roadmap — packaging the XDJ-RX emulator
 
-**Status: IN PROGRESS — Phase 1 (control socket) done 2026-11-12; Phases 2–5 planned.**
+**Status: IN PROGRESS — Phases 1 (control socket) + 2 (Tauri shell + orchestrator) done 2026-11-12; Phases 3–5 planned.**
 The goal: turn today's "custom QEMU + web UI + `/tmp` files" setup into a single
 self-contained, cross-platform desktop app. The user drops a `.UPD` firmware onto
 the app; the app prepares the boot image and runs the emulator, with a native
@@ -120,18 +120,37 @@ Replaced the per-frame `/tmp` file poll with **two QEMU chardevs** the harness r
   [qemu/watch.sh](../qemu/watch.sh), [relaunch.sh](../tools/xdj-panel/debug/relaunch.sh).
   See skill `qemu-imx6-patches`.
 
-### Phase 2 — Tauri shell + orchestrator ⬜
-- Scaffold the Tauri app. Rust host spawns & supervises the qemu child and owns
-  **three per-instance sockets** (QMP / VNC / control) in the app runtime dir —
-  no global `/tmp`, so multiple instances are possible.
-- Webview loads panel.html. Screen pane becomes **noVNC**.
-  - Wrinkle: noVNC speaks **RFB-over-WebSocket**; QEMU `-vnc` is **raw-TCP RFB**.
-    The Rust host runs a tiny `websockify`-style WS↔TCP bridge (trivial w/ tokio).
-  - panel overlay / hotspots / calibration stay as-is.
-- Port server.py's control composition (input-select DECK/LINE holds, browse
-  counter ramp, one-shot vs hold) into Rust — **or** run server.py as a bundled
-  sidecar first to move faster, port later.
-- Retire the HTTP `/raw` screendump path once the screen pane is live.
+### Phase 2 — Tauri shell + orchestrator 🔶 (orchestrator core done 2026-11-12)
+**Orchestrator core — ✅ done & verified (headless), in [app/host](../app/host) (`xdj-host`):**
+- Rust host spawns & supervises the qemu child and owns the **per-instance sockets**
+  (QMP / VNC / control chardevs) in a runtime dir — no global `/tmp`. Supervises:
+  qemu/sidecar exit or Ctrl-C tears the rest down and cleans the sockets.
+- Screen pane = **noVNC**. QEMU `-vnc unix:` is raw RFB; the Rust host runs a tokio
+  **WS↔unix bridge** so noVNC (RFB-over-WebSocket) can show it.
+  [panel.html](../tools/xdj-panel/panel.html) uses noVNC when opened with
+  `?vnc=ws://…`, else the old `/raw` poll; the same SCREEN calibration positions
+  either; overlay/hotspots/calibration unchanged. noVNC vendored at
+  [app/ui/novnc](../app/ui/novnc); served at `/novnc/*`.
+- Control composition: **server.py runs as a sidecar** (the "sidecar first, port to
+  Rust later" option — port is Phase 5.1).
+- Verified live: `xdj-host` boots QEMU to the live UI; a frame captured over the
+  WS+RFB bridge is the full 800×480 rekordbox UI; a control injected via the sidecar
+  (DECK1 tempo range) shows up in the next VNC capture; Ctrl-C shuts the tree down.
+- `/raw` is retired for the app path (kept as a fallback for the legacy server.py-only
+  setup).
+
+**Tauri native shell — ✅ in [app/shell](../app/shell) (`xdj-rx-shell`):** a Tauri 2 window
+that spawns `xdj-host`, waits for the panel port, then opens on the live UI (panel skin +
+noVNC screen). On exit it sends `xdj-host` SIGTERM so the whole tree (QEMU + sidecar +
+sockets) tears down cleanly (a hard kill would orphan them). Verified: builds + launches,
+spawns and supervises the full stack, and the URL it loads serves the live 800×480 UI
+(captured via its own bridge). The native window itself wasn't screenshot-verified here —
+`screencapture` needs Screen Recording permission this session lacks; it renders on the
+user's display.
+
+**Phase 2 remaining / follow-ups:** climb the screen-rendering ladder only if noVNC feel
+isn't tight enough (rung 2/3, §Screen rendering); a small splash while QEMU boots; multi-
+instance (pick free ports/runtime dir per instance — the plumbing is already per-instance).
 
 **Screen rendering — a performance ladder (not noVNC-or-nothing).**
 The webview carries two very different things: the **panel skin** (photoreal

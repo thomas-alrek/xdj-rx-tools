@@ -239,6 +239,23 @@ async fn bridge_one(tcp: tokio::net::TcpStream, vnc_sock: &Path) -> std::io::Res
     Ok(())
 }
 
+/// Resolves when the process is asked to terminate (SIGTERM). On non-unix it never
+/// resolves (Ctrl-C still covers interactive use). The shell sends us SIGTERM on
+/// exit so we get a chance to tear QEMU + the sidecar down instead of orphaning them.
+#[cfg(unix)]
+async fn terminated() {
+    use tokio::signal::unix::{signal, SignalKind};
+    if let Ok(mut s) = signal(SignalKind::terminate()) {
+        s.recv().await;
+    } else {
+        std::future::pending::<()>().await;
+    }
+}
+#[cfg(not(unix))]
+async fn terminated() {
+    std::future::pending::<()>().await;
+}
+
 fn clean_stale(cfg: &Config) {
     for s in ["qmp.sock", "vnc.sock", "ctrl.sock", "key.sock"] {
         let _ = std::fs::remove_file(cfg.rt(s));
@@ -321,6 +338,11 @@ async fn main() {
         }
         _ = tokio::signal::ctrl_c() => {
             eprintln!("[host] shutting down (Ctrl-C)");
+            let _ = qemu.kill().await;
+            let _ = sidecar.kill().await;
+        }
+        _ = terminated() => {
+            eprintln!("[host] shutting down (SIGTERM)");
             let _ = qemu.kill().await;
             let _ = sidecar.kill().await;
         }

@@ -1,0 +1,19 @@
+[package]
+name = "xdj-rx-shell"
+version = "0.1.0"
+edition = "2021"
+description = "XDJ-RX desktop shell: a Tauri window that runs the xdj-host orchestrator and shows the live panel + noVNC screen. Phase 2 of the standalone-app roadmap."
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+url = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[[bin]]
+name = "xdj-rx-shell"
+path = "src/main.rs"
