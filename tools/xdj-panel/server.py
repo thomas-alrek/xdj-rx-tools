@@ -43,6 +43,26 @@ _browse_counter = 0
 _browse_active = False          # True once the encoder has been turned this session
 _browse_lock = threading.Lock()
 
+# INPUT SELECT (per-channel source switch): the sub-ucom frame bits
+# rbp[0x33].7 (ch0/deck1) / rbp[0x43].7 (ch1/deck2). Bit SET = DECK (channel plays
+# its deck, src n); bit CLEAR = LINE/PHONO (src n+3, silent in the emulator). Held
+# as persistent B-masks so DECK survives every other control write; default DECK so
+# a loaded deck is audible out of the box. (LINE = omit the hold -> bit stays 0.)
+_INPUT_BIT = {0: (0x33, 0x80), 1: (0x43, 0x80)}
+_input_src = {0: 1, 1: 1}       # 1 = DECK (default), 0 = LINE
+_input_lock = threading.Lock()
+
+
+def _input_hold_lines():
+    """Hold lines for channels currently set to DECK (LINE channels omit the bit)."""
+    out = []
+    with _input_lock:
+        for ch in sorted(_input_src):
+            if _input_src[ch]:
+                off, mask = _INPUT_BIT[ch]
+                out.append("B %02x %02x" % (off, mask))
+    return out
+
 
 def _write_ctrl_atomic(data):
     with open(CTRL + ".tmp", "w") as f:
@@ -61,6 +81,11 @@ def _compose_ctrl(lines):
     out = [ln.strip() for ln in lines if ln.strip()]
     if _browse_active and not any(l.lower().startswith("a 54") for l in out):
         out.append("A 54 %x" % _browse_counter)
+    # Persistent INPUT-SELECT holds (DECK channels) ride alongside, deduped.
+    have = {l.lower() for l in out}
+    for hl in _input_hold_lines():
+        if hl.lower() not in have:
+            out.append(hl)
     return "\n".join(out) + "\n"
 
 
@@ -217,9 +242,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/release":
             try:
                 with _browse_lock:
-                    if _browse_active:
-                        # keep the browse counter held; just drop the momentary control
-                        _write_ctrl_atomic("A 54 %x\n" % _browse_counter)
+                    # Keep persistent state (browse counter + INPUT-SELECT holds);
+                    # only the momentary control is dropped.
+                    body2 = _compose_ctrl([])
+                    if body2.strip():
+                        _write_ctrl_atomic(body2)
                     else:
                         try:
                             os.remove(CTRL)
@@ -229,6 +256,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send(500, "text/plain", str(e).encode())
                 return
             self._send(200, "text/plain", b"ok")
+        elif path == "/input":
+            # INPUT SELECT (per-channel source switch): body "<ch> DECK|LINE".
+            # ch 0 = deck1/CH1, 1 = deck2/CH2. Persistent hold; default DECK.
+            parts = body.strip().upper().split()
+            if len(parts) == 2 and parts[0] in ("0", "1") and parts[1] in ("DECK", "LINE"):
+                with _input_lock:
+                    _input_src[int(parts[0])] = 1 if parts[1] == "DECK" else 0
+                try:
+                    with _browse_lock:
+                        # preserve any currently-held lines; swap only the source holds
+                        try:
+                            cur = [l for l in open(CTRL).read().splitlines() if l.strip()]
+                        except Exception:
+                            cur = []
+                        kept = [l for l in cur if l.lower()[:4] not in ("b 33", "b 43")]
+                        _write_ctrl_atomic(_compose_ctrl(kept))
+                    self._send(200, "text/plain", b"ok")
+                except Exception as e:
+                    self._send(500, "text/plain", str(e).encode())
+            else:
+                self._send(400, "text/plain", b"use '<0|1> DECK|LINE'")
         elif path == "/mainkey":
             # MAIN-UCOM direct GPIO key: body = Linux GPIO number. The QEMU hook
             # drives that pin LOW (pressed) while /tmp/mainkey holds the number.
@@ -285,7 +333,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     with _browse_lock:
                         _browse_counter = (_browse_counter + step) & 0xffff
                         try:
-                            _write_ctrl_atomic("A 54 %x\n" % _browse_counter)
+                            _write_ctrl_atomic("\n".join(
+                                ["A 54 %x" % _browse_counter] + _input_hold_lines()) + "\n")
                         except Exception:
                             break
                     time.sleep(0.045)
@@ -320,6 +369,13 @@ def main():
     socketserver.ThreadingTCPServer.daemon_threads = True
     with socketserver.ThreadingTCPServer(("127.0.0.1", args.port), Handler) as httpd:
         print("XDJ-RX virtual panel: http://127.0.0.1:%d  (monitor=%s)" % (args.port, MON))
+        # Assert default INPUT-SELECT = DECK so a loaded deck is audible out of the
+        # box (the emulator's native default is LINE/silent).
+        try:
+            _write_ctrl_atomic(_compose_ctrl([]))
+            print("input-select default: CH1=DECK CH2=DECK")
+        except Exception:
+            pass
         print("Ctrl-C to stop.")
         try:
             httpd.serve_forever()

@@ -19,6 +19,7 @@
   .btn:hover{border-color:#3a414b}
   .btn.on{background:#1c3a4d;border-color:#2a6b8f;color:#bfe3ff}
   .btn.red{background:#3a1e1f;border-color:#6b2e30;color:#ffb4b6}
+  .btn.line{background:#3a2f1e;border-color:#6b572e;color:#ffe0a8}
   .conn{font-size:11px;padding:3px 9px;border-radius:20px;border:1px solid var(--edge);color:var(--red)}
   .conn.up{color:var(--ok);border-color:#2a6b4f}
   .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
@@ -70,6 +71,8 @@
   <button class="btn" id="bsave" style="display:none">Save layout</button>
   <button class="btn" id="breset" style="display:none">Reset</button>
   <button class="btn red" id="brel">Release all</button>
+  <button class="btn src on" id="src0" title="CH1 input source (DECK / LINE·PHONO)">CH1: DECK</button>
+  <button class="btn src on" id="src1" title="CH2 input source (DECK / LINE·PHONO)">CH2: DECK</button>
 </div>
 
 <div class="stage-wrap">
@@ -263,6 +266,14 @@ function release(){ post('/release'); }
 // channel (/tmp/mainkey) -- they are NOT subucom frame controls.
 function mainkey(n){ post('/mainkey',String(n)); }
 function mainkeyRelease(){ post('/mainkey_release'); }
+// INPUT SELECT (per-channel source switch): DECK <-> LINE/PHONO. Posts /input;
+// the server holds the sub-ucom frame bit (rbp[0x33].7 / rbp[0x43].7). Default DECK.
+const _srcState={0:'DECK',1:'DECK'};
+function _srcUI(ch){ const b=document.getElementById('src'+ch); if(!b) return;
+  const s=_srcState[ch]; b.textContent='CH'+(ch+1)+': '+s;
+  b.classList.toggle('on', s==='DECK'); b.classList.toggle('line', s==='LINE'); }
+function setSrc(ch,s){ _srcState[ch]=s; _srcUI(ch); post('/input', ch+' '+s); log('CH'+(ch+1)+' input: '+s); }
+function toggleSrc(ch){ setSrc(ch, _srcState[ch]==='DECK'?'LINE':'DECK'); }
 
 // ---- build hotspots -------------------------------------------------------
 const els = {};
@@ -464,6 +475,9 @@ async function init(){
     if(j.ctrls) for(const c of CTRLS){ const o=j.ctrls[c.id]; if(o) Object.assign(c,o); }
     if(j.screen||j.ctrls) log('loaded saved calibration'); } }catch(e){}
   build(); pump();
+  for(const ch of [0,1]){ const b=document.getElementById('src'+ch);
+    if(b) b.addEventListener('click', ()=>toggleSrc(ch)); }
+  setSrc(0,'DECK'); setSrc(1,'DECK');   // assert default DECK (UI + server agree)
   window.addEventListener('resize',()=>{ layoutScreen(); });
 }
 init();
