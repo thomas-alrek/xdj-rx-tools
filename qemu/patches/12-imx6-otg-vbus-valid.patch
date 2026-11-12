@@ -1,0 +1,99 @@
+XDJ-RX patch 12 -- i.MX6 OTG: report a settled VBUS/session on OTGSC.
+
+The chipidea OTG core's OTGSC register (guest offset 0x1A4) and the USB PHY
+status register are both stubbed to read 0, so the controller models no VBUS
+comparators. The i.MX6 OTG driver, before enumerating, polls OTGSC for VBUS /
+session-valid to settle; with the bits stuck at 0 that condition never became
+true, so the driver only continued at its internal timeout -- printing
+"wait otg vbus change timeout!" after a multi-second stall at the boot splash
+(the OTG controller is usb0, fsl-ehci.0, irq 75). Every boot paid this cost.
+
+Make the OTGSC read report a settled "A-device (host) with VBUS up" state
+(ID=0, A-VBUS-Valid, A-Session-Valid, B-Session-Valid), so the driver sees a
+valid session immediately and skips the wait, then enumerates as host exactly
+as it did after the timeout. Only the low status bits are reported; the
+write-one-to-clear interrupt-status bits are left 0 so no spurious OTG interrupt
+is raised. The OTGSC (0x1A4) block gets its own read op (chipidea_otg_ops); the
+rest of that block, and all other chipidea registers, still read back 0 as
+before. Firmware/kernel untouched -- fixed entirely QEMU-side.
+
+--- a/hw/usb/chipidea.c	2026-11-12 19:12:04
++++ b/hw/usb/chipidea.c	2026-11-12 19:12:47
+@@ -20,12 +20,40 @@
+     CHIPIDEA_USBx_DCCPARAMS_HC = BIT(8),
+ };
+ 
++/*
++ * OTGSC (OTG Status and Control) is the first register of the 0x1A4 block.
++ * The i.MX OTG driver, before bringing the controller up, waits for VBUS /
++ * session-valid to settle by polling these status bits, and gives up only at a
++ * timeout ("wait otg vbus change timeout!" -- a multi-second stall at the boot
++ * splash). We model no VBUS comparators (the USB PHY status register is stubbed
++ * to 0), so that condition could never become true and the wait always ran to
++ * the full timeout. Report a settled "A-device (host) with VBUS up" state --
++ * ID=0, A-VBUS-Valid, A- and B-Session-Valid -- so the driver sees a valid
++ * session immediately and skips the wait, then enumerates as host exactly as it
++ * did after the timeout. Only the status bits are reported; the write-one-to-
++ * clear interrupt-status bits (23:0 upper half) are left 0 so no spurious OTG
++ * interrupt is raised. OTGSC is region-relative offset 0 of the 0x1A4 block.
++ */
++#define CHIPIDEA_USBx_OTGSC        0x000      /* 0x1A4, region-relative */
++#define CHIPIDEA_OTGSC_AVV         BIT(9)     /* A VBUS valid */
++#define CHIPIDEA_OTGSC_ASV         BIT(10)    /* A session valid */
++#define CHIPIDEA_OTGSC_BSV         BIT(11)    /* B session valid */
++
+ static uint64_t chipidea_read(void *opaque, hwaddr offset,
+                                unsigned size)
+ {
+     return 0;
+ }
+ 
++static uint64_t chipidea_otg_read(void *opaque, hwaddr offset,
++                                  unsigned size)
++{
++    if (offset == CHIPIDEA_USBx_OTGSC) {
++        return CHIPIDEA_OTGSC_AVV | CHIPIDEA_OTGSC_ASV | CHIPIDEA_OTGSC_BSV;
++    }
++    return 0;
++}
++
+ static void chipidea_write(void *opaque, hwaddr offset,
+                             uint64_t value, unsigned size)
+ {
+@@ -48,6 +76,18 @@
+     },
+ };
+ 
++/* Same as chipidea_ops but with the OTGSC-aware read (the 0x1A4 block). */
++static const struct MemoryRegionOps chipidea_otg_ops = {
++    .read = chipidea_otg_read,
++    .write = chipidea_write,
++    .endianness = DEVICE_NATIVE_ENDIAN,
++    .impl = {
++        .min_access_size = 4,
++        .max_access_size = 4,
++        .unaligned = false,
++    },
++};
++
+ static uint64_t chipidea_dc_read(void *opaque, hwaddr offset,
+                                  unsigned size)
+ {
+@@ -112,13 +152,15 @@
+                 .ops    = &chipidea_ops,
+             },
+             /*
+-             * Registers located between offsets 0x1A4 and 0x1DC
++             * Registers located between offsets 0x1A4 and 0x1DC.
++             * OTGSC (0x1A4) reports a settled host VBUS/session via
++             * chipidea_otg_ops; the rest of the block reads back 0.
+              */
+             {
+                 .name   = TYPE_CHIPIDEA ".endpoints",
+                 .offset = 0x1A4,
+                 .size   = 0x1DC - 0x1A4 + 4,
+-                .ops    = &chipidea_ops,
++                .ops    = &chipidea_otg_ops,
+             },
+             /*
+              * USB_x_DCIVERSION and USB_x_DCCPARAMS

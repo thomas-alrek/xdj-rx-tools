@@ -87,6 +87,18 @@
 #       run while rbp reads them, so the library registers deterministically. See
 #       docs/usb-accept-handover.md.
 #
+#   patches/12-imx6-otg-vbus-valid.patch
+#       The chipidea OTG core's OTGSC register (guest 0x1A4) and the USB PHY
+#       status register are both stubbed to read 0, i.e. no VBUS comparators. The
+#       i.MX6 OTG driver polls OTGSC for VBUS/session-valid before enumerating and
+#       only gave up at its internal timeout -- a multi-second stall at the boot
+#       splash printing "wait otg vbus change timeout!" (OTG = usb0 / fsl-ehci.0 /
+#       irq 75), paid on every boot. This gives the 0x1A4 block its own read op
+#       reporting a settled host state (ID=0, A-VBUS-Valid, A/B-Session-Valid), so
+#       the driver skips the wait and enumerates as host immediately. Only status
+#       bits; the W1C interrupt bits stay 0 (no spurious OTG IRQ). Verified: the
+#       timeout message is gone, OTG + Host1 register together, USB still mounts.
+#
 #   patches/03-sabrelite-sabresd-sd.patch
 #       The XDJ-RX firmware's real board is SABRE-SD (MACH_TYPE 3980), which
 #       registers ECSPI2 (bus 1) for the panel MCU + audio codecs, on a

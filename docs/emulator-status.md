@@ -13,6 +13,14 @@ Splash (32bpp) + main UI (16bpp RGB565) render; dynamic bpp scanout reads the IP
 display stride. Launch: `qemu/watch.sh`. Uses `nand.img` (the GAL
 DirectFB gfxdriver removed so DirectFB software-renders). Committed.
 
+**Boot-speed:** the multi-second stall at the splash (`wait otg vbus change
+timeout!`, between `ehci_hcd` and `fsl-ehci.0`) was the i.MX6 OTG controller
+waiting for a VBUS/session-valid transition that QEMU's stubbed USB PHY + chipidea
+OTGSC (both read 0) could never deliver, so it only continued at the kernel
+timeout. Fixed by `qemu/patches/12-imx6-otg-vbus-valid.patch` (OTGSC reports a
+settled host VBUS/session); the OTG core now registers with no gap and USB still
+mounts. Firmware untouched.
+
 ## ✅ A. galcore / Vivante GPU — fully initialises (default path)
 The built-in galcore (Vivante) driver now fully initialises on the default boot path:
 the QEMU GPU stub (patch 02) + GC355 VG core + DVFS GPT kick (patch 05) carry it through
