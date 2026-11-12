@@ -6,6 +6,9 @@ XDJ-RX's real SABRE-SD board). The goal: a packaged emulator that takes only the
 Prefer QEMU-side changes over firmware edits; exFAT/FLAC are device features that
 will modify the firmware (the emulator is the dev/test vehicle).
 
+Packaging the above into a self-contained, drag-drop-firmware desktop app is
+planned separately — see [standalone-app-roadmap.md](standalone-app-roadmap.md).
+
 Legend: ✅ done · 🔶 partial/diagnosed · ⬜ investigated, not started · ❌ blocked
 
 ## ✅ Boot to the live UI (unmodified firmware)
