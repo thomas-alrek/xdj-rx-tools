@@ -555,7 +555,7 @@
      .endianness = DEVICE_NATIVE_ENDIAN,
      .valid = { .min_access_size = 4, .max_access_size = 4 },
  };
-@@ -1610,6 +2116,74 @@
+@@ -1610,6 +2116,80 @@
          memory_region_add_subregion(get_system_memory(), IPU1_CM_BASE, &ipu1_cm);
          ipu_irq_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, ipu_irq_fire, NULL);
          /* armed on demand when the driver writes the IPU interrupt registers */
