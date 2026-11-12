@@ -33,8 +33,8 @@
 #     captured file is non-silent at the correct rate and real-time duration.
 #     See docs/audio-handover.md section 8.
 #
---- a/hw/arm/fsl-imx6.c
-+++ b/hw/arm/fsl-imx6.c
+--- a/hw/arm/fsl-imx6.c	2026-11-12 20:24:40
++++ b/hw/arm/fsl-imx6.c	2026-11-12 19:36:28
 @@ -22,6 +22,7 @@
  #include "qemu/osdep.h"
  #include "qapi/error.h"
@@ -43,7 +43,7 @@
  #include "hw/ssi/ssi.h"
  #include "hw/arm/fsl-imx6.h"
  #include "hw/misc/unimp.h"
-@@ -526,6 +527,511 @@
+@@ -526,11 +527,590 @@
  static const MemoryRegionOps ipu_cm_ops = {
      .read = ipu_cm_read,
      .write = ipu_cm_write,
@@ -217,6 +217,27 @@
 +    address_space_stl_le(&address_space_memory, bd_addr, mode & ~SDMA_BD_DONE,
 +                         MEMTXATTRS_UNSPECIFIED, NULL);
 +
++    if (getenv("XDJ_AUDIO_DEBUG")) {                 /* production-rate meter */
++        static uint64_t fr[SDMA_NUM_CH];
++        static int64_t t0;
++        int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
++        if (c->ch < SDMA_NUM_CH) {
++            fr[c->ch] += (mode & 0xffff) / SDMA_FRAME_BYTES;
++        }
++        if (!t0) t0 = now;
++        if (now - t0 >= NANOSECONDS_PER_SECOND) {
++            int q;
++            for (q = 1; q < SDMA_NUM_CH; q++) {
++                if (fr[q]) {
++                    fprintf(stderr, "[sdma-rate] ch%d produced=%llu frames/s "
++                            "(44100=realtime)\n", q, (unsigned long long)fr[q]);
++                }
++                fr[q] = 0;
++            }
++            t0 = now;
++        }
++    }
++
 +    if ((mode & SDMA_BD_WRAP) || ++c->bd_idx >= SDMA_BD_MAX) {
 +        c->bd_idx = 0;
 +    }
@@ -265,6 +286,38 @@
 +        return;
 +    }
 +
++    if (getenv("XDJ_AUDIO_DEBUG") && (dbg & 0x3ff) == 0) {
++        int pch;
++        for (pch = 1; pch < SDMA_NUM_CH; pch++) {
++            uint32_t pb, paddr, pmode, pcnt, pbuf, pk = 0, k;
++            uint8_t sb[16];
++            if (!(s->running & (1u << pch))) {
++                continue;
++            }
++            pb = sdma_bd_base(s, pch);
++            if (!pb) { continue; }
++            paddr = pb + s->chan[pch].bd_idx * SDMA_BD_STRIDE;
++            pmode = address_space_ldl_le(&address_space_memory, paddr,
++                                         MEMTXATTRS_UNSPECIFIED, NULL);
++            pcnt = pmode & 0xffff;
++            pbuf = address_space_ldl_le(&address_space_memory, paddr + 4,
++                                        MEMTXATTRS_UNSPECIFIED, NULL);
++            /* peak over up to 4 frames (32 bytes) of this channel's buffer */
++            for (k = 0; k + 4 <= 32 && k + 4 <= pcnt; k += 4) {
++                uint32_t v;
++                address_space_read(&address_space_memory, pbuf + k,
++                                   MEMTXATTRS_UNSPECIFIED, sb, 4);
++                v = sb[0] | (sb[1] << 8) | (sb[2] << 16);
++                if (v & 0x800000) { v |= 0xff000000; }
++                { int32_t sv = (int32_t)v;
++                  uint32_t a = sv < 0 ? (uint32_t)(-sv) : (uint32_t)sv;
++                  if (a > pk) pk = a; }
++            }
++            fprintf(stderr, "[sdma-ch] ch%d running cnt=%u done=%d bufpeak=%u\n",
++                    pch, pcnt, (int)!!(pmode & SDMA_BD_DONE), pk);
++        }
++    }
++
 +    /* Feed the voice in <=avail chunks, following the master's cyclic buffer at
 +     * (son_idx, son_off).  The frames the backend accepts are THE clock that
 +     * completes periods on every running channel. */
@@ -299,22 +352,25 @@
 +                                   MEMTXATTRS_UNSPECIFIED, NULL);
 +        address_space_read(&address_space_memory, buf + s->son_off,
 +                           MEMTXATTRS_UNSPECIFIED, pcm, chunk);
++        uint32_t peak_abs = 0;
 +        for (i = 0; i + 4 <= chunk; i += 4) {   /* S24_LE slot -> S32 full scale */
 +            uint32_t v = pcm[i] | (pcm[i + 1] << 8) |
 +                         (pcm[i + 2] << 16) | (pcm[i + 3] << 24);
 +            int32_t o = (int32_t)(v << 8);
++            uint32_t a = o < 0 ? (uint32_t)(-(int64_t)o) : (uint32_t)o;
++            if (a > peak_abs) peak_abs = a;
 +            pcm[i]     = o & 0xff;
 +            pcm[i + 1] = (o >> 8) & 0xff;
 +            pcm[i + 2] = (o >> 16) & 0xff;
 +            pcm[i + 3] = (o >> 24) & 0xff;
 +        }
 +        wrote = audio_be_write(s->be, s->voice, pcm, chunk);
-+        if (dbg < 6 && getenv("XDJ_AUDIO_DEBUG")) {
++        if (getenv("XDJ_AUDIO_DEBUG") && (dbg++ & 0x1ff) == 0) {
 +            fprintf(stderr, "[sdma-au] master=%d avail=%d cnt=%u off=%u "
-+                    "chunk=%u wrote=%zu fc=%llu\n", master, avail, cnt,
++                    "chunk=%u wrote=%zu fc=%llu peak=%u/%u\n", master, avail, cnt,
 +                    s->son_off, chunk, wrote,
-+                    (unsigned long long)s->frame_clock);
-+            dbg++;
++                    (unsigned long long)s->frame_clock,
++                    peak_abs, (unsigned)0x7fffffff);
 +        }
 +        if (!wrote) {
 +            break;                       /* backend buffer full */
@@ -329,13 +385,31 @@
 +            }
 +        }
 +
-+        /* Complete every running cyclic channel now a period behind the clock. */
++        /* Complete every running cyclic channel now a period behind the clock,
++         * but ONLY over periods the guest has actually produced (BD_DONE set).
++         * The always-on master stream (silence) advances frame_clock at real
++         * time, but a deck channel that fills slower (MP3 decode) must not have
++         * its hw_ptr dragged past appl_ptr -- on the tiny 2-period ALSA ring
++         * that is an instant underrun, which is the xrun storm that keeps rbp
++         * from ever delivering PCM.  Gating on the channel's own BD_DONE keeps
++         * hw_ptr <= appl_ptr, so no underrun and the stream flows. */
 +        for (ch = 1; ch < SDMA_NUM_CH; ch++) {
 +            SdmaChan *c = &s->chan[ch];
++            uint32_t cbase;
 +            if (!(s->running & (1u << ch)) || !c->period_frames) {
 +                continue;
 +            }
++            cbase = sdma_bd_base(s, ch);
++            if (!cbase) {
++                continue;
++            }
 +            while (s->frame_clock - c->frames_done >= c->period_frames) {
++                uint32_t cmode = address_space_ldl_le(&address_space_memory,
++                        cbase + c->bd_idx * SDMA_BD_STRIDE,
++                        MEMTXATTRS_UNSPECIFIED, NULL);
++                if (!(cmode & SDMA_BD_DONE)) {
++                    break;               /* not produced yet: don't outrun it */
++                }
 +                sdma_consume_period(s, c);
 +                c->frames_done += c->period_frames;
 +                s->intr |= (1u << ch);
@@ -507,11 +581,11 @@
 +static const MemoryRegionOps sdma_ops = {
 +    .read = sdma_read,
 +    .write = sdma_write,
-+    .endianness = DEVICE_NATIVE_ENDIAN,
-+    .valid = { .min_access_size = 4, .max_access_size = 4 },
-+};
-+
-+/*
+     .endianness = DEVICE_NATIVE_ENDIAN,
+     .valid = { .min_access_size = 4, .max_access_size = 4 },
+ };
+ 
+ /*
 + * SSI (imx-ssi) register file: RAM-backed so every config write the ASoC
 + * cpu-dai makes is retained and reads back, with SISR reporting the TX FIFO
 + * empty so nothing that polls it spins.  No audio behaviour is needed here --
@@ -552,10 +626,15 @@
 +static const MemoryRegionOps ssi_ops = {
 +    .read = ssi_read,
 +    .write = ssi_write,
-     .endianness = DEVICE_NATIVE_ENDIAN,
-     .valid = { .min_access_size = 4, .max_access_size = 4 },
- };
-@@ -1610,6 +2116,80 @@
++    .endianness = DEVICE_NATIVE_ENDIAN,
++    .valid = { .min_access_size = 4, .max_access_size = 4 },
++};
++
++/*
+  * XDJ-RX front-panel microcontroller ("Subucom") - SPI slave stub.
+  *
+  * rbp handshakes with the panel MCU over /dev/subucom_spi1.0 (an ECSPI slave,
+@@ -1610,6 +2190,74 @@
          memory_region_add_subregion(get_system_memory(), IPU1_CM_BASE, &ipu1_cm);
          ipu_irq_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, ipu_irq_fire, NULL);
          /* armed on demand when the driver writes the IPU interrupt registers */
@@ -590,15 +669,9 @@
 +        }
 +        g_sdma.irq = qdev_get_gpio_in(gic, FSL_IMX6_SDMA_IRQ);
 +        {   /* Option B: which SDMA channel is sonified to the output voice.
-+             * Default = 1: SDMA channel 1 is the XDJ-RX MasterOut (pcm0) and is
-+             * deterministic per firmware -- verified by playing a loaded track
-+             * through the mixer and watching ch1's cyclic-buffer peak track the
-+             * master mix while ch2..6 stayed silent (the old -1 "first stream
-+             * started" default grabbed ch3 = a silent booth/phones/input stream,
-+             * so nothing was audible). XDJ_AUDIO_OUT_CH overrides for diagnostics;
-+             * -1 restores the legacy first-started auto-pick. */
++             * -1 = auto (first stream started); XDJ_AUDIO_OUT_CH pins it. */
 +            const char *oc = getenv("XDJ_AUDIO_OUT_CH");
-+            g_sdma.out_ch = oc ? atoi(oc) : 1;
++            g_sdma.out_ch = oc ? atoi(oc) : 1;  /* default ch1 = MasterOut */
 +        }
 +        for (ch = 0; ch < SDMA_NUM_CH; ch++) {
 +            g_sdma.chan[ch].s = &g_sdma;
