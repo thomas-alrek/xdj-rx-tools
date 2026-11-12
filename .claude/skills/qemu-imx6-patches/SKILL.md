@@ -16,7 +16,30 @@ trampoline + hand-built ATAGs (`qemu_prepare.py` builds `tramp.bin`/`atags.bin`/
 - **Incremental rebuild** after editing a source file (e.g. `hw/arm/fsl-imx6.c`):
   `ninja -C build/qemu-src/qemu-11.1.0/build qemu-system-arm` (~30 s). The build tree is
   git-ignored — edit the **patch** for the record *and* the build-tree source to test, or
-  regenerate the patch from the diff.
+  regenerate the patch from the diff (see **Regenerating & verifying a patch**).
+
+## Regenerating & verifying a patch (don't hand-edit hunk counts)
+The only `patch` on this Mac is **`/usr/bin/patch` (Apple 2.0)**, which `build-qemu.sh`
+uses — it is **strict**: a wrong `@@ -a,b +c,d @@` line count is a hard `malformed patch
+at line N` error (not a fuzzy apply), which **silently breaks every later patch and the
+from-scratch build**. So never hand-edit hunks or their counts — regenerate with `diff -u`
+(it computes counts correctly). To regenerate patch *N* from the live build tree:
+- **after** = the live tree with patch *N* applied. If later patches touch the same file,
+  recover this by **reverse-applying the later patches** to the live source
+  (`patch -R <file> < patches/M.patch` for M>N) — not by hand.
+- **before** = pristine QEMU + patches `01..N-1`: `tar xf build/qemu-src/qemu-11.1.0.tar.xz`
+  to a temp dir, apply `01..N-1`, grab the file.
+- body = `diff -u before after` with the paths rewritten to `a/…` `b/…`; prepend the patch's
+  existing header prose (everything before the first `--- a/`).
+
+**Verify before committing (all three):**
+1. **Round-trip:** `before + newpatch` == `after` (byte-identical).
+2. **Full series:** fresh tarball + `for p in qemu/patches/*.patch; do /usr/bin/patch -p1 <$p; done`
+   applies clean, and the result == the live build tree byte-for-byte (**drift check** — the
+   git-ignored build tree can diverge from committed patches; e.g. patch 11's `XDJ_AUDIO_DEBUG`
+   meters were once live-only).
+3. **From scratch:** that fresh tree `configure`s + `ninja qemu-system-arm` with no errors.
+Regenerate after *any* build-tree edit so the committed patches reproduce the running binary.
 
 ## The patches (`qemu/patches/`)
 | # | file | what it does |
@@ -31,7 +54,9 @@ trampoline + hand-built ATAGs (`qemu_prepare.py` builds `tramp.bin`/`atags.bin`/
 | 08 | `usb-highspeed-hub` | a **USB-2.0** hub (stock `usb-hub` is USB-1.1 and HOST1 rejects it) |
 | 09 | `imx6-mainucom-keys` | drives i.MX6 GPIO lines rbp reads via `/dev/gpiodrv` (top-panel source/DECK keys); `g_xdj_gpio[8]` + `/tmp/mainkey` (momentary) + `psr-reset` idle levels |
 | 10 | `imx6-usbnc-wakeup` | USBNC OWIR wakeup so a **post-boot** USB insert resumes a suspended HOST1 and enumerates |
-| 11 | `imx6-audio-sdma-ssi` | minimal **SDMA** engine + RAM-backed **SSI1/2/3 + AUDMUX** so imx-sdma/ASoC/ALSA run; a host **sonifier** pinned to SDMA **ch1=MasterOut** (`XDJ_AUDIO_OUT_CH`/`XDJ_AUDIO_DEBUG`) emits real audio to the host |
+| 11 | `imx6-audio-sdma-ssi` | minimal **SDMA** engine + RAM-backed **SSI1/2/3 + AUDMUX** so imx-sdma/ASoC/ALSA run; a host **sonifier** pinned to SDMA **ch1=MasterOut** (`XDJ_AUDIO_OUT_CH`/`XDJ_AUDIO_DEBUG` peak/rate meters) emits real audio to the host |
+| 12 | `imx6-otg-vbus-valid` | chipidea **OTGSC** (0x1A4) reports a settled host VBUS/session so the OTG driver skips its multi-second VBUS wait (`wait otg vbus change timeout!`) at the splash |
+| 13 | `imx6-subucom-autolevel` | **auto-levels** the mixer on boot (both ch → DECK + unity-ish gains) so a loaded deck is audible with no manual inject; MERGES per-control with `/tmp/subucom_ctrl` (panel still overrides); `XDJ_AUTOLEVEL=0`, `XDJ_AUTOLEVEL_DELAY_MS` |
 
 ## Key machine file
 `build/qemu-src/qemu-11.1.0/hw/arm/fsl-imx6.c` holds most hooks: the per-frame sub-ucom hook

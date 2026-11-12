@@ -70,6 +70,21 @@ Audio is modelled (SDMA+SSI+AUDMUX, patch 11); the sonifier is pinned to **SDMA 
 MasterOut** (`XDJ_AUDIO_OUT_CH` overrides, `XDJ_AUDIO_DEBUG=1` prints per-channel peaks). For a
 loaded deck to be audible you need **routing = DECK** (source switch `B 33 80`/`B 43 80`) **and**
 gains up (on-air gate `FUN_00065028`). Load a track via the USB2 browser (track-load works).
+**Auto-level (patch 13) now sets routing=DECK + gains automatically ~4 s after rbp starts** — so
+a loaded deck just plays. Idle routing is therefore **DECK by default** now (not LINE); disable
+with `XDJ_AUTOLEVEL=0` (e.g. to test LINE/PHONO), tune the settle with `XDJ_AUTOLEVEL_DELAY_MS`.
+
+### Deck loaded but SILENT? (debug recipe)
+1. **Stray `/tmp/subucom_ctrl`** is the #1 cause — any hold there (even an unrelated leftover
+   like the web panel's browse `A 54 0`) overrides auto-level per-control; if it sets routing or a
+   gain it can mute the deck. `rm /tmp/subucom_ctrl` and auto-level resumes. (Merge model means an
+   *unrelated* hold no longer silences it — but a stale build predating patch 13's merge can.)
+2. **`XDJ_AUDIO_DEBUG=1` peaks** (in the qemu log): master `[sdma-au] peak=0` = genuine internal
+   silence (routing/gain/gate), while `peak`≫0 = audio IS produced → the gap is host output.
+   All `[sdma-ch] bufpeak=0` incl. deck channels = no PCM reaching the engine (not playing, or the
+   decode→mixer path). ~44100 frames/s on every channel = the clock is fine.
+3. **`tables.py` routing** — `ch0 routed_src` must be `0` (DECK), not `3` (LINE).
+4. Confirm the deck is actually **playing** (REMAIN counting down), not just loaded/cued.
 
 ## Read audio routing (verify)
 `python3 tools/xdj-panel/debug/tables.py` → source table `0x107ac88`, channel table `0x107acdc`
