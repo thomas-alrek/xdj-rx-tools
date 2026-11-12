@@ -1,4 +1,4 @@
-# XDJ-RX subucom frame → control map (authoritative, from the firmware's section decoders)
+# XDJ-RX sub-ucom frame → control map (authoritative, from the firmware's section decoders)
 
 The XDJ-RX panel MCU sends ONE 100-byte frame over `/dev/subucom_spi1.0` (single channel —
 there is no SUB channel; every control is in this frame). rbp decodes it in three decoders,
@@ -76,18 +76,36 @@ inj = `b <rbp_off> <mask>` for buttons, `A <rbp_off> <val16>` for analog.
 | 0x04 / 0x0a (+ 0x14/0x1a d2) | — | TEMPO fader (dual complementary) | ✅ |
 | 0x24 / 0x34 | 0x5008 | EQ HI (d1/d2) | ◆ |
 | 0x26 / 0x36 | 0x5007 | TRIM | ○ (audio-only) |
-| 0x28 / 0x38 | 0x500a | EQ MID | ◆ |
-| 0x2a / 0x3a | 0x5009 | EQ LOW | ◆ |
-| 0x2c / 0x3c | 0x5011 | COLOR / FILTER | ○ |
+| 0x28 / 0x38 | 0x500a | EQ LOW | ◆ (was mislabelled MID) |
+| 0x2a / 0x3a | 0x5009 | EQ MID | ◆ (was mislabelled LOW) |
+| **0x2c / 0x3c** | **0x5011** | **CH FADER (d1/d2)** | ◆ (was mislabelled COLOR — see 2026-11-12 note) |
+| 0x2e / 0x3e | 0x508b | COLOR / FILTER pot | ◆ (block+0xa) |
 | 0x48 | 0x440c | BOOTH MONITOR | ○ |
 | 0x4a | 0x4405 | HEADPHONE MIXING | ◆ (RX3-match) |
 | 0x4c | 0x448b | HEADPHONE LEVEL | ○ |
 | 0x4e | 0x600f | CROSSFADER | ✅ (offset, 0x600f) |
 | 0x50 | 0x4403 | MASTER LEVEL | ◆ (RX3-match) |
 | 0x52 | 0x4402 | BOOTH/MASTER-BAL | ○ |
-| 0x44 / 0x46 | 0x805/0x804 | CH1/CH2 fader OR MIC1/2 (ambiguous) | ○ |
+| 0x44 / 0x46 | 0x805/0x804 | MIC1 / MIC2 level | ○ (CH-fader ruled out — it's 0x2c/0x3c) |
 
 *(All analog are audio-only — no emulator feedback — so these are firmware-decoded, not screen-verified.)*
+
+**2026-11-12 — per-channel mixer block decoded from the frame decoder (static RE).** The
+per-channel analog block is handled by the function at **VA 0x282800** (`push {r4,r5,r6,r7,lr}`;
+r5=cur-frame block ptr, r4=prev; emits on change via `FUN_002adee8(obj, code, value16, flag)`).
+It reads **block-relative** halfwords: EQ-HI block+0 (0x5008), TRIM block+2 (0x5007), EQ-LOW
+block+4 (0x500a), EQ-MID block+6 (0x5009), **CH FADER block+8 (0x5011)**, COLOR block+0xa
+(0x508b). Block base = **0x24 (ch1) / 0x34 (ch2)**, pinned by TRIM block+2 = the confirmed abs
+0x26/0x36. ⇒ **CH FADER = abs 0x2c/0x3c** (this corrects the long-standing "0x2c = COLOR pot"
+label; COLOR is 0x2e/0x3e). The master/booth/HP/**crossfader** block is the next function (VA
+0x282a98), base 0x44, crossfader 0x600f at block+0xa = abs 0x4e (unchanged). This matches the
+XDJ-RX3 field grouping (faders a distinct group from the EQ/trim block — see
+docs/rx3-panel-crossref.md). **Open:** a prior boot-frame sweep of 0x0c–0x5c did not move
+`ch+0x144`; with 0x2c now identified, retest = inject 16-bit **1023 at 0x2c** (and 0x3c) and
+watch `ch+0x144` via gdb. If still 0, the gate is the code→`setChannelFader` dispatch (the
+decoder emits 0x5011 only on *change*; the first accepted frame transitions via the
+complement-seeded history, so runtime injection after boot may need a value *different from the
+stored sample* to emit).
 
 ## Analog (16-bit LE, inj `A <off> <val16>`, value/1023)
 - Deck1 continuous @ rbp 0x04,0x06,0x08,0x0a,0x0c,0x0e,0x12 — TEMPO fader = **0x04 (neg) + 0x0a
@@ -96,7 +114,7 @@ inj = `b <rbp_off> <mask>` for buttons, `A <rbp_off> <val16>` for analog.
   base ~0x24+, codes 0x50xx/0x60xx. *(offsets being finalized — no LCD feedback, static-only.)*
 
 ## Coverage ceiling — why 100% of *panel controls* ≠ 100% subucom-injectable
-Of the XDJ-RX's physical controls, these are **NOT subucom buttons** in this 100-byte frame
+Of the XDJ-RX's physical controls, these are **NOT sub-ucom buttons** in this 100-byte frame
 (verified by decoding the whole frame — no code/slot exists for them):
 - **Slide switches** (3-position, read as GPIO/status levels, not momentary codes): DECK1/DECK2
   ↔ PHONO/LINE, CROSSFADER CURVE, MIC OFF/ON/TALKOVER.
@@ -105,7 +123,7 @@ Of the XDJ-RX's physical controls, these are **NOT subucom buttons** in this 100
 - **MAIN-UCOM GPIO** (top panel, same path as the source keys, wired via `/tmp/mainkey`):
   rekordbox/MIDI/USB1/USB2 (done), MASTER REC/WAKE UP, TRACK MARK.
 - **Not a set of buttons**: SOUND COLOR FX NOISE/GATE/CRUSH/FILTER (the per-channel COLOR pot at
-  rbp 0x2c/0x3c is the only subucom part); LOOP SLICE (the RX has exactly 4 pad modes:
+  rbp 0x2e/0x3e is the only sub-ucom part; note 0x2c/0x3c is CH FADER, not COLOR); LOOP SLICE (the RX has exactly 4 pad modes:
   HOT CUE/BEAT LOOP/SLIP LOOP/BEAT JUMP = codes 0x4113/14/15/16).
 - **Separate protocol**: JOG-WHEEL **rotation** (jog *touch* is a normal deck button; rotation is
   not in this frame — see the RX3 "JogCom" notes).
@@ -118,7 +136,7 @@ shows no LCD feedback, so the exact label per bit can't be fixed in the emulator
 ## Not in this frame / unresolved
 - **JOG rotation**: a separate protocol (not this 100-byte frame); unmapped.
 - Top-panel source keys (rekordbox/MIDI/USB1/USB2/DECK1-2/TIME MODE) are **MAIN-UCOM GPIOs**
-  (158–161 etc.), not subucom — already wired via `/tmp/mainkey`.
+  (158–161 etc.), not sub-ucom — already wired via `/tmp/mainkey`.
 
 ## PLAY works but playback position does not advance (audio DMA not emulated)
 
@@ -130,7 +148,7 @@ time stays frozen** (e.g. `02:56.640`, unchanged 2.5 s later). The track never p
 emulator has no backend for:**
 
 - The QEMU machine (`hw/arm/fsl-imx6.c`) models **no audio peripheral** — the only
-  SSI present is the *subucom panel SPI slave*. There is no i.MX6 **SSI audio** path
+  SSI present is the *sub-ucom panel SPI slave*. There is no i.MX6 **SSI audio** path
   and no **SDMA audio** channels.
 - On the guest, ALSA enumerates (`card0: ak4387-audio`, codec + `imx-ssi` map OK) but
   the DMA platform fails: `dmesg` shows **`asoc: platform imx-pcm-audio.0 hw params

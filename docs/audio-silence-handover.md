@@ -26,7 +26,7 @@ ever `memset` to 0 — the deck's 0.6 is never summed into them, so the master t
 ALSA/SDMA is silence. The leading hypothesis (shared with the owner) is that a mix gain is at
 0 (Deck1 trim / channel fader / EQ / crossfader / master level) **or** the deck's per-channel
 buffer is never wired into the master router. Those analog mixer controls arrive via the
-subucom MCU; if the emulator never delivers their position they may sit at 0. **Blocker:** we
+sub-ucom MCU; if the emulator never delivers their position they may sit at 0. **Blocker:** we
 do not yet have reliable control of the analog gain controls, so the "sweep each control and
 watch what unmutes" test can't be run yet — wiring/driving those controls is a prerequisite
 (see §4).
@@ -145,7 +145,7 @@ the playengine, and the loss is before ALSA.
   (`FUN_0003c3bc`) is the **hot-cue buffer cacher** ("ERR HotCueBuffer store",
   `FUN_000393d4`→`FUN_0003b46c`). `FUN_0003b46c` fired **0 times** in 8s of playback; it is
   not the realtime deck decoder.
-- ⚠️ "Mixer level controls ruled out (set via console/subucom, no effect)" → re-open this.
+- ⚠️ "Mixer level controls ruled out (set via console/sub-ucom, no effect)" → re-open this.
   Those tests were made under the wrong model; the mix gains are now the prime suspect (§4).
   The "callback output float buffers are 0.0" observation is consistent with the master mix
   being zero and does NOT contradict the deck producing 0.6 upstream.
@@ -171,7 +171,7 @@ Live values on a *playing* deck: **MASTER LEVEL `+0x4c` = 0.0**, deck ch0/ch1
 into master → silence. (The two decks are the channels with xfader-assign 1 and 2.)
 
 **Root cause (code-level, exactly the owner's hypothesis):** the harness
-`memset(rbp, 0, sizeof(rbp))` (fsl-imx6.c ~L1329) starts every subucom analog control
+`memset(rbp, 0, sizeof(rbp))` (fsl-imx6.c ~L1329) starts every sub-ucom analog control
 at 0, and `tools/xdj-panel/panel.html` only defines EQ/trim/color/crossfader knobs
 (all `val:512`) — it is **missing the channel-fader and master-level controls
 entirely** — so those are never delivered and stay 0. rbp reads the control **once**
@@ -181,31 +181,55 @@ entirely** — so those are never delivered and stay 0. rbp reads the control **
 mixer holds present in `/tmp/subucom_ctrl` from frame 1 drove the deck **channel level
 `+0xd0` from 0.0 → 0.5** (via the trim hold `A 26 0200`). So delivering a realistic
 value in the boot frame *does* propagate into rbp's gains — for the controls that live
-in the subucom analog frame.
+in the sub-ucom analog frame.
 
-**The remaining gap — the two CRITICAL controls are NOT in the subucom analog frame.**
+**The remaining gap — the two CRITICAL controls are NOT in the sub-ucom analog frame.**
 Setting `master+0x4c` and `ch+0x144` via gdb flips the on-air flags to 1 but the master
 buffer stays 0 (there are separate audio-summation + EQ-IIR gain copies, also derived
 from the 0 controls). And a full sweep of frame offsets `0x0c..0x5c` moved **neither**
 `master+0x4c` nor `ch+0x144` (runtime hold changes also don't propagate — boot-latched
-only). So **MASTER LEVEL and CH FADER come from a different source than the subucom
+only). So **MASTER LEVEL and CH FADER come from a different source than the sub-ucom
 analog section** — almost certainly the i.MX6 **SAR-ADC** (the control map's "separate
 ADC path", docs/xdj-rx-control-map.md ~L103), which QEMU does not model → reads 0.
 
 **⇒ Where master/fader actually come from (session-3 narrowing):**
 - They go through `MixerSkeleton::MasterAttHandler` / `SubRxFormat::tMixerData` — i.e.
-  they ARE **subucom** controls, not internal defaults.
+  they ARE **sub-ucom** controls, not internal defaults.
 - But a boot-time sweep of EVERY analog offset `0x40..0x60` (and the guessed
   0x44/0x46/0x4a) in the modeled panel frame drove **neither** `master+0x4c` NOR the
   deck `fader+0x144` — whereas the EQ/trim at 0x24-0x3a DID (deck level 0→0.5). And the
   i.MX6 **SAR-ADC is not modeled** in the harness, yet rbp has **no ADC strings/open**
   → SAR-ADC is unlikely.
-- ⇒ **master level + channel fader are carried on a subucom message/channel the harness
-  does NOT present.** The harness models ONE SPI frame (EUP `subucom_spi1.0`); the RX
-  format is a *union* of message types (`SubRxFormat::tMixerData` is one) and the device
-  also has a **second SPI channel `subucom_spi2.0`** (control-map notes PLAY/CUE/pads +
-  likely the main faders ride it). Our frame carries the keys + EQ/trim/crossfader but
-  not the master-level / channel-fader fields.
+- ⇒ master level + channel fader are **sub-ucom-carried analog controls** that our
+  boot-frame sweep did not reach.
+
+> **CORRECTION (2026-11-12, RX3 cross-ref — supersedes the "second SPI channel" guess
+> that was here).** An earlier version of this bullet guessed master/fader ride a
+> *second* SPI channel `subucom_spi2.0` the harness never presents. **Disproven:** our
+> `rbp` strings reference **only `/dev/subucom_spi1.0`** — there is no `spi2` string
+> anywhere in the binary (`strings rbp | grep spi` → just `subucom_spi1.0`). Our 2015
+> XDJ-RX has a **single panel SPI frame carrying every control** (as
+> `docs/subucom-frame-map.md` already states). So the fader/crossfader bytes **are in
+> our one 100-byte frame** — we were hunting a channel that does not exist on this model.
+>
+> The *later* XDJ-RX3 (`github.com/nzoschke/xdj-emu`) **does** split its panel into two
+> channels — EUP `subucom_spi1.0` (100 B) + SUB `subucom_spi2.0` (104 B / 28 B logical) —
+> and that is where the spi2 idea leaked in from. On the RX3 the channel **faders ride
+> SUB offsets 14/18** and the **crossfader SUB offset 22** (16-bit LE ÷1023), while
+> **trim/EQ ride EUP** (per-channel mixer blocks at 36/52 = our `0x24/0x34`, EQ-hi at
+> block+0, trim at block+2 — an exact structural match to our working fields). The RX3
+> runs the same unmodified 1.20 `rbp` family, so the *field semantics* transfer even
+> though it splits them across two frames and we concatenate them into one. Takeaway:
+> **the fader + crossfader are a field group distinct from the EQ/trim blocks** — that is
+> why our `0x24–0x3a` sweep moved trim/EQ but never `ch+0x144`. Find those fields in the
+> remaining bytes of our single frame; stop looking for a second channel.
+>
+> RX3 also independently confirms our CRC (poly `0x8408`, init `0xffff`, **per-32-bit-word
+> byte reversal before CRC16** — our patch 02) and notes frame **bytes 2–3 feed the
+> `tStaticPanelInfo` version slots** (a likely fix for our stuck `Ver --.--` SUB word
+> `DAT_0123e054`). See memory `[[rx3-emu-crossref]]`. RX3's own *audio transport* is
+> **not** applicable (virtio-snd dummy card, not real SSI/SDMA) and is itself not working
+> (XRUN recovery, no continuous app audio) — our patch-11 real-codec path is further along.
 
 **⇒ The fix (two steps):**
 1. Decode **`SubRxFormat::tMixerData`** (find its function via `MixerSkeleton`/the
@@ -236,7 +260,7 @@ sum/route the deck into the master and show why it emits 0. Two hypotheses:
    assign, or master level. In the `Player` render the deck is summed with a crossfade coeff
    at `source+0x48`; the channel/master routers in `FUN_00065270`/`FUN_00065028` apply the
    fader/assign. If any is 0 the deck sums in at ×0. These are **analog** controls read via
-   the subucom MCU analog section — if the emulator never delivers their position they may
+   the sub-ucom MCU analog section — if the emulator never delivers their position they may
    default to 0 (= the emulation gap).
 2. **Buffer-wiring / "shared buffer" gap**: the deck's per-channel buffer `0x02abfd08` is
    never linked into the master router's input list (so the router sums only silent channels),
@@ -249,7 +273,7 @@ sum/route the deck into the master and show why it emits 0. Two hypotheses:
   `0x02abfd08` (deck, expect ~0.6), the master buffer `0x02abcec8`, and the SDMA peak. The
   control that flips the master non-zero is the gate. **Prerequisite: reliable control of the
   analog mixer gains — not available yet** (owner, 2026-11-11). Wiring/driving the trim/fader/
-  EQ/crossfader/master via the subucom analog continuous section is step 0.
+  EQ/crossfader/master via the sub-ucom analog continuous section is step 0.
 - **Find the TRUE master buffer.** It is unconfirmed whether `0x02abcec8` (param_4[0]) is the
   buffer the ALSAThread actually sends to SDMA MasterOut, or a scratch/legacy buffer. Confirm
   by write-watching the SDMA MasterOut BD buffer (or the ALSA mmap region for pcm0p) to catch
@@ -343,7 +367,7 @@ reinterpreted as a file-offset (watch the `selection` field).
 
 ## Session (2026-11-11, LIVE runtime proof via gdb inferior-calls) — mixer 0-init is NECESSARY but NOT SUFFICIENT; the real remaining gap is upstream deck-audio content
 
-**Method.** Instead of synthesising subucom frames, drove the firmware's own DjEngineIF
+**Method.** Instead of synthesising sub-ucom frames, drove the firmware's own DjEngineIF
 setters *in rbp's context* over the QEMU gdbstub: break at the on-air gate `FUN_00065028`
 (r0 = MixerEngine singleton), then inferior-call the leaf setters with the ELF entry point
 (`0x1dea4`, runs once) as the return trap. Soft-float ABI (`e_flags=0x05000002`, no hard-float
@@ -412,8 +436,8 @@ indirection down. i.e. the output path is a **nested chain of objects each with 
 
 **CONCLUSION / STRATEGY.** Hand-setting gains over gdb is whack-a-mole through an unbounded nested
 chain (master→input EQ/fader/level/xfader→output-channel→its sub-renderer→…). Every level is 0
-because the real analog mixer state arrives as a **subucom mixer-data message the harness never
-delivers**. The right fix is NOT more gdb pokes — it is to **deliver that subucom message** (decode
+because the real analog mixer state arrives as a **sub-ucom mixer-data message the harness never
+delivers**. The right fix is NOT more gdb pokes — it is to **deliver that sub-ucom message** (decode
 `SubRxFormat::tMixerData`; see the master/fader note earlier) so rbp initialises the whole mix
 chain coherently, exactly as the hardware does; or, failing that, model sane defaults. The gdb
 inferior-call method is proven and reusable for verification, but the production fix is the message.
