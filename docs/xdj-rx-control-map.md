@@ -1,6 +1,6 @@
 # XDJ-RX panel control map
 
-Status: **2026-11-09.** Empirical map of the Subucom panel frame → XDJ-RX physical
+Status: **2026-11-09.** Empirical map of the Sub-ucom panel frame → XDJ-RX physical
 controls, built by injecting controls into the emulated panel and observing the live
 UI (md5-diffed screendumps). Pairs the *verified-visual* controls (below) with the
 static byte/bit→code tables in [`rbp-and-panel-protocol.md`](rbp-and-panel-protocol.md)
@@ -9,7 +9,7 @@ static byte/bit→code tables in [`rbp-and-panel-protocol.md`](rbp-and-panel-pro
 
 ## How this was derived
 
-The QEMU `xdj-subucom` slave builds a 100-byte frame in `rbp_buf` coordinates (control
+The QEMU `xdj-sub-ucom` slave builds a 100-byte frame in `rbp_buf` coordinates (control
 sections at `0x04/0x14/0x24/0x34/0x44`, CRC-16/X-25 at `[0x62]`) and injects a control
 from host `/tmp/subucom_ctrl`:
 
@@ -42,7 +42,7 @@ analog); `post≠pre` = a sticky toggle.
 | `[0x12]` bit5 (`0x20`) / `[0x22]` bit5 | **DECK 1 / DECK 2 SYNC** | deck shows `SYNC ON` (red) | button |
 | `[0x5f]` bit0 (`0x01`) | **MENU** (code 0x20a) | opens the SORT menu | button (static-decode + screen-verified) |
 
-**Single subucom channel:** rbp opens only `/dev/subucom_spi1.0` — ALL controls (incl. PLAY/CUE/
+**Single sub-ucom channel:** rbp opens only `/dev/subucom_spi1.0` — ALL controls (incl. PLAY/CUE/
 pads/faders) are on the one 100-byte frame; no SUB channel, so no harness change is needed to drive
 any control. The authoritative byte/bit→control map lives in the firmware's section decoders:
 **center/nav keys** = unrolled code-emitting decoder `~0x282c00–0x2837xx` (`rbp_off = 0x44 +
@@ -265,21 +265,21 @@ On a FRESH instance (USB solved, library loaded, NOT harness-degraded):
 - **Control code table @ `0x427700`** (10 × u32): `0x4405 0x440c 0x4403 0x4402 0x420b 0x4206`
   **`0x4205`**`(@+0x18) 0x4488 0x430c 0x420c`; `0x427728` begins a `PcControlLedData` object
   (RTTI `N2ui16PcControlLedDataE` @0x427740). Decoder matches frame elements against these.
-- **STILL BLOCKED:** synthesizing the encoder's subucom frame field. `FUN_002adfa0` did NOT fire for
+- **STILL BLOCKED:** synthesizing the encoder's sub-ucom frame field. `FUN_002adfa0` did NOT fire for
   any analog `A <off> 0200` injection across rbp off `0x44–0x60`, and `A`/`b` injection into the
-  browser dispatcher collapses to fixed codes (`0x409`/`0x410a`) regardless of offset. The subucom
+  browser dispatcher collapses to fixed codes (`0x409`/`0x410a`) regardless of offset. The sub-ucom
   frame is a **structured per-control protocol** (descriptor/code-table + per-element change word
   `&0x8000` + per-word byte-swap + CRC), NOT a flat byte array — so you can't poke a byte and get the
   encoder. **Next step to finish:** decode `FUN_0028a7b8`'s pre-line-646 frame→state mapping and
   `FUN_00286e1c(dev,idx)` to learn the encoder control's exact frame field (offset + signed-counter/
-  quadrature encoding); then extend the QEMU subucom harness to present that field as a changing
+  quadrature encoding); then extend the QEMU sub-ucom harness to present that field as a changing
   signed value. Clean probe to confirm once you have a candidate: `Z1,2adfa0,4` must fire with the
   injection (it's encoder-only), and the on-screen highlight must move ARTIST→ALBUM.
 
 ### Session 4 (2026-11-09, static Ghidra/REA deep-dive) — frame is BIT-PACKED; locator tables found; prior "decoder/oracle" labels corrected
-Fully traced the subucom control-object machinery in rbp (REA ghidra provider, real VAs).
+Fully traced the sub-ucom control-object machinery in rbp (REA ghidra provider, real VAs).
 
-**Headline: the subucom frame is a BIT-PACKED stream, not a byte array.** Every control object
+**Headline: the sub-ucom frame is a BIT-PACKED stream, not a byte array.** Every control object
 carries a 2-byte **bit-locator** plus a 32-bit descriptor:
 - `obj+0x1d` = **b1** (type/width byte; e.g. `0x90`, `0xb0`, `0xb4`, or `~(~deck & 0x6f)` for buttons)
 - `obj+0x1e` = **b2** (bit/field position)
@@ -301,7 +301,7 @@ entry gives `b1=0xb0, b2=0x4f/0x60` — a DIFFERENT path NOT used by the registr
 **CORRECTION to Sessions 2–3 (important):** `FUN_0028a7b8`, `FUN_00286e1c`, `FUN_0028931c`,
 `FUN_002adfa0`, `FUN_002adee8` are the control-object **REGISTRY BUILDERS / templates**, built
 **ONCE** by the decoder ctor **`FUN_0028dfdc` @ `0x28dfdc`** (object vtable `DAT_00427540`; owned by
-subucom mgr `FUN_00221d78` @ `0x221d78`). They are **NOT per-frame decoders**, and **`FUN_002adfa0`
+sub-ucom mgr `FUN_00221d78` @ `0x221d78`). They are **NOT per-frame decoders**, and **`FUN_002adfa0`
 is NOT a runtime "encoder oracle"** — its ONLY caller is the init-time builder `FUN_0028a7b8`
 (verified via `procedure_callers`). So the old `Z1,2adfa0,4` oracle premise is wrong (it fires at
 init, not per rotation). `FUN_0028e420` (decoder vtable slot 0) is the decoder **destructor** (frees
@@ -313,7 +313,7 @@ only COMPUTE locators from (code,deck) — they do not read the frame either.
 `b1`/`b2` against the raw frame, set the changed-flag + signed delta, and dispatch via
 `IKeyManager::sendKey` (`FUN_002a47c0`) → `FUN_0026ae7c`. It is reached indirectly (via `obj->vtable`
 or from the SPI-receive/CRC path), so call-graph/xref walking did not surface it. Leads to try next:
-callers of the CRC reverser `FUN_0028259c`, and the subucom RX thread that reads `/dev/subucom_spi1.0`.
+callers of the CRC reverser `FUN_0028259c`, and the sub-ucom RX thread that reads `/dev/subucom_spi1.0`.
 
 **Rosetta Stone data points (verified-visual controls ↔ their `FUN_002ad060` locators):**
 | code | control (verified frame) | b1 | b2 |
@@ -503,7 +503,7 @@ absent cycling, monotonic ramp). What actually happens, from live gdb + accumula
   `DAT_017f3234` (observed = 0 after every pattern)** ⇒ no net scroll. This is the real reason,
   deeper than "quiescence": rise/fall cancellation, because I can only drive one phase.
 - **Pure injection (no gdb) fires NO rotate events at all** (acc stays 0); events only register
-  while the dispatcher `FUN_0026ae7c` is gdb-breakpointed (CPU-stop gating of subucom delivery)
+  while the dispatcher `FUN_0026ae7c` is gdb-breakpointed (CPU-stop gating of sub-ucom delivery)
   — an emulator-timing artifact, not a userspace-drivable path.
 - **The scroll applier `FUN_000e159c` is DORMANT on a fresh browser** (confirmed: no self-tick
   in 1.5 s; push works because it is handled immediately in the dispatcher, the rotate needs the
@@ -516,7 +516,7 @@ absent cycling, monotonic ramp). What actually happens, from live gdb + accumula
 
 **Faithful fix (real blocker, needs HARNESS work — rbp stays unpatched):** the browse encoder is
 an incremental/quadrature device; one injectable phase cannot produce monotonic same-sign deltas.
-A clean rotate needs the QEMU subucom harness to deliver a proper 2-phase quadrature (or an
+A clean rotate needs the QEMU sub-ucom harness to deliver a proper 2-phase quadrature (or an
 incremental counter rbp reads as signed detents) so continuous rotation nets same-sign counts —
 AND to ensure the frame is delivered on rbp's poll without the CPU-stop gating — AND the browser
 applier must be ticking. This is harness engineering, not a `/tmp/subucom_ctrl` pattern. Helpers:
@@ -566,19 +566,19 @@ different (mixer-section) analog. The real browse rotate shares the encoder's ow
   bit; proper A/B quadrature timing) watching for an UP scroll. Helpers:
   scratchpad/{ramp.py,drv.py,probe3.py} (probe*/gdb = RE only; use screen for rotate).
 
-## ★ BREAKTHROUGH: USB1/USB2 are MAIN-UCOM GPIO keys, NOT subucom (2026-11-09)
+## ★ BREAKTHROUGH: USB1/USB2 are MAIN-UCOM GPIO keys, NOT sub-ucom (2026-11-09)
 From the **XDJ-RX service manual** (`~/Downloads/da43a7.pdf`, 210pp). The unit has
 **two MCUs**, and the key routing is split:
-- **EUP UCOM** (= the subucom SSI I inject, `/dev/subucom_spi1.0`): matrix keys incl.
+- **EUP UCOM** (= the sub-ucom SSI I inject, `/dev/subucom_spi1.0`): matrix keys incl.
   `BROWSE, TAG LIST, INFO, MENU, BACK, LOAD1, LOAD2, BROWSE PUSH`, all deck/mixer
-  analog+buttons, jogs. (So BROWSE itself *is* a subucom key.)
+  analog+buttons, jogs. (So BROWSE itself *is* a sub-ucom key.)
 - **MAIN UCOM** (= the i.MX6 reading direct GPIOs via **`/dev/gpiodrv`**): the
   **`DPNL1` source-select keys `rekordbox, MIDI, USB1, USB2`**, plus `DPNL2 DECK1/2,
   TIME MODE`, and the jack Phono/Line switches. These are discrete switches
   (`S5601/2/4`, CN5601) pulled to +5 → **idle HIGH, pressed LOW**.
 
-**This is why no subucom frame bit could ever be USB1/USB2** — they are not in the
-subucom frame at all. All the panel-injection work above applies only to EUP keys.
+**This is why no sub-ucom frame bit could ever be USB1/USB2** — they are not in the
+sub-ucom frame at all. All the panel-injection work above applies only to EUP keys.
 
 ### gpiodrv mechanism (rbp RE, verified live)
 - `GpioManager` ctor `FUN_0002be28`: `open("/dev/gpiodrv")`, **`lseek(fd, gpio_number)`**

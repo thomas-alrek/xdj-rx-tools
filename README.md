@@ -239,12 +239,12 @@ What it took (all **emulator-side, firmware untouched** except one removed file)
 - **Machine-id trampoline** — QEMU's `-M sabrelite` passes board-id `-1`; this
   ATAG kernel rejects it (silent spin in `dump_machine_table`). A tiny trampoline
   supplies the real board's machine id **3980 (SABRE-SD)** + hand-built ATAGs
-  (incl. `ATAG_REVISION=0x500`, which binds the `subucom` panel MCU) via
+  (incl. `ATAG_REVISION=0x500`, which binds the `sub-ucom` panel MCU) via
   `-device loader`.
 - **Three i.MX6 QEMU patches** (`qemu/patches/`) — self-clearing SRC GPU-reset
   bits; a Vivante GPU register stub + a live framebuffer scanout (reads the IPU
   display stride, decodes 32bpp splash / 16bpp RGB565 UI) + IPU vsync IRQ; and the
-  SABRE-SD board wiring (uSDHC3 nand, ECSPI2 subucom slave).
+  SABRE-SD board wiring (uSDHC3 nand, ECSPI2 sub-ucom slave).
 - **nand image** (`qemu/build-nand.sh`) — assembled from the firmware's own
   payloads (`rootfs.cramfs` + `pioneer.tar.gz` + `gui.tar.gz`) as a 256 MB ext4
   image. The **one** change vs. a byte-for-byte rootfs: the Vivante GAL DirectFB
@@ -316,7 +316,7 @@ build/qemu-src/          the patched QEMU source + build
 - [x] Update mechanism, boot flow, NAND layout, component inventory mapped
 - [x] **Firmware boots in QEMU to its live UI** (one gfxdriver removed) — [QEMU.md](QEMU.md)
 - [x] **GUI bringup** done: IPU display model, framebuffer scanout, app runs (software render)
-- [~] **Button input**: Subucom panel-MCU SPI frame injection working; browse encoder
+- [~] **Button input**: Sub-ucom panel-MCU SPI frame injection working; browse encoder
   (push + rotate, both directions), USB STOP, and several nav keys mapped and live-verified.
   Full control map in [docs/xdj-rx-control-map.md](docs/xdj-rx-control-map.md); remaining
   buttons/jogs/faders in progress — see [docs/rx3-panel-crossref.md](docs/rx3-panel-crossref.md).

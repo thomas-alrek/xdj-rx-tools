@@ -7,16 +7,16 @@ loaded), MAIN-UCOM source keys and the mapped analog/button controls work. This 
 control the user explicitly needs for track selection.
 
 **HARD CONSTRAINT (unchanged):** do NOT patch the `rbp` binary. QEMU-side harness changes
-only (the subucom injection harness in `hw/arm/fsl-imx6.c`), so vanilla rbp still runs.
+only (the sub-ucom injection harness in `hw/arm/fsl-imx6.c`), so vanilla rbp still runs.
 
 ## 0. One-paragraph status
 The entire firmware mechanism is reverse-engineered and the browser is identified. What's
-missing is **how to synthesize the encoder's field in the raw subucom frame** — because the
+missing is **how to synthesize the encoder's field in the raw sub-ucom frame** — because the
 frame is a *structured per-control protocol*, not a flat byte array, so the existing
 `/tmp/subucom_ctrl` "poke a byte/analog at offset X" harness cannot produce a browse-encoder
 event. Your job: decode the frame→state mapping in `FUN_0028a7b8` (+ `FUN_00286e1c`) to find
 the encoder control's exact frame field (offset + signed-counter/quadrature encoding), then
-extend the QEMU subucom harness to present that field as a changing signed value, and wire a
+extend the QEMU sub-ucom harness to present that field as a changing signed value, and wire a
 rotary + push control into `tools/xdj-panel/panel.html`.
 
 ## 1. What is SOLID (RE complete — don't re-derive). rbp = `build/extract/rbp`, REA/ghidra.
@@ -56,7 +56,7 @@ The event SOURCE (frame decode → event):
   always collapsed to `0x410a`.
 
 ## 2. THE REMAINING TASK (what actually unblocks it)
-Find the encoder control's **raw subucom frame field** and its encoding, then present it.
+Find the encoder control's **raw sub-ucom frame field** and its encoding, then present it.
 1. Decode **`FUN_0028a7b8`** lines before the emit (the frame→state setup, roughly the first
    ~600 pseudocode lines) and **`FUN_00286e1c(dev, idx)`** (called at the top of each outer
    iteration) to learn how a raw frame byte range maps to the control whose code is `0x4205`.
@@ -81,7 +81,7 @@ Find the encoder control's **raw subucom frame field** and its encoding, then pr
   gdb), the `con4.py` guest-console helper, the gdb `G` class, and the screendump one-liner are
   all in `docs/usb-accept-handover.md` §1 — reuse them verbatim.
 - Panel server: `python3 tools/xdj-panel/server.py` → http://127.0.0.1:8765 . It writes panel
-  actions to `/tmp/subucom_ctrl` (subucom) and `/tmp/mainkey` (MAIN-UCOM GPIO). Inject via
+  actions to `/tmp/subucom_ctrl` (sub-ucom) and `/tmp/mainkey` (MAIN-UCOM GPIO). Inject via
   `POST /ctrl` body `"B <off> <bit>"` (hold bit) / `"A <off> <val16>"` (hold analog) / lowercase
   = one-shot; `POST /release` clears. These are rbp-buffer offsets + the per-word byte-swap above.
 - The library must be loaded to test navigation. USB is solved: boot hub-only, wait for rbp's
@@ -102,7 +102,7 @@ Find the encoder control's **raw subucom frame field** and its encoding, then pr
 - **gdb hygiene:** clear ALL `Z1` breakpoints between probes — a leftover bp at `sendKey`
   `0x2a47c0` makes every `continue` stop there and report its `r1`, which masquerades as a stuck
   code and wasted a lot of time. Verify with an idle `continue` (should time out = quiet).
-- **Don't mass-inject.** Hundreds of rapid injects degrade the subucom harness into returning
+- **Don't mass-inject.** Hundreds of rapid injects degrade the sub-ucom harness into returning
   stuck/offset-independent codes (the "~150-inject quiescence" behaviour). Probe sparingly with
   releases between; prefer the gdb oracle over screendump sweeps.
 - **REA address quirk:** bare hex to procedure/decompile tools = file offset (+0x8000 bias);

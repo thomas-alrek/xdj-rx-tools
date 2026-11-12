@@ -59,12 +59,12 @@ StaticInfomation handshake path, which the emulator does not fully service.
 ### SUB version (`S:`) — from the StaticInfomation handshake
 
 The sub version is the 16-bit word **`DAT_0123e054`** (init `0xffff`). It is
-filled by the **subucom `StaticInfomation` handshake** (RTTI
+filled by the **sub-ucom `StaticInfomation` handshake** (RTTI
 `N2ui16StaticInfomationE`) — a query/response the panel MCU answers on the SPI
 link. While it is still `0xffff`, case 5 prints the retry form
 (`"...StaticInfomation is not completed. retry..."` → `S:Read Again`).
 
-**The QEMU subucom harness is a control-input stub only.** It injects the
+**The QEMU sub-ucom harness is a control-input stub only.** It injects the
 100-byte button/analog frame (see [subucom-frame-map.md](subucom-frame-map.md))
 but does **not** answer the StaticInfomation/version query, so `DAT_0123e054`
 stays `0xffff` and the file keeps its blank version. That is the root of the
@@ -90,7 +90,7 @@ first:
      the seed should stick; on real hardware the MCU would re-seed it).
 
 2. **Answer StaticInfomation in the QEMU harness.** Implement the
-   StaticInfomation query/response in the subucom harness so `DAT_0123e054`
+   StaticInfomation query/response in the sub-ucom harness so `DAT_0123e054`
    becomes a real value. This lights up the **SUB** (`S:`) half (and is what a
    real panel does). More work; only needed if we want `S:` correct too. Still
    **no `rbp`/MCU patch** — it's harness code.

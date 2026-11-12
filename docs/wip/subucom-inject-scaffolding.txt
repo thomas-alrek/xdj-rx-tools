@@ -1,12 +1,12 @@
-# WIP: QEMU xdj-subucom frame-injection scaffolding (not yet a working button)
+# WIP: QEMU xdj-sub-ucom frame-injection scaffolding (not yet a working button)
 # Apply on top of patches 01-04. Buttons blocked by the panel auth handshake +
 # frame header/type routing (see docs/rbp-and-panel-protocol.md).
 ### --- hw/ssi/imx_spi.c: reset slave frame pos per spi_message ---
 # In imx_spi_flush_txfifo(), before the 'while (!fifo32_is_empty...)' loop, call:
 #   { extern void __attribute__((weak)) xdj_subucom_frame_start(void);
 #     if (xdj_subucom_frame_start) xdj_subucom_frame_start(); }
-### --- hw/arm/fsl-imx6.c: xdj_subucom slave ---
-struct XdjSubucom {
+### --- hw/arm/fsl-imx6.c: xdj_sub-ucom slave ---
+struct XdjSub-ucom {
     SSIPeripheral parent_obj;
     uint32_t idx;         /* total MOSI byte counter (trace only) */
     uint32_t pos;         /* byte position within the current SPI burst */
@@ -14,7 +14,7 @@ struct XdjSubucom {
     uint8_t  frame[128];  /* SubRxData frame presented on MISO this burst */
 };
 
-static XdjSubucom *g_xdj_subucom;
+static XdjSub-ucom *g_xdj_sub-ucom;
 
 /*
  * Called by the ECSPI (imx_spi_flush_txfifo) at the start of every SPI burst so
@@ -26,13 +26,13 @@ static XdjSubucom *g_xdj_subucom;
 void xdj_subucom_frame_start(void);
 void xdj_subucom_frame_start(void)
 {
-    XdjSubucom *s = g_xdj_subucom;
+    XdjSub-ucom *s = g_xdj_sub-ucom;
 
     if (!s) {
         return;
     }
     if (getenv("SUBUCOM_BURST") && s->pos) {
-        fprintf(stderr, "SUBUCOM msg_size=%u\n", s->pos);
+        fprintf(stderr, "SUB-UCOM msg_size=%u\n", s->pos);
     }
     s->pos = 0;
 
@@ -58,11 +58,11 @@ void xdj_subucom_frame_start(void)
 
 static uint32_t xdj_subucom_transfer(SSIPeripheral *dev, uint32_t val)
 {
-    XdjSubucom *s = XDJ_SUBUCOM(dev);
+    XdjSub-ucom *s = XDJ_SUB-UCOM(dev);
     uint8_t miso;
 
     if (getenv("SUBUCOM_TRACE")) {
-        fprintf(stderr, "SUBUCOM [%5u] mosi=%02x\n",
+        fprintf(stderr, "SUB-UCOM [%5u] mosi=%02x\n",
                 s->idx, (unsigned)(val & 0xff));
     }
     s->idx++;

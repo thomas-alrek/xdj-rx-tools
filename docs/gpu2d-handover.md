@@ -453,7 +453,7 @@ end-to-end" claim is **invalid**: it rested on the same phantom-crash signal ("i
 `ps` says rbp gone → therefore the frame was decoded and crashed it"), but rbp never
 crashed, so nothing proves the frame was decoded — and this sweep shows it isn't.
 
-Likely causes to chase (in the QEMU `xdj-subucom` slave, build-tree `hw/arm/fsl-imx6.c`):
+Likely causes to chase (in the QEMU `xdj-sub-ucom` slave, build-tree `hw/arm/fsl-imx6.c`):
 the frame **CRC** (harness uses CRC-16/X-25 over the first 96 bytes with each 32-bit word
 byte-swapped, stored at `[0x62]`), the **+3 MISO alignment** (`s->frame+3 = rbp_buf`), or
 the **byte offsets** of the control sections — any one wrong makes rbp silently reject every
@@ -473,7 +473,7 @@ healthily and does not crash**. Verify rbp with `pidof`/`/proc`, never `ps | gre
 ## Follow-up 4 (2026-11-06): PANEL CONTROL DECODE FIXED — frame byte-order was wrong
 
 Follow-up 3's "real remaining gap" (control feedback doesn't land / brute-force
-sweep changed nothing) is **solved**. Root cause: the QEMU `xdj-subucom` slave
+sweep changed nothing) is **solved**. Root cause: the QEMU `xdj-sub-ucom` slave
 presented the MISO frame with the **wrong byte transform**, so rbp's CRC gate
 never matched and every frame was silently rejected (re-baselined, no events).
 

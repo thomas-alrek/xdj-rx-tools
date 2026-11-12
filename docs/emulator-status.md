@@ -152,7 +152,7 @@ factory's format map (follow-up: locate the dlopen/format-map factory in
 `playengine_Player`). (Device feature; modifies firmware.)
 
 ## 🔶 C / G. Controls → app (panel buttons)
-Control surface (buttons/jogs/faders) comes via the Subucom panel MCU over SPI
+Control surface (buttons/jogs/faders) comes via the Sub-ucom panel MCU over SPI
 (`/dev/subucom_spi1.0`). **The panel now boots and rbp actively reads it.** The
 root cause of "rbp never reads the panel" was *not* a disabled poll — it was a
 **boot deadlock** in panel init: rbp pushes an initial USB state to the panel
@@ -166,7 +166,7 @@ the SSI slave (~300k MOSI bytes). Full story + symbols:
 `docs/rbp-and-panel-protocol.md` → "SOLVED".
 
 **SOLVED + DECODE CONFIRMED (2026-11-05).** The panel input protocol is reverse-
-engineered and the `xdj-subucom` slave now feeds frames that rbp **decodes end to
+engineered and the `xdj-sub-ucom` slave now feeds frames that rbp **decodes end to
 end** (proven: injecting a decoded control crashes rbp in its render path — a
 rejected frame could not). The real gate was never the auth/handshake — it was a
 **per-frame CRC**: the MISO `SubRxData` frame (class `ui::SubRxFormat`) is a flat

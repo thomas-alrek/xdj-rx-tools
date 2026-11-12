@@ -31,10 +31,10 @@ only used for an unreached `g2d_blit`. The GUI is "suntec glib" on top of Direct
 
 The XDJ-RX has **no touchscreen**; every control (buttons, jog wheels, tempo
 sliders, the crossfader, EQ/trim/FX knobs) is read by a **front-panel
-microcontroller ("Subucom")** and delivered to rbp over **SPI**:
+microcontroller ("Sub-ucom")** and delivered to rbp over **SPI**:
 
 ```
-physical controls ─► Subucom panel MCU ─► SPI (ECSPI2 / SPI bus 1)
+physical controls ─► Sub-ucom panel MCU ─► SPI (ECSPI2 / SPI bus 1)
    ─► kernel subucom_spi driver ─► /dev/subucom_spi1.0
    ─► rbp: PanelComPeerLinux (reads/writes the device)
    ─► PanelComReciever (parses RX frames) ─► panel_protocol::SubRxData
@@ -70,7 +70,7 @@ complete it logs `"Subucom StaticInfomation is not completed. retry..."`. The QE
 SSI slave stub currently answers `0xff`, so this handshake must be modelled for the
 app to proceed past panel init. **This is the same protocol as button emulation**,
 so one RE effort serves both. (Device: ECSPI2 attached in `hw/arm/sabrelite.c`,
-patch 03; the Subucom SSI slave is the XDJ-RX panel MCU.)
+patch 03; the Sub-ucom SSI slave is the XDJ-RX panel MCU.)
 
 ## 3. Audio decode (for FLAC, feature F)
 
@@ -94,7 +94,7 @@ patch 03; the Subucom SSI slave is the XDJ-RX panel MCU.)
 - rbp is **dynamically linked**, so `LD_PRELOAD` shims are the least invasive hook
   (intercept libc/`libmpg123`/DirectFB calls) — but that is a rootfs change, which
   conflicts with the "stock firmware" constraint; prefer it only for development.
-- **Input injection** for the emulator: have the QEMU Subucom SSI slave emit
+- **Input injection** for the emulator: have the QEMU Sub-ucom SSI slave emit
   `SubRxData` frames encoding button/jog/fader state (needs the concrete frame
   layout from §2). This is the clean, firmware-stock way to drive the UI in QEMU.
 - **Codecs:** a FLAC decoder behind the player's decoder factory (§3).
@@ -210,7 +210,7 @@ Fmt/Mixer bytes) vs **jog** (Other section).
 
 ## Other open follow-ups
 - Decompile `PanelComPeerLinux` SPI transfer + `StaticInfomation` handshake
-  (what the QEMU Subucom SSI slave must satisfy).
+  (what the QEMU Sub-ucom SSI slave must satisfy).
 - Map `playengine_Player` decoder selection (for FLAC).
 
 ## Panel input path — empirical findings (buttons bring-up)
@@ -218,7 +218,7 @@ Fmt/Mixer bytes) vs **jog** (Other section).
 Live analysis of the running emulator (rbp + /proc + SUBUCOM_TRACE + QEMU
 monitor) corrected the earlier assumptions:
 
-- **Buttons come from the subucom MCU over SPI, as 24-byte frames.** Confirmed:
+- **Buttons come from the sub-ucom MCU over SPI, as 24-byte frames.** Confirmed:
   a guest `dd if=/dev/subucom_spi1.0 bs=24 count=3` clocked exactly a 24-byte
   SPI transaction per read into the QEMU SSI slave (72 bytes for 3 reads),
   MOSI=0x00. So **the kernel SPI path works** — a userspace read triggers one
@@ -248,7 +248,7 @@ monitor) corrected the earlier assumptions:
    (candidate: one of GPIO 0xa2–0xa5 read as "panel present", or StaticInfomation
    != 0xffff). A QEMU gdbstub breakpoint on the panel read path is the fast way.
 2. **QEMU side** — make the gate pass (assert the right GPIO / satisfy the
-   StaticInfomation handshake) and extend the `xdj-subucom` SSI slave to return
+   StaticInfomation handshake) and extend the `xdj-sub-ucom` SSI slave to return
    valid **24-byte** frames: a StaticInfomation reply at boot, then idle frames,
    then injected button/jog/fader frames.
 3. **Frame format** — RE the 24-byte RX frame (sections via
@@ -326,7 +326,7 @@ Next: find the `startTimer` call site for the panel timer and the precondition
 that skips it in the emulator (candidates: a board-detect GPIO read as "no panel",
 or the `StaticInfomation` bootstrap). Once that precondition is satisfied (or the
 timer forced to start), the poll reads `/dev/subucom_spi1.0` (24-byte frames) and
-the `xdj-subucom` SSI slave can answer with StaticInfomation + button frames — and
+the `xdj-sub-ucom` SSI slave can answer with StaticInfomation + button frames — and
 the same path lights up the `button` debug command too.
 
 ### ROOT CAUSE (definitive): rbp never starts the panel poll thread
@@ -353,10 +353,10 @@ Corrected mechanism + confirmation via gdbstub:
 1. **Start the poll thread** — find + satisfy the start trigger, or force-start it
    (a small rbp patch / injected hook, bakeable into the image).
 2. **Make the device report `POLLIN`** — the epoll loop only reads on data-ready;
-   model the subucom data-ready signal in QEMU (or make the driver always-readable)
+   model the sub-ucom data-ready signal in QEMU (or make the driver always-readable)
    so `epoll_wait` wakes. (A plain blocking `read()` already clocks the SSI slave —
    proven by the `dd` test — so only the readiness/notify path is missing.)
-3. **Answer with valid 24-byte frames** from the `xdj-subucom` SSI slave
+3. **Answer with valid 24-byte frames** from the `xdj-sub-ucom` SSI slave
    (StaticInfomation handshake + button/jog/fader frames).
 
 ### Live-process confirmation + exact symbols (2026-11-05)
@@ -378,7 +378,7 @@ reboot) and read `/proc/<rbp>/…` and live memory. This upgrades the above from
 - **Build path, all confirmed reached in live memory.** `main()` =
   **`FUN_0000f7cc`** → UiObjectManager accessor **`FUN_0020dc6c`** (singleton
   `DAT_0123e16c`) → **`FUN_00245098`** (panel init). Live checks: init guard
-  `DAT_0123e1fe`=3, entry gate byte `[UiObjMgr+0x3c]`=0, and the "bring-up subucom"
+  `DAT_0123e1fe`=3, entry gate byte `[UiObjMgr+0x3c]`=0, and the "bring-up sub-ucom"
   flag `[0x0123e460]&1`=1 are **all satisfied** (none of these is the gate). Init
   stores the peer at `UiObjMgr+0x40` and registers **1 channel** (addChannel
   `FUN_002816c8`) holding `/dev/subucom_spi1.0` — live `peer+0x94` (channel count)
@@ -432,7 +432,7 @@ init** — and the fix is a QEMU GPIO change, with **no firmware/rbp patch**.
    `peer+0x88=1` after it opens the device + builds its epoll (`FUN_00281d24`).
 4. So init talks to the panel → waits for the poll thread → but the poll thread is
    only started *after* init finishes. **Deadlock.** (Live proof: `main` the only
-   thread in `nanosleep`, subucom fd never opened, no `UiMain` thread, built-flag
+   thread in `nanosleep`, sub-ucom fd never opened, no `UiMain` thread, built-flag
    `UiObjMgr+0x3c`=0.)
 
 QEMU's `imx_gpio_reset` resets every input (`psr`) to **0**, so both USB-detect
@@ -458,14 +458,14 @@ future firmware patches can be tested against stock behaviour):
 - `hw/arm/fsl-imx6.c`: sets `psr-reset` on **GPIO4 (bit 30)** and **GPIO7 (bit 12)**
   so the two USB-detect lines reset HIGH ("no USB").
 
-**Verified on a fresh stock boot:** subucom fd open, `UiMain` thread running, epoll
+**Verified on a fresh stock boot:** sub-ucom fd open, `UiMain` thread running, epoll
 up, UI painted (16bpp), and `SUBUCOM_TRACE=1` shows the poll thread actively
 clocking the SSI slave (~300k MOSI bytes). When a USB image is cold-plugged later,
 the same lines should be driven LOW to signal "present".
 
 ### Remaining for working buttons (SPI command protocol + handshake)
 
-The `xdj-subucom` SSI slave (patch 02) still returns constant `0xff` on MISO, so no
+The `xdj-sub-ucom` SSI slave (patch 02) still returns constant `0xff` on MISO, so no
 `StaticInfomation` handshake and no button/jog/fader frames come back. The reader
 `FUN_00281c78` reads the frame and only dispatches to the receiver on a **changed**
 frame (memcmp vs. the previous buffer). To make a control register:
@@ -486,7 +486,7 @@ panel live — only the real SPI frame path does.
 With the panel alive (poll thread running), this is the remaining work to make
 controls actually register. Entry points mapped so far:
 
-**Wire shape.** The Subucom is a **continuously-clocked streaming** SPI device, not
+**Wire shape.** The Sub-ucom is a **continuously-clocked streaming** SPI device, not
 a request/response one. `SUBUCOM_TRACE=1` shows ~12M+ byte transfers, the vast
 majority **MOSI = 0x00** (rbp clocking to read the MISO stream), with occasional
 command bursts beginning `02 a8 ..`. The kernel `subucom_spi` driver (built-in; no
@@ -521,7 +521,7 @@ MISO stream never framing-syncs and never changes → zero events.
    `subucom_spi` driver out of `vmlinux.bin` (wrap at 0x80008000) to learn the MISO
    framing (sync/length) + what a SubRxData packet looks like, then make the slave
    stream valid packets and inject a changed one for a press.
-2. **Empirical route:** add a frame-inject hook to `xdj_subucom` (return bytes from a
+2. **Empirical route:** add a frame-inject hook to `xdj_sub-ucom` (return bytes from a
    control file for one read burst), boot, breakpoint `FUN_0028cea4` via the gdbstub,
    and vary the injected frame until the router reports code 0x20a (menu) — mapping
    raw bytes → events directly, no assembly slog.
@@ -534,7 +534,7 @@ frames do.
 
 Disassembled out of the kernel (wrap a slice as an ARM ELF at VA = 0x80008000 +
 file-offset; `/tmp/wrapelf.py` in session history). char-dev **major 153**, 256
-minors, registered by the module_init at VA **0x800135a4** ("subucom SPI user
+minors, registered by the module_init at VA **0x800135a4** ("sub-ucom SPI user
 interface"). `file_operations` @ **0x807a54f4**:
 
 | op | addr |
@@ -551,14 +551,14 @@ frame from `priv[0x98]`; otherwise it allocates `len*2`, builds a `spi_transfer`
 (36B) + `spi_message`, calls the driver's SPI helper **0x803eddf8** (→ `spi_sync`
 0x80616da0), then `copy_to_user(buf, priv[0xdc], len)`. **Either way the frame rbp
 reads = the MISO of one `len`-byte (100) SPI burst.** So there is no stream-framing
-to reverse: the QEMU `xdj_subucom` slave just needs to present a 100-byte SubRxData
+to reverse: the QEMU `xdj_sub-ucom` slave just needs to present a 100-byte SubRxData
 frame per read burst (reset its byte index on CS/burst start).
 
 **Still to do for buttons:** the SubRxData *content* layout (which bytes/bits =
 which control, press/release, player) is defined by rbp's parser `FUN_00284d44` +
 sub-decoders (the Ghidra-under-analyzed 0x284xxx-0x289xxx range) feeding the event
 router `FUN_0028cea4` (code@+8/player@+10/flags@+0xb). Fastest way to map it now
-that transport is understood: add a frame-inject hook to `xdj_subucom`, breakpoint
+that transport is understood: add a frame-inject hook to `xdj_sub-ucom`, breakpoint
 `FUN_0028cea4` via the gdbstub, and vary the injected frame until it reports menu
 (0x20a). Then baseline-idle frame + a one-shot changed frame = a press on screen.
 
@@ -567,7 +567,7 @@ that transport is understood: add a frame-inject hook to `xdj_subucom`, breakpoi
 Live proof first: booting with a visible window, the deck UI renders and **DECK1
 shows a red `E-7206 AUTH CHIP ERROR`** (DECK2 `Not Loaded.`) transiently during
 boot, then settles to `Not Loaded.` (screenshot: `docs/img/panel-auth-chip-error.png`).
-This confirms rbp opens subucom, the `UiMain` poll thread clocks the slave, and rbp
+This confirms rbp opens sub-ucom, the `UiMain` poll thread clocks the slave, and rbp
 evaluates the panel auth on the SPI data — failing on our stub slave.
 
 ### The StaticInfomation handshake
@@ -581,9 +581,9 @@ evaluates the panel auth on the SPI data — failing on our stub slave.
 - **Version *strings* come from guest files**, not SPI: `FUN_0025a3d4` reads
   **`/tmp/smdj.rev`** into `DAT_0123e064` (printable bytes only; fallback string
   `"Can't get version."`), and `FUN_00242538` reads **`/tmp/smdj2.rev`**. On real hw
-  the subucom driver/boot writes these; under emulation they may be absent (cosmetic
+  the sub-ucom driver/boot writes these; under emulation they may be absent (cosmetic
   — the real gate is the `0xffff` version word from the panel).
-- The **real writer** of the version word + per-frame status is the big subucom RX
+- The **real writer** of the version word + per-frame status is the big sub-ucom RX
   processor **`FUN_002cb8ec`** (non-contiguous, ~55 KB span; writes `DAT_0123e054`
   at `0x2d8ddc`). This is the next-phase target for the exact static-info frame
   layout and status-byte offsets.
@@ -596,16 +596,16 @@ Decisive for emulation (symmetric-extractable vs asymmetric-unforgeable):
   same pattern — **per-deck**, shown in the deck status field.
 - A full string scan finds **no panel-related crypto**: the only `auth` strings in
   rbp are Wi-Fi (`auth_algs`, WPS) and iPod accessory auth — nothing tied to the
-  subucom/panel. There is no SHA/HMAC/signature-verify on the panel path.
+  sub-ucom/panel. There is no SHA/HMAC/signature-verify on the panel path.
 - **Conclusion:** the auth chip is verified **on the panel MCU**, which reports a
-  pass/fail *status* to rbp over subucom. rbp does **not** run a cryptographic
+  pass/fail *status* to rbp over sub-ucom. rbp does **not** run a cryptographic
   challenge-response and holds **no secret key**. ⇒ The auth is **emulatable with no
   key**: the slave just needs to present a valid StaticInfomation (version word ≠
   `0xffff`) and report the **auth-OK status** in the periodic frame. This is the good
   outcome — no unforgeable private key in the physical panel blocks us.
 
 ### Next phase (to clear E-7206 and accept buttons)
-1. RE **`FUN_002cb8ec`** (the subucom RX): extract (a) the StaticInfomation frame
+1. RE **`FUN_002cb8ec`** (the sub-ucom RX): extract (a) the StaticInfomation frame
    bytes that set `DAT_0123e054` ≠ `0xffff`, (b) the per-deck **auth-OK status**
    byte/bit, (c) the **jog uCom OK** bytes, and (d) the button-event frame header
    that routes a frame to the global decoder (the earlier "bare frame not routed"
@@ -613,7 +613,7 @@ Decisive for emulation (symmetric-extractable vs asymmetric-unforgeable):
    dispatch.
 2. Create `/tmp/smdj.rev` + `/tmp/smdj2.rev` in the guest (check `build-nand.sh` /
    boot) so the version strings are non-empty (cosmetic but clean).
-3. Extend the QEMU `xdj-subucom` slave to stream: valid static-info + auth-OK +
+3. Extend the QEMU `xdj-sub-ucom` slave to stream: valid static-info + auth-OK +
    idle frame, then one-shot the control bit for a press (scaffolding in
    `docs/wip/subucom-inject-scaffolding.txt`).
 
@@ -676,7 +676,7 @@ Open items: enumerate the real **header type-ids**, the **auth-OK byte/bit**, an
 
 ## Empirical test of the header fix — INCONCLUSIVE (2026-11-05)
 
-Applied the header fix to the `xdj-subucom` slave (every frame carries a non-zero
+Applied the header fix to the `xdj-sub-ucom` slave (every frame carries a non-zero
 header at slave `[5..6]` = rbp `[2..3]` = `0x0100`, plus the menu bit at `[0x1e]`),
 rebuilt QEMU, and tested on a live boot. **Result: not verified working — do not
 assume buttons decode yet.**
@@ -729,7 +729,7 @@ the frame is stored but nothing decodes (the header path calls a `bx lr` no-op).
   byte `[0x1b]`) decode. **No header check on this path.**
 
 So our stub's `frame[0x62]=0` never matched → zero decoding, ever. **Implemented the
-CRC in the `xdj-subucom` slave** (build tree): build the frame in rbp coords, CRC the
+CRC in the `xdj-sub-ucom` slave** (build tree): build the frame in rbp coords, CRC the
 byte-swapped first 96 bytes, write it to `[0x62]`, present on MISO. (CORRECTION
 2026-11-06: "shift +3 onto MISO" was wrong — present each 32-bit word
 byte-reversed, no shift. See the final "FRAME TRANSPORT SOLVED" section.)
@@ -935,7 +935,7 @@ shift** — which pushed the CRC (at `rbp[0x62]`) to wire index 0x65 → rbp's
 decode, while the frame still "changed" enough to look alive. (The earlier
 "kernel drops 3 MISO bytes" note was a misreading of the word swap.)
 
-**Fix (QEMU `xdj-subucom` slave, patch 02):** build the logical frame `rbp[]`
+**Fix (QEMU `xdj-sub-ucom` slave, patch 02):** build the logical frame `rbp[]`
 in rbp_buf coordinates (controls at `0x04/0x14/0x24/0x34/0x44`, CRC at `0x62`),
 then transmit it with each 32-bit word byte-reversed:
 

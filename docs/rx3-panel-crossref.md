@@ -112,7 +112,7 @@ two models diverge on the mixer/analog block. Verify analogs individually.
   "EUP offset 12 bit 1 enters jog rotation processing" is ambiguous (absolute byte 12 vs
   deck-relative) and is only a mode-enter flag, not the rotation value.
 - **Implication for RX:** jog rotation will need its own RE on the RX's ready-line channels, not the
-  subucom EUP/SUB frames. The RX3 repo gives us nothing reusable for jog rotation. (Our RX panel's
+  sub-ucom EUP/SUB frames. The RX3 repo gives us nothing reusable for jog rotation. (Our RX panel's
   current `d1jog/d2jog` guesses `b 13 20 / b 13 10` are unverified and likely wrong — those bytes are
   Loop In/Out per the RX3 layout.)
 

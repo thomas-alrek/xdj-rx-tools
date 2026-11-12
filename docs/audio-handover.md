@@ -31,7 +31,7 @@ but the position is frozen.
 ## 1. The symptom and why it happens
 
 With a track loaded (`Play It Hard`, `REMAIN 02:56.640`), pressing PLAY
-(`0x13.6` = subucom `b 13 40`) **does** reach firmware — the deck view/state
+(`0x13.6` = sub-ucom `b 13 40`) **does** reach firmware — the deck view/state
 changes on the LCD (verified by screendump pixel-diff). But `REMAIN` stays at
 `02:56.640`, unchanged seconds later. **The PLAY mapping is correct; playback
 just has no time base.**
@@ -54,7 +54,7 @@ position does not advance".
 | Guest ALSA **enumerates**: card0 `ak4387-audio`; ASoC machine drivers `ak4382_ak5358`/`ak4387_ak5358` map to `imx-ssi.0/1/2`; `/dev/snd/pcmC0D{0,1,2}{p,c}` exist. | guest `cat /proc/asound/cards`, `ls /dev/snd`, `dmesg \| grep -i asoc` |
 | **`asoc: platform imx-pcm-audio.0 hw params failed`** at init. This is the ALSA **DMA** layer failing — imx-pcm allocates an SDMA channel in `hw_params`, and there is no SDMA. | guest `dmesg \| grep -i 'hw params'` |
 | Every playback substream is **`closed`** — rbp never successfully opens audio. | guest `cat /proc/asound/card0/pcm{0,1,2}p/sub0/status` |
-| QEMU models **no audio peripheral**: the only SSI in `hw/arm/fsl-imx6.c` is the *subucom panel SPI slave*. No SSI-audio, no SDMA, no AUDMUX, no SPDIF are created. | `grep -niE 'SSI\|SDMA\|AUDMUX\|create_unimplemented' build/qemu-src/qemu-11.1.0/hw/arm/fsl-imx6.c` — nothing for audio |
+| QEMU models **no audio peripheral**: the only SSI in `hw/arm/fsl-imx6.c` is the *sub-ucom panel SPI slave*. No SSI-audio, no SDMA, no AUDMUX, no SPDIF are created. | `grep -niE 'SSI\|SDMA\|AUDMUX\|create_unimplemented' build/qemu-src/qemu-11.1.0/hw/arm/fsl-imx6.c` — nothing for audio |
 
 ---
 
@@ -420,7 +420,7 @@ crossfader centered**) were set TWO independent ways with no effect:
 1. **Debug console** (confirmed working — `button browse` opened the browser):
    `masterv 1.0`, `knob master_att 0`, `knob trim/eqh/eqm/eql 512 {0,1}`,
    `knob xfader 512`, `knob fader 1023 {0,1}`, plus `mixeron`/`route`/`play`.
-2. **Direct subucom frame injection** of the analog offsets (below).
+2. **Direct sub-ucom frame injection** of the analog offsets (below).
 
 So the gate is **upstream of the mixer gains** — in rbp's player→`MixerEngine`
 input feed / decode path. rbp *does* open the MP3 fd and advance position, but the
@@ -435,7 +435,7 @@ routing is zero by a path other than the knobs tried).
   `0x4405`=MASTER LEVEL, `0x600f`=CROSS FADER, `0x440c`=BOOTH, `0x4402`=HP MIXING,
   `0x4403`=HP LEVEL, `0x448b`=LEVEL DEPTH; per-channel `0x5007`=TRIM, `0x5008`=EQ HI,
   `0x5009`=EQ MID, `0x500a`=EQ LOW, `0x5011`=CH FADER, `0x508b`=COLOR.
-- Subucom analog inject offsets (16-bit LE, `A <off> <val16>`, value/1023), from
+- Sub-ucom analog inject offsets (16-bit LE, `A <off> <val16>`, value/1023), from
   [subucom-frame-map.md](subucom-frame-map.md): EQ HI 0x24/0x34, TRIM 0x26/0x36,
   EQ MID 0x28/0x38, EQ LOW 0x2a/0x3a, COLOR 0x2c/0x3c; BOOTH 0x48, **MASTER 0x4a**,
   LEVEL DEPTH 0x4c, **CROSSFADER 0x4e**, HP LEVEL 0x50, HP MIXING 0x52.
