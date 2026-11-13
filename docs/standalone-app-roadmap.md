@@ -1,6 +1,6 @@
 # Standalone app roadmap — packaging the XDJ-RX emulator
 
-**Status: IN PROGRESS — Phases 1 (control socket) + 2 (Tauri shell + orchestrator) done 2026-11-12, Phase 3 (firmware drag-drop + app-data) done 2026-11-13; Phases 3b–5 planned.**
+**Status: IN PROGRESS — Phases 1 (control socket) + 2 (Tauri shell + orchestrator) done 2026-11-12, Phase 3 (firmware drag-drop + app-data) done 2026-11-13; Phase 3b (USB media) plumbing done with a deferred enumeration issue; Phases 4–5 planned.**
 The goal: turn today's "custom QEMU + web UI + `/tmp` files" setup into a single
 self-contained, cross-platform desktop app. The user drops a `.UPD` firmware onto
 the app; the app prepares the boot image and runs the emulator, with a native
@@ -202,11 +202,33 @@ pre-build rung 3 — measure at each rung first.
   The actual drop→prep→boot transition needs a real file-drop on the window (user-confirmed,
   like the window launch); its pieces (prep, start_host, drop screen) are each verified.
 
-### Phase 3b — Physical USB passthrough ⬜
-Mount a **real** host USB stick into the guest, the same way images mount today.
-Already supported by the current QEMU build — **no new patch** (verified: the
-binary knows `usb-host` *and* `usb-storage`, and libusb was auto-detected). Same
-"media in" surface as firmware drag-drop, hence a Phase 3 sibling.
+### Phase 3b — USB media (disk image + physical device) 🔶 (orchestrator plumbing done 2026-11-13)
+Mount a USB into the guest — a **disk image** (`.img`) or a **real host stick** — the same
+way, after boot. **Orchestrator plumbing done** in [app/host](../app/host) (`maybe_insert_usb`),
+**no new QEMU patch**:
+- Boot **hub-only** (USB-2.0 hub on `usb-bus.1` port 1), then after rbp is up (console
+  marker `Resolve xrun` + `XDJ_USB_DELAY`s settle) run the proven insert choreography over
+  QMP: `drive_add` + `device_add usb-storage,bus=usb-bus.1,port=1.1` (USB2) / `1.2` (USB1),
+  then assert the slot's detect GPIO (`/tmp/usb2_insert` / `/tmp/usb_insert`, patch 06).
+- Driven by env: `XDJ_USB=<image.img|/dev/diskN>`, `XDJ_USB_SLOT=usb1|usb2` (default usb2),
+  `XDJ_USB_WRITE=1` (default: `snapshot=on`, writes discarded — protects a real stick).
+  A physical device is `diskutil unmountDisk`'d (mac) / `umount`'d (linux) first.
+- **Verified**: QEMU attaches the MSD at the correct topology (`info usb` → Port 1.1) with a
+  snapshot overlay over the backing (`info block`), and rbp sees the slot.
+- **KNOWN ISSUE (deferred, 2026-11-13):** the device doesn't auto-enumerate/mount — rbp shows
+  the **"USB Error. Remove the device."** modal (the mount-rendezvous race from
+  usb-slot-topology.md; the detect-GPIO → HOST1-resume path isn't completing through the
+  orchestrator the way the manual `relaunch.sh` recipe does). **Temporarily clearable by
+  pressing USB2.** To tackle later: compare against the manual recipe (boot-time drive
+  backend?), the readiness window, and whether pressing USB2 (mainkey 158) is the missing
+  trigger. The per-instance wart also remains: the detect hooks are still global `/tmp` files
+  (patch 06), not socketized like Phase 1.
+
+Remaining 3b work: the UI picker (enumerate host USB block devices, list beside the image
+picker; `diskutil list` / `lsblk`), `usb-host` passthrough mode (B, below), and resolving the
+enumeration race above.
+
+Media mechanisms, different fidelity:
 
 Two mechanisms, different fidelity:
 - **A. Raw host block device as `usb-storage` (default).** Point `-drive` at the

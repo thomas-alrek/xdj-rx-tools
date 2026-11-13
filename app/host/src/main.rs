@@ -21,10 +21,11 @@
 //! Firmware is never touched -- everything here is host-side orchestration.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, UnixStream};
 use tokio::process::{Child, Command};
 use tokio_tungstenite::tungstenite::Message;
@@ -136,6 +137,11 @@ fn qemu_args(cfg: &Config) -> Vec<String> {
         "-device".into(), format!("loader,file={},addr=0x10000000,cpu-num=0", s(q.join("tramp.bin"))),
         "-drive".into(), format!("if=none,id=xdjsd,file={},format=raw", s(cfg.nand.clone())),
         "-nic".into(), "user".into(),
+        // USB-2.0 hub on HOST1 (guest bus 2 = usb-bus.1), hub-only boot: the front
+        // slots live behind this hub at devpaths 2-1.1 (USB2) / 2-1.2 (USB1). Storage
+        // is inserted AFTER rbp is polling (see maybe_insert_usb) — cold-plugging at
+        // boot hits a mount-rendezvous race ("USB Error"). See docs/usb-slot-topology.md.
+        "-device".into(), "usb-hub,bus=usb-bus.1,port=1,id=xdjhub".into(),
         // Phase-1 control channels (per-instance).
         "-chardev".into(), format!("socket,id=xdjctrl,path={},server=on,wait=off", s(cfg.rt("ctrl.sock"))),
         "-chardev".into(), format!("socket,id=xdjkey,path={},server=on,wait=off", s(cfg.rt("key.sock"))),
@@ -265,8 +271,13 @@ async fn terminated() {
 }
 
 fn clean_stale(cfg: &Config) {
-    for s in ["qmp.sock", "vnc.sock", "ctrl.sock", "key.sock"] {
+    for s in ["qmp.sock", "vnc.sock", "ctrl.sock", "key.sock", "usb_usb1.img", "usb_usb2.img"] {
         let _ = std::fs::remove_file(cfg.rt(s));
+    }
+    // The USB detect-GPIO hooks (patch 06) are still global /tmp paths (not yet
+    // per-instance) — clear them so a stale insert doesn't carry across runs.
+    for f in ["/tmp/usb_insert", "/tmp/usb2_insert"] {
+        let _ = std::fs::remove_file(f);
     }
 }
 
@@ -405,6 +416,166 @@ fn prep_firmware(repo: &Path, upd: &Path) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+// ---- Phase 3b: mount a USB (disk image OR physical device) after boot ----
+
+/// Minimal JSON string literal (for the QMP human-monitor-command command-line).
+fn json_str(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Connect to the QMP socket, do the capabilities handshake, then run each HMP
+/// command via `human-monitor-command` (the proven drive_add/device_add path).
+/// Returns each command's HMP output text. Loosely parsed — no serde.
+async fn qmp_hmp(sock: &Path, cmds: &[String]) -> Result<Vec<String>, String> {
+    let stream = UnixStream::connect(sock)
+        .await
+        .map_err(|e| format!("QMP connect {}: {e}", sock.display()))?;
+    let (rd, mut wr) = stream.into_split();
+    let mut lines = BufReader::new(rd).lines();
+
+    // Read lines until a QMP response ("return"/"error"); skip the greeting + events.
+    async fn response(
+        lines: &mut tokio::io::Lines<BufReader<tokio::net::unix::OwnedReadHalf>>,
+    ) -> Result<String, String> {
+        loop {
+            match lines.next_line().await.map_err(|e| e.to_string())? {
+                Some(l) if l.contains("\"return\"") => return Ok(l),
+                Some(l) if l.contains("\"error\"") => return Err(l),
+                Some(_) => continue, // greeting / async event
+                None => return Err("QMP connection closed".into()),
+            }
+        }
+    }
+
+    wr.write_all(b"{\"execute\":\"qmp_capabilities\"}\n")
+        .await
+        .map_err(|e| e.to_string())?;
+    response(&mut lines).await?;
+
+    let mut outs = Vec::new();
+    for c in cmds {
+        let req = format!(
+            "{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":{}}}}}\n",
+            json_str(c)
+        );
+        wr.write_all(req.as_bytes()).await.map_err(|e| e.to_string())?;
+        outs.push(response(&mut lines).await?);
+    }
+    Ok(outs)
+}
+
+/// Wait until the guest console shows `marker` (our proxy for "rbp is up and
+/// polling"), or the timeout elapses.
+async fn wait_console_marker(path: &Path, marker: &str, timeout: Duration) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if let Ok(s) = std::fs::read_to_string(path) {
+            if s.contains(marker) {
+                return true;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    false
+}
+
+/// Unmount a host disk so the guest is the only writer (snapshot=on already keeps
+/// the backing read-only, but a mounted host volume is a second writer).
+fn unmount_host_disk(dev: &str) {
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("diskutil").arg("unmountDisk").arg(dev).status();
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("umount").arg(dev).status();
+}
+
+/// If XDJ_USB is set, mount it into the guest AFTER rbp is polling, reproducing the
+/// hardware insert choreography (hub-only boot -> post-boot device_add + detect GPIO).
+///   XDJ_USB=<image.img|/dev/diskN>   the backing: a disk image, or a host block device
+///   XDJ_USB_SLOT=usb1|usb2           front slot (default usb2 = hub port 1.1)
+///   XDJ_USB_WRITE=1                   persist writes (default: snapshot=on, discarded —
+///                                     the safe default, and what protects a real stick)
+/// A physical device is unmounted on the host first. See docs/usb-mount-howto.md.
+async fn maybe_insert_usb(runtime_dir: PathBuf) {
+    let Some(src) = std::env::var_os("XDJ_USB") else {
+        return;
+    };
+    let src = src.to_string_lossy().into_owned();
+    let slot = std::env::var("XDJ_USB_SLOT").unwrap_or_else(|_| "usb2".into());
+    let write = std::env::var_os("XDJ_USB_WRITE").is_some();
+    let rt = |n: &str| runtime_dir.join(n);
+
+    // Insert only once rbp's UsbMountManager is polling, or an early insert races to
+    // "USB Error" (unrecoverable without reboot). rbp's audio xrun-recovery ("Resolve
+    // xrun") only prints once rbp is fully up and running — a reliable late signal
+    // (generic "ALSA" matches early kernel codec init, far too soon). Then settle.
+    if !wait_console_marker(&rt("console.log"), "Resolve xrun", Duration::from_secs(240)).await {
+        eprintln!("[usb] gave up waiting for boot; not inserting");
+        return;
+    }
+    // Settle so rbp's UsbMountManager is firmly in its /proc/udev_usb2 poll before the
+    // device enumerates — else the udev "mount" rendezvous is lost and rbp shows
+    // "USB Error" (docs/usb-slot-topology.md). Tunable via XDJ_USB_DELAY (seconds).
+    let settle = std::env::var("XDJ_USB_DELAY").ok().and_then(|v| v.parse().ok()).unwrap_or(6);
+    tokio::time::sleep(Duration::from_secs(settle)).await;
+
+    let is_dev = src.starts_with("/dev/");
+    if is_dev {
+        eprintln!("[usb] unmounting host disk {src} (snapshot keeps it read-only)");
+        unmount_host_disk(&src);
+    }
+    // HMP drive_add doesn't quote paths; symlink to a space-free path in the runtime dir.
+    let link = rt(&format!("usb_{slot}.img"));
+    let _ = std::fs::remove_file(&link);
+    #[cfg(unix)]
+    if let Err(e) = std::os::unix::fs::symlink(&src, &link) {
+        eprintln!("[usb] cannot stage backing symlink: {e}");
+        return;
+    }
+
+    let (port, detect) = if slot == "usb1" {
+        ("1.2", "/tmp/usb_insert")
+    } else {
+        ("1.1", "/tmp/usb2_insert")
+    };
+    let snap = if write { "" } else { ",snapshot=on" };
+    let did = format!("xdjusb_{slot}");
+    let cmds = vec![
+        format!("drive_add 0 if=none,id={did},file={},format=raw{snap}", link.to_string_lossy()),
+        format!("device_add usb-storage,bus=usb-bus.1,port={port},drive={did},id={did}_dev,removable=on"),
+    ];
+    eprintln!(
+        "[usb] inserting {src} at {slot} (hub port {port}, {})",
+        if write { "writable" } else { "snapshot" }
+    );
+    match qmp_hmp(&rt("qmp.sock"), &cmds).await {
+        Ok(outs) => {
+            for o in outs {
+                let t = o.trim();
+                if !t.is_empty() && t != "{\"return\": \"\"}" {
+                    eprintln!("[usb] qmp: {t}");
+                }
+            }
+            // Assert the slot's detect GPIO (patch 06) so the firmware resumes HOST1.
+            if let Err(e) = std::fs::write(detect, b"") {
+                eprintln!("[usb] could not assert {detect}: {e}");
+            } else {
+                eprintln!("[usb] asserted {detect}; the slot should mount shortly");
+            }
+        }
+        Err(e) => eprintln!("[usb] insert failed: {e}"),
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // Subcommand: `xdj-host prep <firmware.UPD|.zip>` prepares/caches boot artifacts
@@ -466,6 +637,9 @@ async fn main() {
     let ws_port = cfg.vnc_ws_port;
     let bridge = tokio::spawn(run_vnc_ws_bridge(vnc_sock, ws_port));
 
+    // Phase 3b: if XDJ_USB is set, mount it (disk image or host device) once rbp polls.
+    let usb = tokio::spawn(maybe_insert_usb(cfg.runtime_dir.clone()));
+
     println!(
         "\n  XDJ-RX emulator up.\n  Open:  http://127.0.0.1:{}/?vnc=ws://127.0.0.1:{}/\n  (panel = sidecar :{}, screen = noVNC via the WS bridge :{})\n  Ctrl-C to stop.\n",
         cfg.panel_port, cfg.vnc_ws_port, cfg.panel_port, cfg.vnc_ws_port
@@ -493,5 +667,6 @@ async fn main() {
         }
     }
     bridge.abort();
+    usb.abort();
     clean_stale(&cfg);
 }
