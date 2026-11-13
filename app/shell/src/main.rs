@@ -331,37 +331,38 @@ fn key_present() -> bool {
 }
 
 /// Browse for a firmware .UPD/.zip (the setup page's drop area is also clickable).
+/// Uses the non-blocking picker: blocking_pick_file deadlocks the macOS main thread.
 #[tauri::command]
 fn browse_firmware(app: tauri::AppHandle) {
     use tauri_plugin_dialog::DialogExt;
-    if let Some(p) = app
-        .dialog()
+    let app2 = app.clone();
+    app.dialog()
         .file()
         .set_title("Select a firmware .UPD (or Pioneer .zip)")
         .add_filter("Firmware", &["UPD", "upd", "zip"])
         .add_filter("All files", &["*"])
-        .blocking_pick_file()
-        .and_then(|f| f.into_path().ok())
-    {
-        on_firmware_dropped(&app, p);
-    }
+        .pick_file(move |fp| {
+            if let Some(p) = fp.and_then(|f| f.into_path().ok()) {
+                on_firmware_dropped(&app2, p);
+            }
+        });
 }
 
 /// Browse for the firmware decryption key file (the setup page's "Browse…" button).
 #[tauri::command]
 fn browse_key(app: tauri::AppHandle) {
     use tauri_plugin_dialog::DialogExt;
-    if let Some(p) = app
-        .dialog()
+    let app2 = app.clone();
+    app.dialog()
         .file()
         .set_title("Select your firmware key (aes256.key)")
         .add_filter("Key", &["key"])
         .add_filter("All files", &["*"])
-        .blocking_pick_file()
-        .and_then(|f| f.into_path().ok())
-    {
-        on_key_dropped(&app, p);
-    }
+        .pick_file(move |fp| {
+            if let Some(p) = fp.and_then(|f| f.into_path().ok()) {
+                on_key_dropped(&app2, p);
+            }
+        });
 }
 
 /// A dropped non-firmware file is treated as the firmware key.
