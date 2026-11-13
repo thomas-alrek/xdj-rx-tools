@@ -111,6 +111,9 @@
   #screen{position:absolute;background:#000;border-radius:6px;overflow:hidden;
     box-shadow:0 0 0 1px #000,0 4px 18px #0009;display:flex;align-items:center;justify-content:center}
   #screen canvas{width:100%!important;height:100%!important;display:block}
+  /* noVNC hides the local cursor and draws the remote one; the firmware has no cursor,
+     so force our normal pointer over the display area instead of an invisible one. */
+  #screen,#screen *{cursor:default!important}
 
   .logwrap{flex:0 0 auto;padding:8px 14px}
   #logbox{height:46px;overflow:auto;background:#0b0d10;border:1px solid var(--edge);border-radius:8px;
