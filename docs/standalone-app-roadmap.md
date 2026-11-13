@@ -409,7 +409,8 @@ two e2fsprogs shell-outs (5.2), which bundling keeps install-free.
 ### A. The AES decryption key must be user-supplied, never bundled — ✅ IMPLEMENTED 2026-11-13
 Key prompt built: the shell accepts a **dropped `aes256.key` file** (or a text file of
 64 hex) and a **pasted 64-hex key** (`set_key_hex` command, `withGlobalTauri`), stores it
-per-user in `<app-data>/key/` (`key.hex` or `aes256.key`), and `xdj-host prep`
+per-user as `<app-data>/key/aes256.key` (content sniffed at use: 64-hex → `XDJRX_AES_KEY`,
+else a passphrase file → `--key-file`), and `xdj-host prep`
 (`resolve_firmware_key`) uses it — app-data key first, else the dev `.env`, else a clear
 "add your aes256.key" error. Dropping a `.UPD` before a key is set prompts for the key.
 The key is never bundled. **Verified**: the bundled `.app`'s prep decrypts + builds a

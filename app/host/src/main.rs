@@ -439,23 +439,27 @@ fn app_data_root() -> PathBuf {
 }
 
 /// Where the user-supplied firmware key lives (the shell's key prompt writes it here).
-/// Never bundled. `key.hex` = 64-hex AES key; `aes256.key` = a passphrase file.
+/// Never bundled. Always the file `aes256.key`, whose content is sniffed: a 64-hex key
+/// goes via XDJRX_AES_KEY, anything else is treated as a passphrase file (--key-file).
 fn firmware_key_dir() -> PathBuf {
     app_data_root().join("key")
+}
+
+fn is_hex_key(s: &str) -> bool {
+    let t = s.trim();
+    t.len() == 64 && t.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Resolve the firmware decryption key for the decrypt step: returns extra
 /// xdjrx_upd.py args + env. Prefers the app-data key; falls back to the dev .env that
 /// xdjrx_upd reads; errors only if no key is available anywhere.
 fn resolve_firmware_key(cfg: &Config) -> Result<(Vec<String>, Vec<(&'static str, String)>), String> {
-    let d = firmware_key_dir();
-    let hex = d.join("key.hex");
-    let kf = d.join("aes256.key");
-    if hex.exists() {
-        let h = std::fs::read_to_string(&hex).map_err(|e| format!("reading saved key: {e}"))?;
-        return Ok((vec![], vec![("XDJRX_AES_KEY", h.trim().to_string())]));
-    }
+    let kf = firmware_key_dir().join("aes256.key");
     if kf.exists() {
+        let content = std::fs::read_to_string(&kf).unwrap_or_default();
+        if is_hex_key(&content) {
+            return Ok((vec![], vec![("XDJRX_AES_KEY", content.trim().to_string())]));
+        }
         return Ok((vec!["--key-file".into(), kf.to_string_lossy().into_owned()], vec![]));
     }
     if cfg.repo.join(".env").exists() || cfg.scripts_dir.join(".env").exists() {

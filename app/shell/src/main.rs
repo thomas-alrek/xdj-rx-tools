@@ -267,8 +267,13 @@ fn is_firmware(p: &Path) -> bool {
 fn key_dir() -> PathBuf {
     app_data_root().join("key")
 }
+/// The key is always stored as `aes256.key`; its content is sniffed at use (64-hex key
+/// vs a passphrase file). One filename, both formats.
+fn key_path() -> PathBuf {
+    key_dir().join("aes256.key")
+}
 fn has_key() -> bool {
-    key_dir().join("key.hex").exists() || key_dir().join("aes256.key").exists()
+    key_path().exists()
 }
 fn is_hex_key(s: &str) -> bool {
     let t = s.trim();
@@ -279,22 +284,18 @@ fn store_key_hex(hex: &str) -> Result<(), String> {
     if !is_hex_key(t) {
         return Err("the key must be 64 hex characters".into());
     }
-    let d = key_dir();
-    std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
-    let _ = std::fs::remove_file(d.join("aes256.key"));
-    std::fs::write(d.join("key.hex"), t).map_err(|e| e.to_string())
+    std::fs::create_dir_all(key_dir()).map_err(|e| e.to_string())?;
+    std::fs::write(key_path(), t).map_err(|e| e.to_string())
 }
-/// A dropped key file: a text file of 64 hex becomes the hex key; anything else is
-/// kept as an `aes256.key` passphrase file (xdjrx_upd derives the key from it).
+/// A dropped key file: a text file of 64 hex is stored as the hex key; anything else is
+/// kept as a passphrase file. Either way the stored file is `aes256.key`.
 fn store_key_file(path: &Path) -> Result<(), String> {
     let content = std::fs::read_to_string(path).unwrap_or_default();
     if is_hex_key(&content) {
         return store_key_hex(&content);
     }
-    let d = key_dir();
-    std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
-    let _ = std::fs::remove_file(d.join("key.hex"));
-    std::fs::copy(path, d.join("aes256.key")).map(|_| ()).map_err(|e| e.to_string())
+    std::fs::create_dir_all(key_dir()).map_err(|e| e.to_string())?;
+    std::fs::copy(path, key_path()).map(|_| ()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
