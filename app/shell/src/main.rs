@@ -199,7 +199,8 @@ fn show_emulator(app: &tauri::AppHandle) {
     } else if let Err(e) =
         WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
             .title("Pioneer XDJ-RX")
-            .inner_size(1120.0, 760.0)
+            .inner_size(1480.0, 900.0)
+            .min_inner_size(1000.0, 680.0)
             .build()
     {
         eprintln!("[shell] could not open emulator window: {e}");

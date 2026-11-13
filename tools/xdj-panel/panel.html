@@ -40,9 +40,10 @@
     aspect-ratio:800/480;width:100%;max-width:520px;box-shadow:0 8px 30px #0008}
   #screen{width:100%;height:100%}
   #screen canvas{width:100%!important;height:100%!important;display:block}
-  .main{display:grid;grid-template-columns:minmax(300px,1fr) minmax(420px,1.25fr) minmax(300px,1fr);
+  .main{display:grid;grid-template-columns:minmax(260px,1fr) minmax(380px,1.2fr) minmax(260px,1fr);
     gap:12px;align-items:start}
-  @media(max-width:1180px){ .main{grid-template-columns:1fr} }
+  /* only collapse to a single column on genuinely narrow windows */
+  @media(max-width:900px){ .main{grid-template-columns:1fr} }
   .deck,.mixer{background:linear-gradient(180deg,var(--deck),#0f1115);border:1px solid var(--edge);
     border-radius:14px;padding:12px;min-width:0}
   .dh{font-size:11px;font-weight:800;letter-spacing:2px;color:var(--accent);margin:0 2px 10px}
