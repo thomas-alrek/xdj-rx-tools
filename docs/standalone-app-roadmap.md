@@ -192,6 +192,10 @@ pre-build rung 3 — measure at each rung first.
   `build/qemu` layout, else shows the drop target. `xdj-host` run takes `XDJ_FW_DIR`.
 - **Distribution rule (enforced):** nothing firmware-derived is committed or bundled —
   boot artifacts are generated at runtime from the user's own `.UPD` into app-data.
+- **Before release (see §5bis):** (A) the AES key must be **prompted from the user**, not
+  the dev `.env`/auto-fetch — prep today only works because a dev `.env` exists; (B) the
+  Python + e2fsprogs prep pipeline must be **bundled per-platform** (the engine's current
+  venv/uv/system Python lookup is a dev assumption).
 - Verified: `prep` built fw.iso+blobs+nand into app-data and the second run was an instant
   cache hit; `XDJ_FW_DIR=<that dir> xdj-host` booted it to the live UI; the shell auto-boots
   a prepared firmware and (with `XDJ_FORCE_SETUP=1`) shows the drop target with no emulator.
@@ -350,6 +354,54 @@ two e2fsprogs shell-outs (5.2), which bundling keeps install-free.
 - Screen rendering: how far up the Phase 2 ladder (noVNC → Rust-decode → native
   GPU surface) perf actually forces us. Decide by measuring at each rung, not up
   front. Today's UI is already sluggish, so rung 1 is the baseline to beat.
+
+## 5bis. Deferred items raised during Phases 1–3 (must tackle before release)
+
+### A. The AES decryption key must be user-supplied, never bundled (raised 2026-11-13)
+The `.UPD` payload is a cryptoloop AES-256 image; decrypting it needs Pioneer's key.
+**Good news: the key is NOT baked into our source.** [xdjrx_upd.py](../xdjrx_upd.py)
+`_load_key` takes it, in order, from `--key-file aes256.key` (a passphrase file), the
+`XDJRX_AES_KEY` env var, or a `.env` (git-ignored) — and **errors out if none is
+present** (the `--help` line "else built-in key" is stale wording; there is no built-in
+fallback). [fetch_key.py](../fetch_key.py) can *derive* the key from Pioneer's own
+public GPL source release (~280 MB download) and write `.env`.
+
+Why it's a release blocker: today the prep path (Phase 3 `xdj-host prep`) only works
+because the dev `.env` exists in the repo. A shipped app has no `.env`, and we must
+**not** bundle the key or silently auto-fetch it — shipping the key (or a one-click
+grab of it) distributes Pioneer-owned material, exactly what CLAUDE.md's standing
+constraint forbids.
+
+Plan (when we reach it):
+- On first firmware drop with no key on hand, **prompt the user** for the key — accept
+  an `aes256.key` passphrase file (drag/drop or file picker) or a 64-hex string, and
+  wire it straight through to the prep step (`--key-file` / `XDJRX_AES_KEY`). The user
+  owns the device and supplies the key, the app never ships it.
+- Cache the supplied key per-user in app-data (same place as the prepared firmware), so
+  it's asked for once — decide: store the raw key vs. only remember "key present".
+- `fetch_key.py` (auto-derive from the GPL source): keep it a **dev-only convenience**,
+  off by default in the app; at most offer it as an explicit, user-initiated action with
+  clear provenance. Decide the exact policy when building the key-prompt UX.
+- `xdj-host prep` currently passes no key (relies on `.env`); add a key argument/env it
+  forwards to `xdjrx_upd.py`, and surface a clear "firmware key required" error instead
+  of a Python traceback when it's missing.
+
+### B. The nand.img / prep pipeline must ship and run on every target (raised 2026-11-13)
+Phase 3's prep is **Python** ([xdjrx_upd.py](../xdjrx_upd.py),
+[qemu_prepare.py](../qemu_prepare.py), [qemu/build-nand.py](../qemu/build-nand.py)) and
+shells out to **e2fsprogs** (`mke2fs`+`debugfs`) for the ext4 rootfs. The current engine
+(`xdj-host`'s `python_cmd`) finds a Python via the repo venv / `uv` / system `python3` —
+a **dev-only assumption**; a shipped app has none of those. This is the same portability
+problem already analysed in **§5.1 (Python→Rust port)** and **§5.2 (ext4 creation is the
+one hard dep)** — recording it here so Phase 3's engine is revisited during packaging:
+- Interim (unblocks macOS + Linux now): **bundle** a standalone Python + the prep scripts
+  + `mke2fs`/`debugfs` inside the app, and have `xdj-host` call the bundled copies instead
+  of a system Python (replace `python_cmd`'s dev lookup with a resource-relative path).
+- Windows is the weak point: e2fsprogs needs an MSYS2/Cygwin build (§5.2). This is the
+  main argument for eventually **porting the pipeline (incl. an ext4 writer) to Rust** so
+  prep is a single native binary with no Python/e2fsprogs runtime at all.
+- Decide per platform: bundled-sidecar everywhere first, then Rust-port the ext4 step when
+  Windows packaging demands it (§5.2).
 
 ## 6. Related
 - [emulator-status.md](emulator-status.md) — feature board (boot/USB/audio/panel).
