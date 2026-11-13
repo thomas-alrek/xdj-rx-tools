@@ -44,6 +44,8 @@ interoperability/preservation on owned hardware.
   **`map-subucom-{button,fader,knob,rotary}`**.
 - Reverse-engineer `rbp` internals / REA workflow → **`rbp-binary-internals`**.
 - Firmware `.UPD` format → **`upd-firmware-format`**. QEMU patch set → **`qemu-imx6-patches`**.
+- Standalone desktop app (Tauri shell + `xdj-host` orchestrator + packaging) → **`build-xdj-app`**;
+  the virtual web panel (controls UI, layout, USB LOAD) → **`xdj-virtual-panel`**.
 
 ## Gotchas (bite repeatedly)
 - Single-core TCG boot is load-sensitive: **close REA/Ghidra before booting** (Ghidra +

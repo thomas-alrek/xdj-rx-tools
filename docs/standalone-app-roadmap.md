@@ -1,6 +1,25 @@
 # Standalone app roadmap — packaging the XDJ-RX emulator
 
-**Status: IN PROGRESS — Phases 1 (control socket) + 2 (Tauri shell + orchestrator) done 2026-11-12, Phase 3 (firmware drag-drop + app-data) done 2026-11-13; Phase 3b (USB media) plumbing done with a deferred enumeration issue, Phase 4 (audio backend pick) done, Phase 5 macOS .app done (ad-hoc signed; notarization + key-prompt pending); Phase 5 Windows/Linux + the Python→Rust port remain.**
+**Status: IN PROGRESS — Phases 1 (control socket) + 2 (Tauri shell + orchestrator) done 2026-11-12, Phase 3 (firmware drag-drop + app-data) done 2026-11-13; Phase 3b (USB media) plumbing done with a deferred enumeration issue, Phase 4 (audio backend pick) done, Phase 5 macOS .app done (ad-hoc signed; notarization pending). The key prompt, a rebuilt copyright-free panel, native file dialogs, and panel-driven USB LOAD all landed 2026-11-13. Phase 5 Windows/Linux + the Python→Rust port remain.**
+
+### Landed since the Phase 1–5 core (2026-11-13)
+- **Panel rebuilt, copyright-free.** The old UI embedded a Pioneer device **photo** (legal risk); it
+  was deleted and the panel redrawn as an original flat design — absolute photo-calibrated layout
+  (`COORDS`/`SCREEN0`/`ZONES`), npm `audio-knobs` knobs + custom jog platters / faders / combined
+  browse encoder, a dev `?cal` overlay for alignment. See skill [xdj-virtual-panel], memory
+  [[photo-panel]].
+- **Key prompt (§5bis-A) done.** `app-data/key/aes256.key`, content-sniffed; never bundled.
+- **Native file dialogs** (tauri-plugin-dialog): firmware drop-card is clickable, key has a Browse
+  button, and USB LOAD opens a picker. Two paths by window origin — app commands + non-blocking
+  `pick_file` on the local setup window; the dialog plugin JS API + a `remote` capability +
+  `dialog:allow-open` on the external panel (app commands are ACL-blocked for remote origins).
+- **Panel-driven USB LOAD** — `/usb` endpoint mounts a disk image/device on a slot over QMP
+  (`drive_add`/`device_add` + detect file), **eject-first** so re-loading works. See skill [build-xdj-app].
+- **Bug fixes:** first-run firmware load failed with "panel didn't come up" — prep's build scripts
+  polluted the stdout the shell reads as `XDJ_FW_DIR` (clean now; scripts → stderr + last-line read);
+  file dialog froze the app (`blocking_pick_file` on the main thread → non-blocking callback); orphaned
+  QEMU on app kill (parent-death watch + CloseRequested); log box made selectable; cursor kept visible
+  over the noVNC screen.
 The goal: turn today's "custom QEMU + web UI + `/tmp` files" setup into a single
 self-contained, cross-platform desktop app. The user drops a `.UPD` firmware onto
 the app; the app prepares the boot image and runs the emulator, with a native
