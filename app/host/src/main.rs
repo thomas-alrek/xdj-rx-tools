@@ -302,6 +302,9 @@ fn spawn_sidecar(cfg: &Config) -> std::io::Result<Child> {
         "--port".into(), cfg.panel_port.to_string(),
         "--ctrl-sock".into(), cfg.rt("ctrl.sock").to_string_lossy().into_owned(),
         "--key-sock".into(), cfg.rt("key.sock").to_string_lossy().into_owned(),
+        // QMP socket so the panel's USB LOAD buttons can drive_add/device_add on the hub
+        // (the .app exposes no HMP monitor; QMP accepts our short-lived connections too).
+        "--qmp".into(), cfg.rt("qmp.sock").to_string_lossy().into_owned(),
     ];
     eprintln!("[host] sidecar: {} {}", cfg.python, args.join(" "));
     let (out, err) = log_stdio(cfg, "sidecar.log");

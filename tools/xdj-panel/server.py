@@ -26,7 +26,7 @@ Usage:  python3 tools/xdj-panel/server.py [--port 8765] [--mon /tmp/d_mon4.sock]
                 [--ctrl-sock <dir>/ctrl.sock] [--key-sock <dir>/key.sock]
 Then open http://127.0.0.1:8765
 """
-import argparse, http.server, socketserver, socket, time, os, threading, json
+import argparse, http.server, socketserver, socket, time, os, threading, json, subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(HERE, "assets")
@@ -43,6 +43,7 @@ KNOBS = os.environ.get("XDJ_KNOBS_DIR") or os.path.normpath(
 CTRL = "/tmp/subucom_ctrl"
 MAINKEY = "/tmp/mainkey"        # MAIN-UCOM direct-key GPIO (USB1/USB2/rekordbox/MIDI)
 MON = "/tmp/d_mon4.sock"
+QMP = None                      # QEMU QMP unix socket (the .app passes this; used for USB mount)
 PPM = "/tmp/xdjpanel_fb.ppm"
 
 # Phase 1 control transport. When --ctrl-sock / --key-sock are given, control state
@@ -272,6 +273,88 @@ def grab_raw():
             return None
 
 
+# ---- USB mount (drive_add/device_add on the hub + assert the detect GPIO file) ----
+# Mirrors the app/host `maybe_insert_usb` choreography so a panel LOAD button can mount
+# a disk image (or physical device) on the fly. Over QMP in the .app (--qmp), or the raw
+# HMP monitor in dev (--mon). docs/usb-mount-howto.md / usb-slot-topology.md.
+def _qmp_hmp(sock_path, cmds):
+    """Run HMP command-lines via QMP human-monitor-command on a fresh connection."""
+    s = socket.socket(socket.AF_UNIX); s.settimeout(5.0); s.connect(sock_path)
+    f = s.makefile("rwb")
+    f.readline()                                   # QMP greeting
+    f.write(b'{"execute":"qmp_capabilities"}\n'); f.flush(); f.readline()
+    outs = []
+    for c in cmds:
+        f.write((json.dumps({"execute": "human-monitor-command",
+                             "arguments": {"command-line": c}}) + "\n").encode()); f.flush()
+        while True:
+            line = f.readline()
+            if not line:
+                break
+            obj = json.loads(line.decode())
+            if "return" in obj or "error" in obj:
+                outs.append(obj); break
+    s.close()
+    return outs
+
+
+def _hmp_raw(cmds):
+    """Send raw HMP command lines over the --mon monitor socket (dev)."""
+    s = socket.socket(socket.AF_UNIX); s.settimeout(5.0); s.connect(MON)
+    time.sleep(0.02)
+    s.setblocking(False)
+    try:
+        while s.recv(65536):
+            pass
+    except Exception:
+        pass
+    s.setblocking(True); s.settimeout(5.0)
+    out = []
+    for c in cmds:
+        s.sendall((c + "\n").encode()); time.sleep(0.08)
+        try:
+            out.append(s.recv(65536).decode("utf-8", "replace"))
+        except Exception:
+            pass
+    s.close()
+    return out
+
+
+def mount_usb(slot, imgpath, write=False):
+    """Insert `imgpath` (file or /dev device) on the given front slot (usb1|usb2)."""
+    port, detect = ("1.2", "/tmp/usb_insert") if slot == "usb1" else ("1.1", "/tmp/usb2_insert")
+    real = os.path.realpath(imgpath)
+    # A physical disk must be released by the host OS first (macOS/Linux, best-effort).
+    if imgpath.startswith("/dev/"):
+        for cmd in (["diskutil", "unmountDisk", imgpath], ["umount", imgpath]):
+            try:
+                subprocess.run(cmd, capture_output=True, timeout=15); break
+            except Exception:
+                continue
+    # HMP drive_add doesn't quote paths; symlink to a space-free path.
+    link = "/tmp/xdjpanel_%s.img" % slot
+    try:
+        os.remove(link)
+    except FileNotFoundError:
+        pass
+    os.symlink(real, link)
+    did = "xdjpanel_" + slot
+    snap = "" if write else ",snapshot=on"
+    cmds = [
+        "drive_add 0 if=none,id=%s,file=%s,format=raw%s" % (did, link, snap),
+        "device_add usb-storage,bus=usb-bus.1,port=%s,drive=%s,id=%s_dev,removable=on" % (port, did, did),
+    ]
+    outs = _qmp_hmp(QMP, cmds) if QMP else _hmp_raw(cmds)
+    blob = json.dumps(outs).lower()
+    if '"error"' in blob or "failed" in blob or "duplicate" in blob or "in use" in blob:
+        raise RuntimeError("monitor rejected insert (already mounted? STOP the slot first): %s" % outs)
+    # Assert the slot's detect GPIO so the firmware resumes HOST1 and mounts it.
+    with open(detect, "wb"):
+        pass
+    return "mounted %s on %s%s" % (os.path.basename(real), slot.upper(),
+                                   "" if write else " (read-only)")
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -312,6 +395,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_file(path[len("/novnc/"):], base=NOVNC)
         elif path.startswith("/knobs/"):
             self._send_file(path[len("/knobs/"):], base=KNOBS)
+        elif path == "/cal-ref":
+            # Dev-only calibration overlay image (never bundled/committed).
+            # Set XDJ_CAL_REF=/path/to/hardware-photo.png to enable.
+            ref = os.environ.get("XDJ_CAL_REF", "")
+            if ref and os.path.isfile(ref):
+                try:
+                    with open(ref, "rb") as f:
+                        self._send(200, "image/png", f.read())
+                except Exception as e:
+                    self._send(500, "text/plain", str(e).encode())
+            else:
+                self._send(404, "text/plain", b"no XDJ_CAL_REF")
         elif path == "/cal":
             if os.path.isfile(CAL):
                 self._send_file("calibration.json", base=ASSETS)
@@ -432,6 +527,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if n:
                 threading.Thread(target=_ramp, args=(n,), daemon=True).start()
             self._send(200, "text/plain", b"ok")
+        elif path == "/usb":
+            # Mount a USB on a front slot. Body: "<usb1|usb2> <path-to-image-or-device>".
+            parts = body.strip().split(" ", 1)
+            if len(parts) != 2 or parts[0] not in ("usb1", "usb2") or not parts[1].strip():
+                self._send(400, "text/plain", b"usage: '<usb1|usb2> <path>'"); return
+            slot, img = parts[0], parts[1].strip()
+            if not os.path.exists(img):
+                self._send(404, "text/plain", ("no such path: " + img).encode()); return
+            if not (QMP or os.path.exists(MON)):
+                self._send(503, "text/plain", b"no QEMU monitor (QMP/HMP) available for mount"); return
+            try:
+                self._send(200, "text/plain", mount_usb(slot, img).encode())
+            except Exception as e:
+                self._send(500, "text/plain", str(e).encode())
         elif path == "/savecal":
             try:
                 json.loads(body)                       # validate
@@ -449,10 +558,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def main():
-    global MON, CTRL_SOCK, KEY_SOCK
+    global MON, QMP, CTRL_SOCK, KEY_SOCK
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--mon", default=MON, help="QEMU monitor unix socket")
+    ap.add_argument("--qmp", default=None, help="QEMU QMP unix socket (enables the USB LOAD "
+                    "buttons in the .app, where there's no HMP monitor)")
     ap.add_argument("--ctrl-sock", default=None,
                     help="QEMU xdjctrl chardev socket (push sub-ucom snapshots here "
                          "instead of /tmp/subucom_ctrl)")
@@ -461,6 +572,7 @@ def main():
                          "instead of /tmp/mainkey)")
     args = ap.parse_args()
     MON = args.mon
+    QMP = args.qmp
     CTRL_SOCK = args.ctrl_sock
     KEY_SOCK = args.key_sock
     socketserver.ThreadingTCPServer.allow_reuse_address = True
