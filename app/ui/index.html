@@ -1,4 +1,57 @@
-<!doctype html><html><head><meta charset="utf-8"><title>XDJ-RX</title>
-<style>html,body{margin:0;height:100%;background:#0b0c0e;color:#9aa0a6;
-font:14px -apple-system,system-ui,sans-serif;display:flex;align-items:center;justify-content:center}</style>
-</head><body>Starting the XDJ-RX emulator…</body></html>
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>XDJ-RX</title>
+  <style>
+    :root { color-scheme: dark; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: #0b0c0e; color: #c7ccd1;
+      font: 15px/1.5 -apple-system, system-ui, "Segoe UI", sans-serif;
+      display: flex; align-items: center; justify-content: center;
+      -webkit-user-select: none; user-select: none;
+    }
+    .card {
+      width: min(560px, 86vw); text-align: center; padding: 40px 28px;
+      border: 2px dashed #2a2e35; border-radius: 16px; background: #101216;
+      transition: border-color .15s, background .15s;
+    }
+    body.drag .card { border-color: #d64541; background: #16130f; }
+    h1 { font-size: 20px; margin: 0 0 6px; color: #e6e9ec; font-weight: 600; }
+    .mark { width: 54px; height: 54px; margin: 0 auto 18px; border-radius: 12px;
+      background: #14161a; display: flex; align-items: center; justify-content: center; }
+    .mark i { width: 22px; height: 22px; background: #d64541; border-radius: 5px; display: block; }
+    p { margin: 8px 0 0; color: #9aa0a6; }
+    .hint { font-size: 13px; color: #6b7178; margin-top: 18px; }
+    #status { margin-top: 20px; min-height: 22px; color: #e6e9ec; }
+    #status.err { color: #ff6b66; }
+    .spin { display: inline-block; width: 14px; height: 14px; margin-right: 8px;
+      border: 2px solid #3a3f47; border-top-color: #d64541; border-radius: 50%;
+      vertical-align: -2px; animation: s 0.8s linear infinite; }
+    @keyframes s { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="mark"><i></i></div>
+    <h1>Pioneer XDJ-RX</h1>
+    <p>Drop a firmware <b>.UPD</b> (or Pioneer <b>.zip</b>) here to start the emulator.</p>
+    <div id="status"></div>
+    <div class="hint">The firmware is decrypted and prepared on your machine; nothing is uploaded.</div>
+  </div>
+  <script>
+    // Called from the Rust host via window.eval(...) to report progress.
+    function show(msg, isErr) {
+      const el = document.getElementById('status');
+      el.className = isErr ? 'err' : '';
+      el.innerHTML = (msg && !isErr ? '<span class="spin"></span>' : '') + (msg || '');
+    }
+    // Visual feedback while dragging over the window (the actual drop is handled
+    // natively by the Tauri host, which gets the real file path).
+    window.addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('drag'); });
+    window.addEventListener('dragleave', e => { document.body.classList.remove('drag'); });
+    window.addEventListener('drop', e => { e.preventDefault(); document.body.classList.remove('drag'); });
+  </script>
+</body>
+</html>

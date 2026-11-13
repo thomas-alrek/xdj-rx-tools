@@ -1,6 +1,6 @@
 # Standalone app roadmap — packaging the XDJ-RX emulator
 
-**Status: IN PROGRESS — Phases 1 (control socket) + 2 (Tauri shell + orchestrator) done 2026-11-12; Phases 3–5 planned.**
+**Status: IN PROGRESS — Phases 1 (control socket) + 2 (Tauri shell + orchestrator) done 2026-11-12, Phase 3 (firmware drag-drop + app-data) done 2026-11-13; Phases 3b–5 planned.**
 The goal: turn today's "custom QEMU + web UI + `/tmp` files" setup into a single
 self-contained, cross-platform desktop app. The user drops a `.UPD` firmware onto
 the app; the app prepares the boot image and runs the emulator, with a native
@@ -176,23 +176,27 @@ Rationale for the ladder: today's sluggishness is dominated by the pull-poll
 DJ-UI feel (scrolling waveforms, jog response) still isn't tight enough. Don't
 pre-build rung 3 — measure at each rung first.
 
-### Phase 3 — Firmware drag-and-drop + app-data ⬜
-- Webview drag-drop target accepts a `.UPD`/`.zip`. Rust runs the prep pipeline
-  (bundled Python sidecar initially) on the dropped file.
-- Output to a real app-data dir, **keyed by firmware hash**, so re-dropping the
-  same firmware is instant:
+### Phase 3 — Firmware drag-and-drop + app-data ✅ (2026-11-13)
+- **Prep engine** (`xdj-host prep <firmware.UPD|.zip>`): SHA-256 the firmware, cache
+  dir = `<app-data>/<hash>`, and if incomplete run the pipeline into it via the repo's
+  Python (venv/uv/system): `xdjrx_upd.py decrypt` → `fw.iso`, `qemu_prepare.py` → boot
+  blobs, `build-nand.py` → `nand.img`. A complete cache dir is reused instantly.
   - macOS: `~/Library/Application Support/XDJ-RX/<hash>/`
   - Linux: `$XDG_DATA_HOME/xdj-rx/<hash>/` (fallback `~/.local/share`)
-- Repoint the scripts from "URL + `build/`" to "input path + output dir":
-  [xdjrx_upd.py](../xdjrx_upd.py), [qemu_prepare.py](../qemu_prepare.py),
-  `build-nand` (skill `build-xdj-sd-image`). AES-key fetch
-  ([fetch_key.py](../fetch_key.py)) stays automatic + cached.
-- Progress UI driven from Rust (the pipeline is ~minutes on a cold firmware).
-- **Distribution rule (enforced by this model):** ship the emulator + tooling
-  only. **Never** bundle firmware, the AES key, or `nand.img` — boot blobs are
-  generated at runtime from the user's `.UPD`. This is what keeps the app legally
-  distributable and matches the preservation framing in
-  [emulator-status.md](emulator-status.md).
+- **Scripts repointed** off the hardcoded `build/` layout: [qemu_prepare.py](../qemu_prepare.py)
+  honors `XDJ_OUT`; [build-nand.py](../qemu/build-nand.py) honors `XDJ_OUT`+`XDJ_ISO`;
+  [xdjrx_upd.py](../xdjrx_upd.py) already took `-o` (and has a built-in key, so no
+  fetch needed). All default to `build/` so run.sh/watch.sh are unchanged.
+- **Drag-drop** in the shell: drop a `.UPD`/`.zip` on the window → prep (with a progress
+  overlay) → boot. Startup boots the last-used firmware (recorded in app-data) or the dev
+  `build/qemu` layout, else shows the drop target. `xdj-host` run takes `XDJ_FW_DIR`.
+- **Distribution rule (enforced):** nothing firmware-derived is committed or bundled —
+  boot artifacts are generated at runtime from the user's own `.UPD` into app-data.
+- Verified: `prep` built fw.iso+blobs+nand into app-data and the second run was an instant
+  cache hit; `XDJ_FW_DIR=<that dir> xdj-host` booted it to the live UI; the shell auto-boots
+  a prepared firmware and (with `XDJ_FORCE_SETUP=1`) shows the drop target with no emulator.
+  The actual drop→prep→boot transition needs a real file-drop on the window (user-confirmed,
+  like the window launch); its pieces (prep, start_host, drop screen) are each verified.
 
 ### Phase 3b — Physical USB passthrough ⬜
 Mount a **real** host USB stick into the guest, the same way images mount today.
