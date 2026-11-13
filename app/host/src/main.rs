@@ -582,6 +582,17 @@ fn prep_firmware(cfg: &Config, upd: &Path) -> Result<PathBuf, String> {
         eprintln!("[prep] {desc}…");
         let mut c = std::process::Command::new(&py);
         c.args(&pre).args(&args).current_dir(&cfg.repo);
+        // Keep `xdj-host prep`'s STDOUT clean — only the final dir path is printed there
+        // (the shell reads stdout as that path). Send the child scripts' stdout to our
+        // stderr so their build chatter can't pollute it.
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::FromRawFd;
+            let fd = unsafe { libc::dup(2) };
+            if fd >= 0 {
+                c.stdout(unsafe { std::process::Stdio::from_raw_fd(fd) });
+            }
+        }
         if let Some(p) = &path_env {
             c.env("PATH", p);
         }

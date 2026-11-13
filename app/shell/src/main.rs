@@ -129,7 +129,16 @@ fn prep_firmware(repo: &Path, upd: &Path) -> Result<PathBuf, String> {
         let last = err.lines().last().unwrap_or("prep failed").trim();
         return Err(last.to_string());
     }
-    let dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // prep prints the firmware dir as the last stdout line; be defensive about any
+    // extra output by taking the last non-empty line rather than the whole stream.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let dir = stdout
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("")
+        .to_string();
     if dir.is_empty() {
         return Err("prep produced no output dir".into());
     }
