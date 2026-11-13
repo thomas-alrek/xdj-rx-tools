@@ -1,6 +1,188 @@
+XDJ-RX patch 07 -- multi-field sub-ucom holds + Phase 1 control socket.
+
+Up to MAXHOLD simultaneous persistent A/B holds parsed from every line of the
+control snapshot (complementary two-field faders -- e.g. the tempo fader = 0x04
+negative half + 0x0a positive half -- must set both at once; with only one field
+forced rbp reads the pot as fully pegged).
+
+Phase 1 (standalone-app roadmap) moves the SOURCE of that snapshot off the
+per-frame /tmp file poll: when a QEMU chardev id=xdjctrl is present the harness
+reads NUL-terminated snapshots from it (QEMU is the socket server; the panel /
+Tauri host connects and writes the ENTIRE desired state per record, so one record
+== one atomic ctrl-file write). When it is absent the harness falls back to
+XDJ_CTRL_PATH (default /tmp/subucom_ctrl), which also makes the file path
+per-instance. The text spec and all parsing are unchanged -- only the byte source
+moved (xdj_parse_ctrl is the extracted, shared parser). The shared chardev receive
+also serves the main-ucom key channel (patch 09, id=xdjkey). chardev frontend
+handlers and the SPI-flush frame hook both run under the BQL, so the shared static
+buffers need no locking.
+
 --- a/hw/arm/fsl-imx6.c
 +++ b/hw/arm/fsl-imx6.c
-@@ -657,51 +657,71 @@
+@@ -30,6 +30,7 @@
+ #include "hw/core/qdev-properties.h"
+ #include "system/system.h"
+ #include "chardev/char.h"
++#include "chardev/char-fe.h"
+ #include "qemu/error-report.h"
+ #include "qemu/module.h"
+ #include "target/arm/cpu-qom.h"
+@@ -596,6 +597,154 @@
+         crc = (uint16_t)(xdj_crc16_tab[(crc ^ d[i]) & 0xff] ^ (crc >> 8));
+     }
+     return (uint16_t)~crc;
++}
++
++/*
++ * Phase 1 control channel (XDJ-RX standalone-app roadmap). Read panel control
++ * input from a QEMU chardev instead of polling a /tmp file every SPI frame. Two
++ * independent channels, each a socket the harness (server.py now, the Tauri host
++ * later) connects to and writes:
++ *   id=xdjctrl -> the sub-ucom snapshot (same text spec as /tmp/subucom_ctrl:
++ *                 "B 12 08", "A 54 <hex>", one-shots "b"/"a")
++ *   id=xdjkey  -> the MAIN-UCOM key GPIO int (same as /tmp/mainkey)
++ * Framing: each write is the ENTIRE desired state (one snapshot) terminated by a
++ * NUL byte; an empty record (a lone NUL) releases. One NUL record == one atomic
++ * ctrl-file write today, so the file model's "the whole snapshot replaces the held
++ * set" semantics are preserved. On client disconnect the last snapshot is kept
++ * (mirrors "the file stays until removed"), so holds/auto-level survive a harness
++ * restart.
++ *
++ * If a channel's chardev is absent, the frame hook falls back to its file path
++ * (XDJ_CTRL_PATH / XDJ_KEY_PATH, else the legacy /tmp names) -- the env override
++ * also makes the file path per-instance.
++ *
++ * Thread-safety: the chardev frontend handlers and xdj_subucom_frame_start (called
++ * from imx_spi_flush_txfifo) both run in the QEMU main loop under the BQL, so they
++ * are serialized -- these buffers need no locking.
++ */
++#define XDJ_CTRL_MAX 4096
++typedef struct XdjCtrlChan {
++    const char *id;                 /* chardev id to bind ("xdjctrl"/"xdjkey")   */
++    CharFrontend be;
++    bool bound;                     /* bind attempted (whether or not it existed) */
++    bool present;                   /* a chardev with this id exists = socket mode */
++    bool overflow;                  /* current record overran the buffer; resync   */
++    char acc[XDJ_CTRL_MAX];         /* bytes accumulated up to the next NUL         */
++    int  acc_len;
++    char cur[XDJ_CTRL_MAX];         /* latest complete record (NUL-terminated)      */
++    bool fresh;                     /* a new record arrived since last consumed     */
++} XdjCtrlChan;
++
++static XdjCtrlChan xdj_ctrl_chan = { .id = "xdjctrl" };
++static XdjCtrlChan xdj_key_chan  = { .id = "xdjkey"  };
++
++static int xdj_ctrl_can_read(void *opaque)
++{
++    XdjCtrlChan *c = opaque;
++    return XDJ_CTRL_MAX - 1 - c->acc_len;   /* room left before the terminator */
++}
++
++static void xdj_ctrl_receive(void *opaque, const uint8_t *buf, int size)
++{
++    XdjCtrlChan *c = opaque;
++    int i;
++    for (i = 0; i < size; i++) {
++        uint8_t b = buf[i];
++        if (b == 0) {                        /* record boundary: swap it in */
++            if (!c->overflow) {
++                c->acc[c->acc_len] = 0;
++                memcpy(c->cur, c->acc, (size_t)c->acc_len + 1);
++                c->fresh = true;
++            }
++            c->acc_len = 0;
++            c->overflow = false;
++        } else if (c->acc_len < XDJ_CTRL_MAX - 1) {
++            c->acc[c->acc_len++] = (char)b;
++        } else {
++            c->overflow = true;              /* too long: drop until next NUL */
++        }
++    }
++}
++
++static void xdj_ctrl_event(void *opaque, QEMUChrEvent ev)
++{
++    XdjCtrlChan *c = opaque;
++    if (ev == CHR_EVENT_OPENED) {            /* new client: drop any partial record */
++        c->acc_len = 0;
++        c->overflow = false;
++    }
++}
++
++/* Bind the channel's chardev once; returns true if socket mode is active. */
++static bool xdj_ctrl_bind(XdjCtrlChan *c)
++{
++    if (!c->bound) {
++        Chardev *chr = qemu_chr_find(c->id);
++        c->bound = true;
++        if (chr) {
++            qemu_chr_fe_init(&c->be, chr, &error_abort);
++            qemu_chr_fe_set_handlers(&c->be, xdj_ctrl_can_read, xdj_ctrl_receive,
++                                     xdj_ctrl_event, NULL, c, NULL, true);
++            c->present = true;
++        }
++    }
++    return c->present;
++}
++
++/*
++ * Parse a sub-ucom ctrl snapshot (newline-separated spec lines, same grammar as
++ * the /tmp/subucom_ctrl file) into the hold arrays. Returns the number of holds.
++ * If a one-shot ("b"/"a") line is present, fills the inj_off/inj_val/inj_bit
++ * out-params from the first one and sets has_oneshot (the caller fires it, so
++ * an in-flight one-shot is never clobbered). Parsing matches the old inline
++ * fopen/fgets loop byte-for-byte -- only the input source changed.
++ */
++static int xdj_parse_ctrl(const char *text, int maxhold,
++                          int *hold_off, long *hold_val, int *hold_bit,
++                          int *inj_off, long *inj_val, int *inj_bit,
++                          bool *has_oneshot)
++{
++    int newn = 0;
++    bool did_oneshot = false;
++    const char *p = text;
++    char line[64];
++
++    while (p && *p) {
++        int li = 0;
++        while (*p && *p != '\n') {           /* copy one line (drop the newline) */
++            if (li < (int)sizeof(line) - 1) {
++                line[li++] = *p;
++            }
++            p++;
++        }
++        line[li] = 0;
++        if (*p == '\n') {
++            p++;
++        }
++        {
++            char kind = 0; unsigned off = 0, a = 0;
++            if (sscanf(line, " %c %x %x", &kind, &off, &a) < 2) {
++                continue;
++            }
++            if (kind == 'B' || kind == 'A') {
++                if (newn < maxhold) {
++                    hold_off[newn] = (int)off;
++                    if (kind == 'A') { hold_val[newn] = (long)a; hold_bit[newn] = -1; }
++                    else             { hold_bit[newn] = (int)a;  hold_val[newn] = -1; }
++                    newn++;
++                }
++            } else if (!did_oneshot) {        /* first one-shot line only */
++                *inj_off = (int)off;
++                if (kind == 'a') { *inj_val = (long)a; *inj_bit = -1; }
++                else             { *inj_bit = (int)a;  *inj_val = -1; }
++                did_oneshot = true;
++            }
++        }
++    }
++    if (has_oneshot) {
++        *has_oneshot = did_oneshot;
++    }
++    return newn;
+ }
+ 
+ /*
+@@ -657,34 +806,63 @@
       * held/analog/momentary states and fader positions; release by removing the file).
       * `touch /tmp/subucom_menu` is the legacy one-shot MENU shortcut.
       */
@@ -20,8 +202,8 @@
      static long inj_val = -1;
 -    static int inj_hold = 0;
      {
-         FILE *cf = fopen("/tmp/subucom_ctrl", "r");
-         if (cf) {
+-        FILE *cf = fopen("/tmp/subucom_ctrl", "r");
+-        if (cf) {
 -            char kind = 0; unsigned off = 0, a = 0; char line[64] = {0};
 -            int parsed = (fgets(line, sizeof(line), cf) &&
 -                          sscanf(line, " %c %x %x", &kind, &off, &a) >= 2);
@@ -36,46 +218,58 @@
 -                inj_hold = 0; inj_off = (int)off;
 -                if (kind == 'a') { inj_val = a; inj_bit = -1; }
 -                else { inj_bit = (int)a; inj_val = -1; }
--                s->press = 30;
++        int newn = 0;
++        bool had_input = false;                 /* a ctrl snapshot/file was present */
++        int  t_off = -1, t_bit = 0; long t_val = -1;
++        bool has_os = false;                    /* the snapshot contains a one-shot */
++        if (xdj_ctrl_bind(&xdj_ctrl_chan)) {    /* socket mode: xdjctrl chardev */
++            bool fresh = xdj_ctrl_chan.fresh;
++            had_input = true;                   /* the in-memory snapshot IS the state */
++            newn = xdj_parse_ctrl(xdj_ctrl_chan.cur, MAXHOLD,
++                                  hold_off, hold_val, hold_bit,
++                                  &t_off, &t_val, &t_bit, &has_os);
++            if (has_os && fresh && s->press == 0) {
++                /* fire the one-shot once per fresh record (replaces remove(file)) */
++                inj_off = t_off; inj_val = t_val; inj_bit = t_bit;
+                 s->press = 30;
 -                fclose(cf); remove("/tmp/subucom_ctrl");
 -            } else {
--                fclose(cf);
-+            char line[64]; int newn = 0, did_oneshot = 0;
-+            while (fgets(line, sizeof(line), cf)) {
-+                char kind = 0; unsigned off = 0, a = 0;
-+                if (sscanf(line, " %c %x %x", &kind, &off, &a) < 2) continue;
-+                if (kind == 'B' || kind == 'A') {
-+                    if (newn < MAXHOLD) {
-+                        hold_off[newn] = (int)off;
-+                        if (kind == 'A') { hold_val[newn] = (long)a; hold_bit[newn] = -1; }
-+                        else             { hold_bit[newn] = (int)a;  hold_val[newn] = -1; }
-+                        newn++;
-+                    }
-+                } else if (!did_oneshot && s->press == 0) {
-+                    /* one-shot auto press+release (first one-shot line only) */
-+                    inj_off = (int)off;
-+                    if (kind == 'a') { inj_val = (long)a; inj_bit = -1; }
-+                    else             { inj_bit = (int)a;  inj_val = -1; }
-+                    s->press = 30; did_oneshot = 1;
++                xdj_ctrl_chan.fresh = false;
++            } else if (!has_os) {
++                xdj_ctrl_chan.fresh = false;    /* nothing to fire; consume freshness */
++            }                                   /* has_os & press>0: keep fresh, retry */
++        } else {                                /* fallback: XDJ_CTRL_PATH / legacy file */
++            const char *path = getenv("XDJ_CTRL_PATH");
++            FILE *cf;
++            if (!path || !path[0]) {
++                path = "/tmp/subucom_ctrl";
++            }
++            cf = fopen(path, "r");
++            if (cf) {
++                char buf[XDJ_CTRL_MAX];
++                size_t n = fread(buf, 1, sizeof(buf) - 1, cf);
++                buf[n] = 0;
+                 fclose(cf);
++                had_input = true;
++                newn = xdj_parse_ctrl(buf, MAXHOLD, hold_off, hold_val, hold_bit,
++                                      &t_off, &t_val, &t_bit, &has_os);
++                if (has_os && s->press == 0) {
++                    inj_off = t_off; inj_val = t_val; inj_bit = t_bit;
++                    s->press = 30;
++                    if (newn == 0) remove(path); /* one-shot consumed, no holds to keep */
 +                }
              }
 -        } else if (inj_hold) {
 -            inj_hold = 0; inj_off = -1; inj_bit = 0; inj_val = -1; /* file gone -> release */
 -        } else if (s->press == 0 && access("/tmp/subucom_menu", F_OK) == 0) {
--            inj_off = 0x1b; inj_bit = 0x01; inj_val = -1; /* MENU (code 0x20a) */
--            s->press = 30; remove("/tmp/subucom_menu");
-+            fclose(cf);
-+            nhold = newn;                        /* replace the held set each frame */
-+            if (newn == 0 && did_oneshot) remove("/tmp/subucom_ctrl");
-+        } else {
-+            nhold = 0;                            /* file gone -> release all holds */
-+            if (s->press == 0 && access("/tmp/subucom_menu", F_OK) == 0) {
-+                inj_off = 0x1b; inj_bit = 0x01; inj_val = -1; /* MENU (code 0x20a) */
-+                s->press = 30; remove("/tmp/subucom_menu");
-+            }
++        }
++        nhold = newn;
++        /* legacy MENU one-shot shortcut (only when no ctrl input is present) */
++        if (!had_input && s->press == 0 && access("/tmp/subucom_menu", F_OK) == 0) {
+             inj_off = 0x1b; inj_bit = 0x01; inj_val = -1; /* MENU (code 0x20a) */
+             s->press = 30; remove("/tmp/subucom_menu");
          }
-     }
- 
+@@ -693,15 +871,21 @@
      /* Build the 100-byte frame rbp will see (rbp_buf coordinates). */
      memset(rbp, 0, sizeof(rbp));
  

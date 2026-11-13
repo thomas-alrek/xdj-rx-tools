@@ -24,3 +24,5 @@ venv/
 test/usb/*.img
 test/usb/*.dmg
 tools/xdj-panel/assets/calibration.json
+dist/
+node_modules/

@@ -4,481 +4,468 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>XDJ-RX panel</title>
+<!-- Knobs/faders: MIT "audio-knobs" (HowdyMoto/Knobs), served from /knobs/. Pure SVG. -->
+<script src="/knobs/knobs.js"></script>
 <style>
-  :root{ --bg:#0c0e11; --ink:#e8ebf0; --dim:#9aa3af; --ok:#39d98a; --guess:#e0a63a;
-         --red:#e5484d; --accent:#39b3ff; --edge:#2b2f36; --panel:#16181d; }
+  :root{ --bg:#0a0b0d; --ink:#e8ebf0; --dim:#aeb6c0; --edge:#2b2f36; --edge2:#3a414b;
+    --accent:#39b3ff; --ok:#39d98a; --red:#e5484d; --purp:#4a78ff; --panel:#14171c; }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--ink);
-    font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
-  .bar{display:flex;align-items:center;gap:12px;padding:8px 14px;background:var(--panel);
-    border-bottom:1px solid var(--edge);position:sticky;top:0;z-index:50;flex-wrap:wrap}
-  .bar h1{font-size:14px;margin:0;letter-spacing:.5px;font-weight:700}
+  html,body{height:100%}
+  body{margin:0;background:#070809;color:var(--ink);
+    font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    -webkit-user-select:none;user-select:none;display:flex;flex-direction:column}
+  .bar{display:flex;align-items:center;gap:10px;padding:8px 14px;background:#131519;
+    border-bottom:1px solid var(--edge);z-index:50;flex-wrap:wrap;flex:0 0 auto}
+  .bar h1{font-size:13px;margin:0;letter-spacing:2px;font-weight:800;color:#cdd3db}
+  .bar h1 b{color:var(--accent)}
   .bar .sp{flex:1}
-  .btn{appearance:none;border:1px solid var(--edge);background:#1e2127;color:var(--ink);
-    border-radius:7px;padding:7px 11px;font-size:12px;font-weight:600;cursor:pointer}
-  .btn:hover{border-color:#3a414b}
-  .btn.on{background:#1c3a4d;border-color:#2a6b8f;color:#bfe3ff}
-  .btn.red{background:#3a1e1f;border-color:#6b2e30;color:#ffb4b6}
-  .btn.line{background:#3a2f1e;border-color:#6b572e;color:#ffe0a8}
-  .conn{font-size:11px;padding:3px 9px;border-radius:20px;border:1px solid var(--edge);color:var(--red)}
+  .conn{font-size:11px;padding:3px 10px;border-radius:20px;border:1px solid var(--edge);color:var(--red)}
   .conn.up{color:var(--ok);border-color:#2a6b4f}
-  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-  .hint{color:var(--dim);font-size:11px}
-  .stage-wrap{max-width:1240px;margin:0 auto;padding:14px}
-  #stage{position:relative;width:100%;user-select:none;-webkit-user-select:none}
-  #stage img#device{display:block;width:100%;height:auto;pointer-events:none}
-  #noimg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-    background:#111;border:1px dashed #444;border-radius:8px;text-align:center;padding:24px}
-  /* live screen */
-  #screen{position:absolute;background:#000;image-rendering:auto;}
-  /* hotspots */
-  .hs{position:absolute;transform:translate(-50%,-50%);border-radius:7px;cursor:pointer;
-    display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;
-    color:transparent;text-align:center;line-height:1;overflow:hidden;
-    border:1px solid transparent;background:transparent;transition:background .05s,border-color .05s}
-  .hs.round{border-radius:50%}
-  .hs:hover{background:rgba(57,179,255,.16);border-color:rgba(57,179,255,.5)}
-  .hs.down{background:rgba(57,217,138,.42)!important;border-color:var(--ok)!important}
-  .hs.track{background:rgba(57,179,255,.05)}         /* faders show a faint track */
-  .hs .fill{position:absolute;background:rgba(57,179,255,.55);pointer-events:none;border-radius:4px}
-  .hs .ctick{position:absolute;left:0;right:0;top:50%;height:2px;margin-top:-1px;
-    background:rgba(255,255,255,.4);pointer-events:none}
-  /* calibration */
-  body.cal .hs{border-color:rgba(224,166,58,.9);background:rgba(224,166,58,.14);
-    color:#1a1407;font-size:8px;cursor:move}
-  body.cal .hs.mapped{border-color:rgba(57,217,138,.9);background:rgba(57,217,138,.16)}
-  body.cal .hs.unmapped{border-color:rgba(229,72,77,.9);background:rgba(229,72,77,.16)}
-  body.cal #screen{outline:2px dashed var(--accent);cursor:move}
-  #calhandle{position:absolute;width:16px;height:16px;right:-8px;bottom:-8px;background:var(--accent);
-    border-radius:3px;cursor:nwse-resize;display:none}
-  body.cal #calhandle{display:block}
-  #log{max-width:1240px;margin:0 auto;padding:0 14px 20px}
-  #logbox{height:92px;overflow:auto;background:#0b0d10;border:1px solid var(--edge);border-radius:6px;
-    padding:6px 8px;font:11px/1.4 ui-monospace,Menlo,monospace;color:#b9c2cc;white-space:pre-wrap}
-  .legend{display:flex;gap:16px;color:var(--dim);font-size:11px;margin:6px 2px}
-  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:5px;vertical-align:middle}
-  .dot.ok{background:var(--ok)} .dot.guess{background:var(--guess)} .dot.un{background:var(--red)}
+  .tgl{appearance:none;border:1px solid var(--edge2);background:#1b1f26;color:var(--ink);
+    border-radius:7px;padding:6px 11px;font-size:11px;font-weight:700;cursor:pointer}
+  .tgl.deck{background:#13303f;border-color:#2a6b8f;color:#bfe3ff}
+  .tgl.line{background:#3a2f1e;border-color:#6b572e;color:#ffe0a8}
+  .tgl.red{background:#3a1e1f;border-color:#6b2e30;color:#ffb4b6}
+
+  /* ---- console: fixed device aspect, controls placed absolutely (photo-calibrated) ---- */
+  .stagewrap{flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;padding:10px}
+  #stage{position:relative;aspect-ratio:2142 / 1236;height:100%;width:auto;max-width:100%;
+    background:radial-gradient(130% 100% at 50% 0%,#16191e,#0a0c0f 72%);
+    border:1px solid #23272e;border-radius:14px;overflow:hidden;container-type:size;box-shadow:0 10px 40px #000a}
+  /* decorative zone panels behind the controls */
+  .pbg{position:absolute;background:linear-gradient(180deg,#13161b,#0e1115);border:1px solid #20242b;border-radius:12px}
+
+  .hs{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:stretch;justify-content:center}
+  .hs>.cell,.hs>.btn,.hs>.jogcell{width:100%;height:100%}
+
+  /* ---- cells ---- */
+  .cell{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;min-width:0;min-height:0}
+  .kwrap{flex:1 1 auto;min-height:0;width:100%;display:flex;align-items:center;justify-content:center;overflow:visible;position:relative}
+  .kwrap svg{width:100%;height:100%;display:block}
+  .cell.knob .kwrap svg,.cell.enc .kwrap svg,.cell.rot .kwrap svg{transform:scale(1.28)}
+  .cap{font-size:clamp(4px,.6cqw,8px);line-height:1;color:var(--dim);font-weight:700;letter-spacing:.1px;
+    white-space:nowrap;pointer-events:none;text-shadow:0 1px 2px #000;max-width:100%;overflow:hidden;text-overflow:ellipsis;flex:0 0 auto}
+
+  /* buttons */
+  .btn{cursor:pointer;border-radius:4px;border:1px solid var(--edge2);width:100%;height:100%;min-height:10px;
+    background:linear-gradient(180deg,#242a33,#171b21);color:#cfd5de;
+    font-size:clamp(4px,.62cqw,9px);font-weight:700;letter-spacing:.1px;text-align:center;line-height:1.02;
+    padding:0 1px;overflow:hidden;transition:.05s;box-shadow:0 1px 0 #0007 inset;
+    display:flex;align-items:center;justify-content:center;white-space:normal;overflow-wrap:anywhere}
+  .btn.round{border-radius:50%;aspect-ratio:1/1;height:100%;width:auto;max-width:100%;margin:auto}
+  .btn:hover{border-color:#525a66;color:#fff}
+  .btn.down,.btn:active{background:linear-gradient(180deg,#1b4a63,#123246);border-color:var(--accent);
+    color:#eaf6ff;box-shadow:0 0 10px #39b3ff66,0 1px 0 #0007 inset}
+  .btn.pad{background:linear-gradient(180deg,#2238d0,#16249c);border-color:#4a78ff;color:#dfe6ff;border-radius:5px}
+  .btn.pad.down,.btn.pad:active{background:linear-gradient(180deg,#3a5bff,#2238d0);box-shadow:0 0 12px #4a78ff88}
+  .btn.jogbtn{border-radius:50%;aspect-ratio:1/1;height:100%;width:auto;max-width:100%;margin:auto;
+    border:1px solid #5a616c;color:#eef1f5;font-weight:800;font-size:clamp(5px,.8cqw,12px);
+    background:radial-gradient(circle at 50% 32%,#545a64,#262a31 72%);box-shadow:0 3px 9px #000b,inset 0 1px 0 #ffffff22}
+  .btn.jogbtn:hover{border-color:#7b8491;color:#fff}
+  .btn.jogbtn.down,.btn.jogbtn:active{background:radial-gradient(circle at 50% 32%,#6c737e,#30353d);box-shadow:inset 0 2px 7px #000b}
+  .btn.jogbtn.play{background:radial-gradient(circle at 50% 32%,#51805f,#1d3827 72%);border-color:#3f7a57;color:#ddffea}
+  .btn.jogbtn.play.down,.btn.jogbtn.play:active{background:radial-gradient(circle at 50% 32%,#63df93,#1e7a46)}
+  .btn.unmapped{opacity:.5;border-style:dashed;cursor:default}
+
+  /* jog platter */
+  .jogcell{min-width:0;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .jog{aspect-ratio:1/1;width:100%;height:auto;max-height:100%;margin:auto;border-radius:50%;position:relative;
+    cursor:grab;touch-action:none;border:2px solid #090a0c;
+    background:radial-gradient(circle at 50% 40%,#3b4048 0%,#24282e 38%,#161a1f 63%,#0b0d10 100%);
+    box-shadow:0 7px 22px #000c,inset 0 2px 7px #ffffff12,inset 0 -9px 22px #0009}
+  .jog:active{cursor:grabbing}
+  .jog::before{content:"";position:absolute;inset:9%;border-radius:50%;opacity:.85;
+    background:repeating-conic-gradient(#1b1f24 0deg 5deg,#13161b 5deg 10deg);box-shadow:inset 0 0 14px #000c}
+  .jog::after{content:"";position:absolute;inset:34%;border-radius:50%;border:1px solid #0a0b0d;
+    background:radial-gradient(circle at 50% 38%,#2d323b,#14171c 72%);box-shadow:inset 0 2px 6px #ffffff14,0 2px 7px #0009}
+
+  /* vertical faders (tempo / channel) */
+  .cell.vfader{justify-content:stretch}
+  .vtrack{position:relative;flex:1 1 auto;min-height:20px;width:100%;cursor:ns-resize}
+  .vtrack::before{content:"";position:absolute;left:50%;top:3%;bottom:3%;width:5px;transform:translateX(-50%);
+    background:linear-gradient(90deg,#050608,#1b1f26,#050608);border-radius:3px;box-shadow:inset 0 0 4px #000c,0 0 0 1px #000}
+  .vtrack.ctr::after{content:"";position:absolute;left:50%;top:50%;width:46%;height:2px;transform:translate(-50%,-50%);background:#444b55}
+  .vthumb{position:absolute;left:50%;width:80%;max-width:26px;min-width:12px;height:12%;min-height:8px;max-height:15px;
+    transform:translate(-50%,50%);border-radius:4px;border:1px solid #0009;pointer-events:none;
+    background:linear-gradient(180deg,#d7dde4,#8b94a1);box-shadow:0 2px 6px #0009,inset 0 1px 0 #fff6}
+
+  /* crossfader (horizontal) */
+  .cell.xf{flex-direction:column;justify-content:center}
+  .htrack{position:relative;width:100%;flex:1 1 auto;min-height:10px;max-height:22px;margin:auto 0;cursor:ew-resize}
+  .htrack::before{content:"";position:absolute;top:50%;left:2%;right:2%;height:5px;transform:translateY(-50%);
+    background:linear-gradient(180deg,#050608,#1b1f26,#050608);border-radius:3px;box-shadow:inset 0 0 4px #000c,0 0 0 1px #000}
+  .hthumb{position:absolute;top:50%;height:150%;max-height:26px;width:13%;max-width:20px;min-width:11px;
+    transform:translate(-50%,-50%);border-radius:4px;border:1px solid #0009;pointer-events:none;
+    background:linear-gradient(90deg,#d7dde4,#8b94a1);box-shadow:0 2px 6px #0009,inset 0 1px 0 #fff6}
+
+  /* browse encoder centre push */
+  .encpush{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:46%;height:auto;aspect-ratio:1/1;border-radius:50%;
+    background:radial-gradient(circle at 50% 34%,#2c333d,#13171e);border:1px solid #3a414b;color:#aeb6c0;
+    font-size:clamp(4px,.56cqw,8px);font-weight:800;letter-spacing:.3px;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px #000a,inset 0 1px 0 #ffffff12}
+  .encpush:hover{color:#fff;border-color:#55606e}
+  .encpush.down{background:radial-gradient(circle at 50% 34%,#1b4a63,#0e2636);border-color:var(--accent);
+    color:#eaf6ff;box-shadow:0 0 12px #39b3ff88}
+
+  /* screen */
+  #screen{position:absolute;background:#000;border-radius:6px;overflow:hidden;
+    box-shadow:0 0 0 1px #000,0 4px 18px #0009;display:flex;align-items:center;justify-content:center}
+  #screen canvas{width:100%!important;height:100%!important;display:block}
+  /* noVNC hides the local cursor and draws the remote one; the firmware has no cursor,
+     so force our normal pointer over the display area instead of an invisible one. */
+  #screen,#screen *{cursor:default!important}
+
+  .logwrap{flex:0 0 auto;padding:8px 14px}
+  #logbox{height:46px;overflow:auto;background:#0b0d10;border:1px solid var(--edge);border-radius:8px;
+    padding:6px 9px;font:11px/1.45 ui-monospace,Menlo,monospace;color:#9aa7b4;white-space:pre-wrap;
+    -webkit-user-select:text;user-select:text;cursor:text}
 </style>
 </head>
 <body>
 <div class="bar">
-  <h1>XDJ-RX · panel</h1>
+  <h1>PIONEER <b>XDJ-RX</b> · VIRTUAL PANEL</h1>
   <span id="conn" class="conn">screen: …</span>
-  <span id="fps" class="mono hint"></span>
   <span class="sp"></span>
-  <span id="calhint" class="hint">Tip: press <b>C</b> or “Calibrate” to drag controls onto the photo, then Save.</span>
-  <button class="btn" id="bcal">Calibrate</button>
-  <button class="btn" id="bsave" style="display:none">Save layout</button>
-  <button class="btn" id="breset" style="display:none">Reset</button>
-  <button class="btn red" id="brel">Release all</button>
-  <button class="btn src on" id="src0" title="CH1 input source (DECK / LINE·PHONO)">CH1: DECK</button>
-  <button class="btn src on" id="src1" title="CH2 input source (DECK / LINE·PHONO)">CH2: DECK</button>
+  <button class="tgl deck" id="src0" title="CH1 input source (DECK / LINE·PHONO)">CH1: DECK</button>
+  <button class="tgl deck" id="src1" title="CH2 input source (DECK / LINE·PHONO)">CH2: DECK</button>
+  <button class="tgl red" id="brel">Release all</button>
 </div>
 
-<div class="stage-wrap">
-  <div id="stage">
-    <img id="device" src="/assets/xdj-rx.png" alt="XDJ-RX"
-         onerror="document.getElementById('noimg').style.display='flex'">
-    <div id="noimg" style="display:none">
-      <div><b>Device image missing.</b><br>
-      Save your XDJ-RX photo to<br>
-      <span class="mono">tools/xdj-panel/assets/xdj-rx.png</span><br>then reload.</div>
-    </div>
-    <canvas id="screen" width="800" height="480"></canvas>
-    <div id="calhandle"></div>
-    <!-- hotspots injected here -->
-  </div>
-</div>
-
-<div id="log">
-  <div class="legend">
-    <span><span class="dot ok"></span>verified code</span>
-    <span><span class="dot guess"></span>best-guess code</span>
-    <span><span class="dot un"></span>unmapped (click logs it)</span>
-  </div>
-  <div id="logbox"></div>
-</div>
+<div class="stagewrap"><div id="stage"></div></div>
+<div class="logwrap"><div id="logbox"></div></div>
 
 <script>
-// ---- control layout (percentages of the device image) --------------------
-// cx,cy = centre %, w,h = size %. type: btn | vfader | hfader | knob.
-// spec: "B off bit" (button) or "A off" (analog) in hex; null = unmapped.
-// grade: ok=verified, guess=unverified, un=unmapped.
-// Browse-encoder / USB-stop controls (live 2026-11-10, see docs/xdj-rx-control-map.md
-// "Session 4b"): all live in subucom frame byte rbp[0x5d] (decoder @ 0x283600).
-//   bit0(0x01)=USB1 STOP, bit1(0x02)=USB2 STOP (code 0x8001/0x8002) -- VERIFIED by
-//     actual eject (kernel umount, export.pdb closed). Lowercase "b" = one eject/click.
-//   bit4(0x10)=encoder PUSH (code 0x4205) -- VERIFIED: on a fresh interactive browser,
-//     one "b 5d 10" cleanly drills one level (categories->ARTIST->...), no overlay.
-//     Reproduced on two fresh boots. (This CORRECTS the handover: 0x4205 is the PUSH,
-//     not EncoderRotate.) A browser must be freshly interactive for it to apply.
-// ROTATE (scroll) = 16-bit SIGNED COUNTER at rbp[0x54]/[0x55] (LE) -- ✅ SOLVED both
-//   directions (Session 4h). INCREMENT the counter = scroll DOWN (forward); DECREMENT =
-//   scroll UP (reverse). Clean 1:1 (6 increments = 6 items), no gdb, no overlay. Driven by
-//   the server's stateful /browse endpoint (POST a signed detent count): it steps the
-//   counter +/-1 with a ~45ms poll-safe dwell and holds "A 54 <counter16>". ROT-/ROT+ click
-//   one detent each; the central PUSH knob also takes the mouse WHEEL for smooth scroll.
-//   Unlocked by the XDJ-RX3 emulator repo (github.com/nzoschke/xdj-emu): its browse encoder
-//   is a 16-bit counter at EUP bytes 84-85 = 0x54/0x55 (and its push = byte 93 bit4 = 0x5d
-//   bit4), both matching the RX. See docs/xdj-rx-control-map.md "Session 4h" and
-//   docs/rx3-panel-crossref.md.
-const SCREEN0 = { x:36.5, y:5.4, w:22.6, h:19.84 };
-const CTRLS0 = [
-  {id:'browse', label:'BROWSE', type:'btn', spec:'B 16 01', grade:'guess', cx:40.06, cy:29.21, w:3.6, h:2.4},
-  {id:'taglist', label:'TAG LIST', type:'btn', spec:'b 5e 02', grade:'ok', cx:45.7, cy:29.19, w:3.6, h:2.4},
-  {id:'info', label:'INFO', type:'btn', spec:'b 5f 08', grade:'ok', cx:51.37, cy:29.15, w:3.4, h:2.4},
-  {id:'menu', label:'MENU/UTILITY', type:'btn', spec:'b 5f 01', longpress:true, grade:'ok', cx:57.11, cy:29.18, w:3.4, h:2.4},
-  {id:'back', label:'BACK', type:'btn', spec:'b 5e 01', grade:'ok', cx:47.21, cy:36.81, w:2.6, h:3.0},
-  {id:'tagtrk', label:'TAG TRK', type:'btn', spec:null, grade:'un', cx:49.9, cy:36.85, w:2.0, h:3.0},
-  {id:'enc', label:'PUSH', type:'btn', spec:'b 5d 10', browseWheel:true, grade:'ok', cx:48.47, cy:44.85, w:5.2, h:9.0, shape:'round'},
-  {id:'encL', label:'ROT−', type:'btn', browse:-1, grade:'ok', cx:44.6, cy:45.2, w:2.0, h:3.0},
-  {id:'encR', label:'ROT+', type:'btn', browse:1, grade:'ok', cx:52.2, cy:45.2, w:2.0, h:3.0},
-  {id:'loadL', label:'◄LOAD', type:'btn', spec:'b 5d 40', grade:'ok', cx:46.82, cy:52.24, w:2.2, h:2.6},
-  {id:'loadR', label:'LOAD►', type:'btn', spec:'b 5d 20', grade:'ok', cx:50.31, cy:51.81, w:2.2, h:2.6},
-  {id:'quant', label:'QUANTIZE', type:'btn', spec:'B 19 01', grade:'guess', cx:62.5, cy:8.08, w:3.6, h:2.4},
-  {id:'deck12', label:'DECK1/2', type:'btn', gpio:149, grade:'guess', cx:62.67, cy:12.03, w:3.6, h:2.4},
-  {id:'timemd', label:'TIME MODE', type:'btn', gpio:146, grade:'ok', cx:62.67, cy:16.5, w:3.6, h:2.4},
-  {id:'src_rb', label:'rekordbox', type:'btn', gpio:159, grade:'ok', cx:34.66, cy:7.98, w:4.3, h:2.4},
-  {id:'src_midi', label:'MIDI', type:'btn', gpio:161, grade:'ok', cx:34.3, cy:12.2, w:4.3, h:2.4},
-  {id:'src_usb1', label:'USB1 src', type:'btn', gpio:160, grade:'ok', cx:34.45, cy:16.32, w:4.3, h:2.4},
-  {id:'src_usb2', label:'USB2 src', type:'btn', gpio:158, grade:'ok', cx:34.47, cy:20.84, w:4.3, h:2.4},
-  {id:'usb1stop', label:'USB1 STOP', type:'btn', spec:'b 5d 01', grade:'ok', cx:3.7, cy:23.62, w:3.6, h:2.4},
-  {id:'usb2stop', label:'USB2 STOP', type:'btn', spec:'b 5d 02', grade:'ok', cx:93.42, cy:23.21, w:3.6, h:2.4},
-  {id:'mrec', label:'MASTER REC', type:'btn', spec:null, grade:'un', cx:88.32, cy:16.93, w:3.4, h:2.4},
-  {id:'tmark', label:'TRACK MARK', type:'btn', spec:null, grade:'un', cx:88.33, cy:23.32, w:3.4, h:2.4},
-  {id:'eq_hi1', label:'HI1', type:'knob', spec:'A 24', grade:'guess', cx:42.82, cy:41.14, w:4.0, h:5.0, val:512},
-  {id:'eq_mid1', label:'MID1', type:'knob', spec:'A 28', grade:'guess', cx:42.72, cy:47.59, w:4.0, h:5.0, val:512},
-  {id:'eq_low1', label:'LOW1', type:'knob', spec:'A 2a', grade:'guess', cx:42.59, cy:54.6, w:4.0, h:5.0, val:512},
-  {id:'eq_hi2', label:'HI2', type:'knob', spec:'A 34', grade:'guess', cx:54.4, cy:40.1, w:4.0, h:5.0, val:512},
-  {id:'eq_mid2', label:'MID2', type:'knob', spec:'A 38', grade:'guess', cx:54.4, cy:47.3, w:4.0, h:5.0, val:512},
-  {id:'eq_low2', label:'LOW2', type:'knob', spec:'A 3a', grade:'guess', cx:54.4, cy:54.6, w:4.0, h:5.0, val:512},
-  {id:'ch1', label:'CH1', type:'vfader', spec:'A 44', grade:'guess', cx:42.69, cy:75.33, w:3.0, h:15.0, val:0},
-  {id:'ch2', label:'CH2', type:'vfader', spec:'A 4c', grade:'guess', cx:54.33, cy:75.01, w:3.0, h:15.0, val:0},
-  {id:'xf', label:'CROSSFADER', type:'hfader', spec:'A 4e', grade:'ok', cx:48.42, cy:89.67, w:11.0, h:3.4, val:512},
-  {id:'cue1', label:'CUE1', type:'btn', spec:'B 4c 01', grade:'guess', cx:35.76, cy:83.6, w:2.4, h:2.4},
-  {id:'cue2', label:'CUE2', type:'btn', spec:'B 4c 02', grade:'guess', cx:38.15, cy:83.67, w:2.4, h:2.4},
-  {id:'beatL', label:'BEAT◄', type:'btn', spec:'B 56 01', grade:'guess', cx:59.1, cy:42.6, w:2.2, h:2.4},
-  {id:'beatR', label:'BEAT►', type:'btn', spec:'B 56 02', grade:'guess', cx:61.4, cy:42.6, w:2.2, h:2.4},
-  {id:'fxtap', label:'TAP', type:'btn', spec:'B 5b 08', grade:'ok', cx:60.21, cy:48.14, w:3.4, h:4.0, shape:'round'},
-  {id:'fxsel', label:'FX SELECT', type:'rotary', spec:null, specUp:'b 5a 04', specDown:'b 5a 01', grade:'guess', cx:60.2, cy:55.0, w:4.4, h:5.5, shape:'round'},
-  {id:'fxch', label:'CH SEL', type:'btn', spec:'B 5a 20', grade:'guess', cx:60.13, cy:61.71, w:3.6, h:4.4, shape:'round'},
-  {id:'fxlev', label:'FX LVL', type:'knob', spec:'A 54', grade:'guess', cx:60.2, cy:74.5, w:4.0, h:5.0, val:512},
-  {id:'fxon', label:'ON/OFF', type:'btn', spec:'B 5b 04', grade:'ok', cx:60.2, cy:83.7, w:3.6, h:4.4, shape:'round'},
-  {id:'d1play', label:'PLAY', type:'btn', spec:'b 13 40', grade:'ok', cx:4.6, cy:85.4, w:5.0, h:6.4, shape:'round'},
-  {id:'d1cue', label:'CUE', type:'btn', spec:'b 13 80', grade:'ok', cx:4.6, cy:74.9, w:5.0, h:6.4, shape:'round'},
-  {id:'d1sync', label:'SYNC', type:'btn', spec:'b 12 20', grade:'ok', cx:29.8, cy:46.8, w:2.6, h:3.0},
-  {id:'d1shift', label:'SHIFT', type:'btn', spec:'b 12 01', grade:'ok', cx:23.52, cy:79.71, w:3.2, h:2.6},
-  {id:'d1h1', label:'HOT1', type:'btn', spec:'b 10 80', grade:'ok', cx:10.94, cy:86.01, w:3.2, h:4.6},
-  {id:'d1h2', label:'HOT2', type:'btn', spec:'b 10 40', grade:'ok', cx:15.04, cy:86.11, w:3.2, h:4.6},
-  {id:'d1h3', label:'HOT3', type:'btn', spec:'b 10 20', grade:'ok', cx:19.54, cy:86.02, w:3.2, h:4.6},
-  {id:'d1h4', label:'HOT4', type:'btn', spec:'b 10 10', grade:'ok', cx:23.76, cy:86.16, w:3.2, h:4.6},
-  {id:'d1in', label:'IN', type:'btn', spec:'B 13 01', grade:'guess', cx:3.6, cy:31.8, w:2.6, h:2.6},
-  {id:'d1out', label:'OUT', type:'btn', spec:'b 13 02', grade:'ok', cx:7.1, cy:31.8, w:2.6, h:2.6},
-  {id:'d1reloop', label:'RELOOP', type:'btn', spec:'b 12 80', grade:'guess', cx:11.2, cy:31.91, w:2.6, h:2.6},
-  {id:'d1auto', label:'AUTO', type:'btn', spec:'b 11 04', grade:'ok', cx:15.1, cy:79.6, w:3.2, h:2.6},
-  {id:'d1jog', label:'JOG 1', type:'rotary', spec:null, specUp:'b 13 20', specDown:'b 13 10', grade:'guess', cx:17.12, cy:57.11, w:19.0, h:33.0, shape:'round'},
-  {id:'d1slip', label:'SLIP', type:'btn', spec:'b 11 02', grade:'ok', cx:8.3, cy:41.1, w:2.4, h:2.6},
-  {id:'d1trng', label:'TEMPO RANGE', type:'btn', spec:'B 12 08', grade:'ok', cx:30.77, cy:52.79, w:2.6, h:2.6},
-  {id:'d1tempo', label:'TEMPO1', type:'vfader-c', spec:null, specNeg:'A 04', specPos:'A 0a', grade:'ok', cx:31.0, cy:75.22, w:3.0, h:24.0, val:512},
-  {id:'d2play', label:'PLAY', type:'btn', spec:'b 23 40', grade:'ok', cx:66.92, cy:85.3, w:5.0, h:6.4, shape:'round'},
-  {id:'d2cue', label:'CUE', type:'btn', spec:'b 23 80', grade:'ok', cx:66.99, cy:74.81, w:5.0, h:6.4, shape:'round'},
-  {id:'d2sync', label:'SYNC', type:'btn', spec:'b 22 20', grade:'ok', cx:92.15, cy:46.9, w:2.6, h:3.0},
-  {id:'d2shift', label:'SHIFT', type:'btn', spec:'b 22 01', grade:'ok', cx:86.22, cy:79.73, w:3.2, h:2.6},
-  {id:'d2h1', label:'HOT1', type:'btn', spec:'b 20 80', grade:'ok', cx:73.37, cy:85.92, w:3.2, h:4.6},
-  {id:'d2h2', label:'HOT2', type:'btn', spec:'b 20 40', grade:'ok', cx:77.66, cy:86.08, w:3.2, h:4.6},
-  {id:'d2h3', label:'HOT3', type:'btn', spec:'b 20 20', grade:'ok', cx:81.85, cy:86.0, w:3.2, h:4.6},
-  {id:'d2h4', label:'HOT4', type:'btn', spec:'b 20 10', grade:'ok', cx:86.06, cy:86.32, w:3.2, h:4.6},
-  {id:'d2in', label:'IN', type:'btn', spec:'B 23 01', grade:'guess', cx:66.07, cy:32.03, w:2.6, h:2.6},
-  {id:'d2out', label:'OUT', type:'btn', spec:'b 23 02', grade:'ok', cx:69.49, cy:31.87, w:2.6, h:2.6},
-  {id:'d2reloop', label:'RELOOP', type:'btn', spec:'b 22 80', grade:'guess', cx:73.51, cy:32.0, w:2.6, h:2.6},
-  {id:'d2auto', label:'AUTO', type:'btn', spec:'b 21 04', grade:'ok', cx:77.6, cy:79.85, w:3.2, h:2.6},
-  {id:'d2jog', label:'JOG 2', type:'rotary', spec:null, specUp:'b 23 20', specDown:'b 23 10', grade:'guess', cx:79.9, cy:57.18, w:19.0, h:33.0, shape:'round'},
-  {id:'d2slip', label:'SLIP', type:'btn', spec:'b 21 02', grade:'ok', cx:70.7, cy:41.1, w:2.4, h:2.6},
-  {id:'d2trng', label:'TEMPO RANGE', type:'btn', spec:'B 22 08', grade:'ok', cx:93.44, cy:53.26, w:2.6, h:2.6},
-  {id:'d2tempo', label:'TEMPO2', type:'vfader-c', spec:null, specNeg:'A 14', specPos:'A 1a', grade:'ok', cx:93.38, cy:75.29, w:3.0, h:24.0, val:512},
-  {id:'d1_call_l', label:'CALL◄', type:'btn', spec:null, grade:'un', cx:16.0, cy:32.12, w:2.2, h:2.4},
-  {id:'d2_call_l', label:'CALL◄', type:'btn', spec:null, grade:'un', cx:78.38, cy:32.25, w:2.2, h:2.4},
-  {id:'d1_call_r', label:'CALL►', type:'btn', spec:null, grade:'un', cx:18.53, cy:32.22, w:2.2, h:2.4},
-  {id:'d2_call_r', label:'CALL►', type:'btn', spec:null, grade:'un', cx:81.02, cy:32.32, w:2.2, h:2.4},
-  {id:'d1_delete', label:'DELETE', type:'btn', spec:'b 13 10', grade:'guess', cx:21.62, cy:31.95, w:2.6, h:2.4},
-  {id:'d2_delete', label:'DELETE', type:'btn', spec:'b 23 10', grade:'guess', cx:84.26, cy:31.87, w:2.6, h:2.4},
-  {id:'d1_memory', label:'MEMORY', type:'btn', spec:'b 13 20', grade:'guess', cx:24.59, cy:32.04, w:2.8, h:2.4},
-  {id:'d2_memory', label:'MEMORY', type:'btn', spec:'b 23 20', grade:'guess', cx:87.04, cy:31.99, w:2.8, h:2.4},
-  {id:'d1_vinyladj', label:'VINYL ADJ', type:'knob', spec:'b 13 04', grade:'ok', cx:30.79, cy:32.24, w:3.0, h:3.8, val:512},
-  {id:'d2_vinyladj', label:'VINYL ADJ', type:'knob', spec:'b 23 04', grade:'ok', cx:93.38, cy:32.06, w:3.0, h:3.8, val:512},
-  {id:'d1_tsL', label:'TRK◄', type:'btn', spec:null, grade:'un', cx:2.73, cy:49.52, w:2.2, h:2.4},
-  {id:'d2_tsL', label:'TRK◄', type:'btn', spec:null, grade:'un', cx:65.25, cy:49.7, w:2.2, h:2.4},
-  {id:'d1_tsR', label:'TRK►', type:'btn', spec:null, grade:'un', cx:4.94, cy:49.74, w:2.2, h:2.4},
-  {id:'d2_tsR', label:'TRK►', type:'btn', spec:null, grade:'un', cx:67.75, cy:49.7, w:2.2, h:2.4},
-  {id:'d1_srchL', label:'SRCH◄', type:'btn', spec:'b 13 08', grade:'ok', cx:2.85, cy:56.5, w:2.2, h:2.4},
-  {id:'d2_srchL', label:'SRCH◄', type:'btn', spec:'b 23 08', grade:'ok', cx:65.25, cy:56.5, w:2.2, h:2.4},
-  {id:'d1_srchR', label:'SRCH►', type:'btn', spec:null, grade:'un', cx:5.02, cy:56.55, w:2.2, h:2.4},
-  {id:'d2_srchR', label:'SRCH►', type:'btn', spec:null, grade:'un', cx:67.75, cy:56.5, w:2.2, h:2.4},
-  {id:'d1_rev', label:'REV', type:'btn', spec:'b 13 01', grade:'ok', cx:3.75, cy:41.1, w:2.6, h:2.6},
-  {id:'d2_rev', label:'REV', type:'btn', spec:'b 23 01', grade:'ok', cx:66.15, cy:41.1, w:2.6, h:2.6},
-  {id:'d1_jogmode', label:'JOG MODE', type:'btn', spec:'b 12 40', grade:'ok', cx:30.85, cy:40.2, w:3.0, h:2.6},
-  {id:'d2_jogmode', label:'JOG MODE', type:'btn', spec:'b 22 40', grade:'ok', cx:93.25, cy:40.2, w:3.0, h:2.6},
-  {id:'d1_syncmaster', label:'MASTER', type:'btn', spec:'b 12 10', grade:'guess', cx:32.2, cy:46.84, w:2.4, h:3.0},
-  {id:'d2_syncmaster', label:'MASTER', type:'btn', spec:'b 22 10', grade:'guess', cx:94.8, cy:46.8, w:2.4, h:3.0},
-  {id:'d1_mastertempo', label:'M.TEMPO', type:'btn', spec:'b 12 04', grade:'guess', cx:30.94, cy:58.07, w:2.6, h:2.6},
-  {id:'d2_mastertempo', label:'M.TEMPO', type:'btn', spec:'b 22 04', grade:'guess', cx:93.22, cy:58.33, w:2.6, h:2.6},
-  {id:'d1_hotcuemode', label:'HOT CUE', type:'btn', spec:'b 11 08', grade:'ok', cx:10.75, cy:79.6, w:3.2, h:2.6},
-  {id:'d2_hotcuemode', label:'HOT CUE', type:'btn', spec:'b 21 08', grade:'ok', cx:73.39, cy:79.84, w:3.2, h:2.6},
-  {id:'d1_loopslice', label:'LOOP SLICE', type:'btn', spec:null, grade:'un', cx:19.47, cy:79.76, w:3.4, h:2.6},
-  {id:'d2_loopslice', label:'LOOP SLICE', type:'btn', spec:null, grade:'un', cx:81.87, cy:79.78, w:3.4, h:2.6},
-  {id:'trim1', label:'TRIM1', type:'knob', spec:'A 26', grade:'guess', cx:42.76, cy:35.33, w:3.0, h:3.8, val:512},
-  {id:'trim2', label:'TRIM2', type:'knob', spec:'A 36', grade:'guess', cx:54.35, cy:35.17, w:3.0, h:3.8, val:512},
-  {id:'color1', label:'COLOR1', type:'knob', spec:'A 2c', grade:'guess', cx:42.77, cy:62.45, w:3.0, h:3.8, val:512},
-  {id:'color2', label:'COLOR2', type:'knob', spec:'A 3c', grade:'guess', cx:54.19, cy:62.43, w:3.0, h:3.8, val:512},
-  {id:'scfx_noise', label:'NOISE', type:'btn', spec:null, grade:'un', cx:36.85, cy:50.3, w:3.2, h:2.4},
-  {id:'scfx_gate', label:'GATE', type:'btn', spec:null, grade:'un', cx:36.95, cy:53.88, w:3.2, h:2.4},
-  {id:'scfx_crush', label:'CRUSH', type:'btn', spec:null, grade:'un', cx:36.79, cy:57.52, w:3.2, h:2.4},
-  {id:'scfx_filter', label:'FILTER', type:'btn', spec:null, grade:'un', cx:36.82, cy:61.08, w:3.2, h:2.4},
-  {id:'hp_mix', label:'HP MIX', type:'knob', spec:'A 4a', grade:'guess', cx:36.88, cy:69.28, w:3.0, h:3.8, val:512},
-  {id:'hp_lvl', label:'HP LVL', type:'knob', spec:'A 4c', grade:'guess', cx:36.83, cy:76.77, w:3.0, h:3.8, val:512},
-  {id:'xfcurve', label:'XF CURVE', type:'btn', spec:null, grade:'un', cx:48.53, cy:81.69, w:3.0, h:2.2},
-  {id:'fxtime', label:'TIME', type:'knob', spec:null, grade:'un', cx:60.11, cy:69.14, w:3.0, h:3.8, val:512},
-  {id:'booth', label:'BOOTH', type:'knob', spec:'A 48', grade:'guess', cx:76.81, cy:20.56, w:3.0, h:3.8, val:512},
-  {id:'masterlvl', label:'MASTER LVL', type:'knob', spec:'A 50', grade:'guess', cx:82.41, cy:20.38, w:3.0, h:3.8, val:512},
-  {id:'deck1src', label:'D1 SRC', type:'btn', gpio:119, grade:'ok', cx:37.96, cy:35.07, w:2.4, h:2.4},
-  {id:'deck2src', label:'D2 SRC', type:'btn', gpio:120, grade:'ok', cx:58.8, cy:35.04, w:2.4, h:2.4},
-  {id:'mic1', label:'MIC1', type:'knob', spec:'A 44', grade:'guess', cx:9.12, cy:20.38, w:3.0, h:3.8, val:512},
-  {id:'mic2', label:'MIC2', type:'knob', spec:'A 46', grade:'guess', cx:13.24, cy:20.42, w:3.0, h:3.8, val:512},
-  {id:'miceqhi', label:'MIC HI', type:'knob', spec:null, grade:'un', cx:17.07, cy:20.31, w:3.0, h:3.8, val:512},
-  {id:'miceqlow', label:'MIC LOW', type:'knob', spec:null, grade:'un', cx:21.06, cy:20.54, w:3.0, h:3.8, val:512},
-  {id:'micsw', label:'MIC SW', type:'btn', spec:null, grade:'un', cx:26.74, cy:20.11, w:3.0, h:2.4},
-];
+// ===== control registry (metadata) =======================================
+const C = {
+  mic1:{l:'MIC1',t:'knob',spec:'A 44',v:512}, mic2:{l:'MIC2',t:'knob',spec:'A 46',v:512},
+  miceqhi:{l:'HI',t:'knob',v:512}, miceqlow:{l:'LOW',t:'knob',v:512},
+  micsw:{l:'MIC'}, usb1stop:{l:'USB1 STOP',spec:'b 5d 01'}, usb1load:{l:'USB1 LOAD',usb:'usb1'},
+  src_rb:{l:'rekordbox',gpio:159}, src_midi:{l:'MIDI',gpio:161},
+  src_usb1:{l:'USB1',gpio:160}, src_usb2:{l:'USB2',gpio:158},
+  quant:{l:'QUANTIZE',spec:'B 19 01'}, deck12:{l:'DECK 1/2',gpio:149}, timemd:{l:'TIME MODE',gpio:146},
+  booth:{l:'BOOTH',t:'knob',spec:'A 48',v:512}, masterlvl:{l:'MASTER',t:'knob',spec:'A 50',v:512},
+  mrec:{l:'MASTER REC'}, tmark:{l:'TRACK MARK'}, usb2stop:{l:'USB2 STOP',spec:'b 5d 02'}, usb2load:{l:'USB2 LOAD',usb:'usb2'},
+  deck1src:{l:'PH/LN',gpio:119}, deck2src:{l:'PH/LN',gpio:120},
+  trim1:{l:'TRIM',t:'knob',spec:'A 26',v:512}, trim2:{l:'TRIM',t:'knob',spec:'A 36',v:512},
+  eq_hi1:{l:'HI',t:'knob',spec:'A 24',v:512}, eq_hi2:{l:'HI',t:'knob',spec:'A 34',v:512},
+  eq_mid1:{l:'MID',t:'knob',spec:'A 28',v:512}, eq_mid2:{l:'MID',t:'knob',spec:'A 38',v:512},
+  eq_low1:{l:'LOW',t:'knob',spec:'A 2a',v:512}, eq_low2:{l:'LOW',t:'knob',spec:'A 3a',v:512},
+  color1:{l:'COLOR',t:'knob',spec:'A 2c',v:512}, color2:{l:'COLOR',t:'knob',spec:'A 3c',v:512},
+  ch1:{l:'CH1',t:'vfader',spec:'A 44',v:0}, ch2:{l:'CH2',t:'vfader',spec:'A 4c',v:0},
+  browse:{l:'BROWSE',spec:'B 16 01'}, taglist:{l:'TAG LIST',spec:'b 5e 02'},
+  info:{l:'INFO',spec:'b 5f 08'}, menu:{l:'MENU',spec:'b 5f 01',longpress:true},
+  back:{l:'BACK',spec:'b 5e 01'}, tagtrk:{l:'TAG TRK'},
+  enc:{l:'BROWSE',t:'encoder',pushSpec:'b 5d 10'},
+  loadL:{l:'◄ LOAD',spec:'b 5d 40'}, loadR:{l:'LOAD ►',spec:'b 5d 20'},
+  scfx_noise:{l:'NOISE'}, scfx_gate:{l:'GATE'}, scfx_crush:{l:'CRUSH'}, scfx_filter:{l:'FILTER'},
+  beatL:{l:'BEAT ◄',spec:'B 56 01'}, beatR:{l:'BEAT ►',spec:'B 56 02'},
+  fxsel:{l:'FX SELECT',t:'rotary',specUp:'b 5a 04',specDown:'b 5a 01'},
+  fxch:{l:'CH SELECT',spec:'B 5a 20',round:true}, fxlev:{l:'LEVEL',t:'knob',spec:'A 54',v:512},
+  fxon:{l:'ON/OFF',spec:'B 5b 04',round:true}, fxtap:{l:'TAP',spec:'B 5b 08',round:true}, fxtime:{l:'TIME',t:'knob',v:512},
+  hp_mix:{l:'HP MIX',t:'knob',spec:'A 4a',v:512}, hp_lvl:{l:'HP LVL',t:'knob',spec:'A 4c',v:512},
+  cue1:{l:'CUE1',spec:'B 4c 01'}, cue2:{l:'CUE2',spec:'B 4c 02'}, xfcurve:{l:'XF CURVE'},
+  xf:{l:'CROSSFADER',t:'xfader',spec:'A 4e',v:512},
+  d1in:{l:'IN',spec:'B 13 01'}, d1out:{l:'OUT',spec:'b 13 02'}, d1reloop:{l:'RELOOP',spec:'b 12 80'},
+  d1_delete:{l:'DEL',spec:'b 13 10'}, d1_memory:{l:'MEM',spec:'b 13 20'},
+  d1_call_l:{l:'◄',spec:null}, d1_call_r:{l:'►',spec:null},
+  d1_vinyladj:{l:'V.ADJ',t:'knob',v:512}, d1trng:{l:'RANGE',spec:'B 12 08'},
+  d1_jogmode:{l:'JOG',spec:'b 12 40'}, d1_rev:{l:'REV',spec:'b 13 01'},
+  d1_tsL:{l:'◄',spec:null}, d1_tsR:{l:'►',spec:null}, d1_srchL:{l:'◄◄',spec:'b 13 08'}, d1_srchR:{l:'►►'},
+  d1jog:{l:'',t:'jog',specUp:'b 13 20',specDown:'b 13 10'},
+  d1sync:{l:'SYNC',spec:'b 12 20'}, d1_syncmaster:{l:'MST',spec:'b 12 10'},
+  d1_mastertempo:{l:'M.T',spec:'b 12 04'}, d1slip:{l:'SLIP',spec:'b 11 02'},
+  d1h1:{l:'A',spec:'b 10 80',pad:true}, d1h2:{l:'B',spec:'b 10 40',pad:true},
+  d1h3:{l:'C',spec:'b 10 20',pad:true}, d1h4:{l:'D',spec:'b 10 10',pad:true},
+  d1_hotcuemode:{l:'HOT CUE',spec:'b 11 08'}, d1auto:{l:'BEAT LOOP',spec:'b 11 04'},
+  d1_loopslice:{l:'LOOP SLICE'}, d1shift:{l:'SHIFT',spec:'b 12 01'},
+  d1cue:{l:'CUE',spec:'b 13 80',big:true}, d1play:{l:'▶❙❙',spec:'b 13 40',big:true,play:true},
+  d1tempo:{l:'TEMPO',t:'vfader-c',specNeg:'A 04',specPos:'A 0a',v:512},
+  d2in:{l:'IN',spec:'B 23 01'}, d2out:{l:'OUT',spec:'b 23 02'}, d2reloop:{l:'RELOOP',spec:'b 22 80'},
+  d2_delete:{l:'DEL',spec:'b 23 10'}, d2_memory:{l:'MEM',spec:'b 23 20'},
+  d2_call_l:{l:'◄',spec:null}, d2_call_r:{l:'►',spec:null},
+  d2_vinyladj:{l:'V.ADJ',t:'knob',v:512}, d2trng:{l:'RANGE',spec:'B 22 08'},
+  d2_jogmode:{l:'JOG',spec:'b 22 40'}, d2_rev:{l:'REV',spec:'b 23 01'},
+  d2_tsL:{l:'◄',spec:null}, d2_tsR:{l:'►',spec:null}, d2_srchL:{l:'◄◄',spec:'b 23 08'}, d2_srchR:{l:'►►'},
+  d2jog:{l:'',t:'jog',specUp:'b 23 20',specDown:'b 23 10'},
+  d2sync:{l:'SYNC',spec:'b 22 20'}, d2_syncmaster:{l:'MST',spec:'b 22 10'},
+  d2_mastertempo:{l:'M.T',spec:'b 22 04'}, d2slip:{l:'SLIP',spec:'b 21 02'},
+  d2h1:{l:'A',spec:'b 20 80',pad:true}, d2h2:{l:'B',spec:'b 20 40',pad:true},
+  d2h3:{l:'C',spec:'b 20 20',pad:true}, d2h4:{l:'D',spec:'b 20 10',pad:true},
+  d2_hotcuemode:{l:'HOT CUE',spec:'b 21 08'}, d2auto:{l:'BEAT LOOP',spec:'b 21 04'},
+  d2_loopslice:{l:'LOOP SLICE'}, d2shift:{l:'SHIFT',spec:'b 22 01'},
+  d2cue:{l:'CUE',spec:'b 23 80',big:true}, d2play:{l:'▶❙❙',spec:'b 23 40',big:true,play:true},
+  d2tempo:{l:'TEMPO',t:'vfader-c',specNeg:'A 14',specPos:'A 1a',v:512},
+};
+// photo-calibrated positions: id -> [cx, cy, w, h] (percent of the console)
+const SCREEN0={x:36.5,y:5.4,w:22.6,h:19.84};
+const COORDS={
+  // top strip
+  mic1:[9.12,20.38,3.0,3.8], mic2:[13.24,20.42,3.0,3.8], miceqhi:[17.07,20.31,3.0,3.8], miceqlow:[21.06,20.54,3.0,3.8],
+  micsw:[23.5,20.11,3.0,2.4], usb1stop:[3.7,23.62,3.6,2.4], usb1load:[3.7,20.6,3.6,2.4],
+  src_rb:[34.66,7.98,4.3,2.4], src_midi:[34.3,12.2,4.3,2.4], src_usb1:[34.45,16.32,4.3,2.4], src_usb2:[34.47,20.84,4.3,2.4],
+  quant:[61.8,8.08,4.6,2.6], deck12:[61.8,12.03,4.6,2.6], timemd:[61.8,16.5,4.6,2.6],
+  booth:[76.81,20.56,3.0,3.8], masterlvl:[82.41,20.38,3.0,3.8],
+  mrec:[88.32,16.93,3.4,2.4], tmark:[88.33,23.32,3.4,2.4], usb2stop:[93.42,23.21,3.6,2.4], usb2load:[93.42,20.2,3.6,2.4],
+  // mixer
+  browse:[40.06,29.21,3.6,2.4], taglist:[45.7,29.19,3.6,2.4], info:[51.37,29.15,3.4,2.4], menu:[57.11,29.18,3.4,2.4],
+  back:[47.21,36.81,2.6,3.0], tagtrk:[49.9,36.85,2.0,3.0], enc:[48.47,44.85,5.4,9.4],
+  loadL:[46.82,52.24,2.4,2.6], loadR:[50.31,51.81,2.4,2.6],
+  deck1src:[37.96,35.07,2.2,3.0], deck2src:[58.8,35.04,2.2,3.0],
+  trim1:[42.76,35.33,3.0,3.8], trim2:[54.35,35.17,3.0,3.8],
+  eq_hi1:[42.82,41.14,3.6,4.6], eq_mid1:[42.72,47.59,3.6,4.6], eq_low1:[42.59,54.6,3.6,4.6],
+  eq_hi2:[54.4,40.1,3.6,4.6], eq_mid2:[54.4,47.3,3.6,4.6], eq_low2:[54.4,54.6,3.6,4.6],
+  color1:[42.77,62.45,3.0,3.8], color2:[54.19,62.43,3.0,3.8],
+  ch1:[42.69,77.0,3.0,21.0], ch2:[54.33,77.0,3.0,21.0], xf:[48.42,88.3,11.0,3.6],
+  scfx_noise:[36.85,50.3,3.4,2.6], scfx_gate:[36.95,53.88,3.4,2.6], scfx_crush:[36.79,57.52,3.4,2.6], scfx_filter:[36.82,61.08,3.4,2.6],
+  hp_mix:[36.88,69.28,3.0,3.8], hp_lvl:[36.83,76.77,3.0,3.8], cue1:[35.76,83.6,2.6,2.6], cue2:[38.6,83.67,2.6,2.6],
+  beatL:[59.1,42.6,2.3,2.6], beatR:[61.5,42.6,2.3,2.6], fxtap:[60.21,48.14,3.8,4.6],
+  fxsel:[60.2,55.2,4.4,5.6], fxch:[60.13,61.9,3.6,4.4], fxlev:[60.2,74.5,3.6,4.6], fxon:[60.2,83.9,3.8,4.6],
+  fxtime:[60.11,69.14,3.0,3.8], xfcurve:[48.53,81.69,3.2,2.4],
+  // deck 1
+  d1in:[3.6,31.8,2.8,2.8], d1out:[7.1,31.8,2.8,2.8], d1reloop:[11.0,31.9,2.8,2.8],
+  d1_call_l:[16.0,32.12,2.0,2.4], d1_call_r:[18.53,32.22,2.0,2.4],
+  d1_delete:[21.62,31.95,2.6,2.4], d1_memory:[24.59,32.04,2.8,2.4], d1_vinyladj:[30.79,32.24,3.0,3.8],
+  d1_rev:[3.75,41.1,2.8,2.8], d1slip:[8.3,41.1,2.6,2.8],
+  d1_jogmode:[30.85,40.2,3.2,2.8], d1sync:[29.6,46.8,2.8,3.0], d1_syncmaster:[32.3,46.84,2.4,3.0],
+  d1trng:[30.77,52.79,2.8,2.8], d1_mastertempo:[30.94,58.07,2.8,2.8],
+  d1_tsL:[2.73,49.52,2.0,2.4], d1_tsR:[4.94,49.74,2.0,2.4], d1_srchL:[2.85,56.5,2.0,2.4], d1_srchR:[5.02,56.55,2.0,2.4],
+  d1jog:[17.1,58.0,20.0,34.0],
+  d1cue:[4.6,74.9,5.2,6.6], d1play:[4.6,85.4,5.2,6.6],
+  d1_hotcuemode:[10.75,79.6,3.4,2.8], d1auto:[15.1,79.6,3.4,2.8], d1_loopslice:[19.47,79.76,3.6,2.8], d1shift:[23.52,79.71,3.4,2.8],
+  d1h1:[10.94,86.4,3.4,5.0], d1h2:[15.04,86.5,3.4,5.0], d1h3:[19.54,86.4,3.4,5.0], d1h4:[23.76,86.5,3.4,5.0],
+  d1tempo:[31.0,76.0,3.2,26.0],
+  // deck 2 (mirror positions from the photo)
+  d2in:[66.07,32.03,2.8,2.8], d2out:[69.49,31.87,2.8,2.8], d2reloop:[73.3,32.0,2.8,2.8],
+  d2_call_l:[78.38,32.25,2.0,2.4], d2_call_r:[81.02,32.32,2.0,2.4],
+  d2_delete:[84.26,31.87,2.6,2.4], d2_memory:[87.04,31.99,2.8,2.4], d2_vinyladj:[93.38,32.06,3.0,3.8],
+  d2_rev:[66.15,41.1,2.8,2.8], d2slip:[70.7,41.1,2.6,2.8],
+  d2_jogmode:[93.25,40.2,3.2,2.8], d2sync:[92.0,46.9,2.8,3.0], d2_syncmaster:[94.8,46.8,2.4,3.0],
+  d2trng:[93.44,52.9,2.8,2.8], d2_mastertempo:[93.22,58.33,2.8,2.8],
+  d2_tsL:[65.25,49.7,2.0,2.4], d2_tsR:[67.75,49.7,2.0,2.4], d2_srchL:[65.25,56.5,2.0,2.4], d2_srchR:[67.75,56.5,2.0,2.4],
+  d2jog:[79.9,58.0,20.0,34.0],
+  d2cue:[66.99,74.81,5.2,6.6], d2play:[66.92,85.3,5.2,6.6],
+  d2_hotcuemode:[73.39,79.84,3.4,2.8], d2auto:[77.6,79.85,3.4,2.8], d2_loopslice:[81.87,79.78,3.6,2.8], d2shift:[86.22,79.73,3.4,2.8],
+  d2h1:[73.37,86.4,3.4,5.0], d2h2:[77.66,86.5,3.4,5.0], d2h3:[81.85,86.4,3.4,5.0], d2h4:[86.06,86.5,3.4,5.0],
+  d2tempo:[93.38,76.0,3.2,26.0],
+};
+// decorative zone rectangles [x,y,w,h]
+const ZONES=[[1.0,16.5,25.2,10.0],[31.3,2.5,33.0,24.0],[74.5,15.0,21.3,11.5],
+  [0.8,28.0,32.8,63.0],[33.7,28.0,29.9,63.0],[63.7,28.0,32.8,63.0]];
+const XOFF=1.1; // shift whole console right so left/right margins match
 
-// ---- state ----------------------------------------------------------------
-let SCREEN = Object.assign({}, SCREEN0);
-let CTRLS = CTRLS0.map(c=>Object.assign({}, c));
-let calib = false;
-const stage = document.getElementById('stage');
-const logbox = document.getElementById('logbox');
+// ===== server I/O =========================================================
+const logbox=document.getElementById('logbox');
 function log(m){ const t=new Date().toLocaleTimeString();
-  logbox.textContent = `[${t}] ${m}\n`+logbox.textContent;
-  if(logbox.textContent.length>5000) logbox.textContent=logbox.textContent.slice(0,5000); }
-
-async function post(p,b){ try{ await fetch(p,{method:'POST',body:b||''});}catch(e){ log('POST '+p+' failed'); } }
-function ctrl(spec){ post('/ctrl',spec); }
+  logbox.textContent=`[${t}] ${m}\n`+logbox.textContent;
+  if(logbox.textContent.length>4000) logbox.textContent=logbox.textContent.slice(0,4000); }
+async function post(p,b){ try{ await fetch(p,{method:'POST',body:b||''}); }catch(e){ log('POST '+p+' failed'); } }
+function sctrl(spec){ post('/ctrl',spec); }
 function release(){ post('/release'); }
-// MAIN-UCOM direct GPIO keys (USB1/USB2/rekordbox/MIDI) go through a separate
-// channel (/tmp/mainkey) -- they are NOT subucom frame controls.
 function mainkey(n){ post('/mainkey',String(n)); }
 function mainkeyRelease(){ post('/mainkey_release'); }
-// INPUT SELECT (per-channel source switch): DECK <-> LINE/PHONO. Posts /input;
-// the server holds the sub-ucom frame bit (rbp[0x33].7 / rbp[0x43].7). Default DECK.
-const _srcState={0:'DECK',1:'DECK'};
-function _srcUI(ch){ const b=document.getElementById('src'+ch); if(!b) return;
-  const s=_srcState[ch]; b.textContent='CH'+(ch+1)+': '+s;
-  b.classList.toggle('on', s==='DECK'); b.classList.toggle('line', s==='LINE'); }
-function setSrc(ch,s){ _srcState[ch]=s; _srcUI(ch); post('/input', ch+' '+s); log('CH'+(ch+1)+' input: '+s); }
-function toggleSrc(ch){ setSrc(ch, _srcState[ch]==='DECK'?'LINE':'DECK'); }
-
-// ---- build hotspots -------------------------------------------------------
-const els = {};
-function place(el,c){ el.style.left=c.cx+'%'; el.style.top=c.cy+'%';
-  el.style.width=c.w+'%'; el.style.height=c.h+'%'; }
-function gradeClass(c){ return (c.spec||c.gpio)? 'mapped' : 'unmapped'; }
-
-function build(){
-  Object.values(els).forEach(e=>e.remove());
-  for(const c of CTRLS){
-    const el=document.createElement('div');
-    const mapped = !!(c.spec||c.specUp||c.specNeg||c.gpio);
-    el.className='hs '+(c.shape==='round'?'round ':'')+(mapped?'mapped':'unmapped');
-    el.dataset.id=c.id; el.textContent=c.label; place(el,c);
-    el.title=c.label+(mapped?('  ['+(c.spec||(c.gpio?('gpio '+c.gpio):(c.specUp+' / '+c.specDown)))+']'):'  (unmapped)');
-    if(c.type==='vfader'||c.type==='hfader'||c.type==='vfader-c'){ el.classList.add('track');
-      if(c.type==='vfader-c'){ const t=document.createElement('div'); t.className='ctick'; el.appendChild(t); }
-      const fill=document.createElement('div'); fill.className='fill'; el.appendChild(fill); el._fill=fill; drawFill(c,el); }
-    stage.appendChild(el); els[c.id]=el; wire(el,c);
+const _src={0:'DECK',1:'DECK'};
+function _srcUI(ch){ const b=document.getElementById('src'+ch); if(!b) return; const s=_src[ch];
+  b.textContent='CH'+(ch+1)+': '+s; b.classList.toggle('deck',s==='DECK'); b.classList.toggle('line',s==='LINE'); }
+function setSrc(ch,s){ _src[ch]=s; _srcUI(ch); post('/input', ch+' '+s); log('CH'+(ch+1)+' input: '+s); }
+function toggleSrc(ch){ setSrc(ch, _src[ch]==='DECK'?'LINE':'DECK'); }
+const isAnalog=s=>!!s && /^a /i.test(s);
+// USB mount: in the app, open a native file dialog via the Tauri `pick_usb_image`
+// command; in a plain dev browser, fall back to a typed path. Either way the chosen
+// path is POSTed to /usb, which does the drive_add/device_add insert.
+const _lastUsb={usb1:'',usb2:''};
+async function doMount(slot, path){
+  const S=slot.toUpperCase(); _lastUsb[slot]=path; log('⏏ '+S+': mounting '+path+' …');
+  try{ const r=await fetch('/usb',{method:'POST',body:slot+' '+path}); const t=(await r.text()).trim();
+    log((r.ok?'✔ ':'✖ ')+t); }catch(e){ log('✖ '+S+' mount request failed'); }
+}
+async function mountUsb(slot){
+  const S=slot.toUpperCase();
+  const D=window.__TAURI__ && window.__TAURI__.dialog;
+  if(D && D.open){
+    log('⏏ '+S+': choosing an image…');
+    try{ const p=await D.open({ multiple:false, directory:false,
+        title:'Select a USB disk image for '+S,
+        filters:[{name:'Disk images',extensions:['img','dmg','iso','bin','raw']},
+                 {name:'All files',extensions:['*']}] });
+      if(!p){ log('… '+S+' cancelled'); return; }
+      return doMount(slot, Array.isArray(p)?p[0]:p);
+    }catch(e){ log('✖ file dialog failed: '+e); return; }
   }
-  layoutScreen();
-}
-function drawFill(c,el){
-  const v=(c.val==null?512:c.val)/1023;
-  if(c.type==='vfader-c'){ // centered pitch fader: handle bar at position (top=−, bottom=+)
-    el._fill.style.left='6%'; el._fill.style.width='88%'; el._fill.style.height='5%';
-    el._fill.style.bottom='auto'; el._fill.style.top='calc('+(v*100).toFixed(1)+'% - 2.5%)'; }
-  else if(c.type==='vfader'){ el._fill.style.left='30%'; el._fill.style.width='40%';
-    el._fill.style.top='auto'; el._fill.style.bottom='0'; el._fill.style.height=(v*100).toFixed(1)+'%'; }
-  else { el._fill.style.top='25%'; el._fill.style.height='50%';
-    el._fill.style.left='0'; el._fill.style.width=(v*100).toFixed(1)+'%'; }
+  // dev browser (no Tauri): type a path
+  const p=prompt('Mount USB on '+S+'\nPath to a disk image (.img / .dmg) or a device (/dev/...):',
+    _lastUsb[slot]||'');
+  if(p==null) return; const path=p.trim(); if(path) doMount(slot, path);
 }
 
-// ---- interaction ----------------------------------------------------------
-function wire(el,c){
-  let dragging=false, moved=false, startPx, startCxy, lpTimer=null;
-  // Buttons fire a ONE-SHOT press (reliable short press; a sustained hold on some
-  // controls e.g. the encoder push triggers the wrong mode). For controls with a
-  // long-press function (longpress:true, e.g. MENU→UTILITY), if the user keeps the
-  // button down past ~1.1s we additionally send a sustained hold to trigger it.
-  const clearLp=()=>{ if(lpTimer){ clearTimeout(lpTimer); lpTimer=null; } };
-  const onDown=e=>{
-    e.preventDefault();
-    if(calib){ // drag to reposition
-      dragging=true; moved=false;
-      const p=pt(e); startPx=p; startCxy={cx:c.cx,cy:c.cy};
-      const mv=ev=>{ const q=pt(ev); const r=stage.getBoundingClientRect();
-        c.cx=clamp(startCxy.cx+(q.x-startPx.x)/r.width*100,0,100);
-        c.cy=clamp(startCxy.cy+(q.y-startPx.y)/r.height*100,0,100);
-        place(el,c); moved=true; };
-      const up=()=>{ document.removeEventListener('pointermove',mv);
-        document.removeEventListener('pointerup',up); };
-      document.addEventListener('pointermove',mv); document.addEventListener('pointerup',up);
-      return;
-    }
-    // normal mode
-    if(c.type==='btn'){
-      if(c.browse){ el.classList.add('down'); post('/browse',String(c.browse)); setTimeout(()=>el.classList.remove('down'),120);
-        log('↻ '+c.label+'  browse '+(c.browse>0?'+':'')+c.browse+' (rbp[0x54] counter)'); return; }
-      if(c.gpio){ el.classList.add('down'); mainkey(c.gpio); log('▸ '+c.label+'  gpio '+c.gpio+' (MAIN-UCOM)'); return; }
-      if(!c.spec){ log('· '+c.label+' — unmapped (no frame code yet)'); return; }
-      // press WHILE held (like a real momentary button): send as a HOLD (B/A), released
-      // on pointer-up. A quick click = short press; holding >1s = long press (e.g.
-      // MENU→UTILITY). One-shot 'b'/'a' specs are promoted to holds 'B'/'A' on send.
-      el.classList.add('down'); ctrl(c.spec);
-      if(c.longpress){ lpTimer=setTimeout(()=>ctrl('B '+c.spec.replace(/^[bB] /,'')), 1100); }
-      log('▸ '+c.label+'  '+c.spec); }
-    else if(c.type==='rotary'){ // rotary encoder: spin -> one-shot step pulses
-      if(!c.specUp){ log('· '+c.label+' — unmapped'); return; }
-      const r=el.getBoundingClientRect(), cx0=r.left+r.width/2, cy0=r.top+r.height/2;
-      let last=Math.atan2(e.clientY-cy0,e.clientX-cx0), acc=0, lastPulse=0, steps=0;
-      const STEP=0.26;
-      const mv=ev=>{ let a=Math.atan2(ev.clientY-cy0,ev.clientX-cx0), d=a-last;
-        if(d>Math.PI)d-=2*Math.PI; if(d<-Math.PI)d+=2*Math.PI; last=a; acc+=d;
-        const now=performance.now();
-        while(acc>STEP){ acc-=STEP; if(now-lastPulse>35){ ctrl(c.specUp); lastPulse=now; steps++; } }
-        while(acc<-STEP){ acc+=STEP; if(now-lastPulse>35){ ctrl(c.specDown); lastPulse=now; steps--; } } };
-      const up=()=>{ document.removeEventListener('pointermove',mv); document.removeEventListener('pointerup',up);
-        if(steps) log('↻ '+c.label+'  '+(steps>0?'+':'')+steps+' step'+(Math.abs(steps)>1?'s':'')); };
-      document.addEventListener('pointermove',mv); document.addEventListener('pointerup',up);
-    }
-    else if(c.type==='vfader-c'){ // centre-detent pitch fader: complementary dual field
-      const setFromEvent=ev=>{ const r=el.getBoundingClientRect(); const pos=clamp((pt(ev).y-r.top)/r.height,0,1);
-        c.val=Math.round(pos*1023); drawFill(c,el);            // handle follows finger (top=−, bottom=+)
-        const pct=Math.round((pos-0.5)*200);                   // −100…+100 % of selected tempo range
-        const hi=Math.round(pos*1023), lo=1023-hi;             // specPos=hi (+side), specNeg=lo (−side)
-        if(c.specNeg && c.specPos) ctrl(c.specNeg+' '+lo.toString(16)+'\n'+c.specPos+' '+hi.toString(16));
-        el.title=c.label+'  '+(pct>0?'+':'')+pct+'% of range';
-      };
-      setFromEvent(e);
-      const mv=ev=>setFromEvent(ev);
-      const up=()=>{ document.removeEventListener('pointermove',mv); document.removeEventListener('pointerup',up); };
-      document.addEventListener('pointermove',mv); document.addEventListener('pointerup',up);
-    }
-    else { // fader/knob: drag sets value
-      const setFromEvent=ev=>{ const r=el.getBoundingClientRect(); const q=pt(ev); let v;
-        if(c.type==='vfader'){ v=1-(q.y-r.top)/r.height; }
-        else if(c.type==='hfader'){ v=(q.x-r.left)/r.width; }
-        else { v=1-(q.y-r.top)/r.height; } // knob: vertical drag
-        v=clamp(Math.round(v*1023),0,1023); c.val=v; drawFill(c,el);
-        if(c.spec) ctrl(c.spec+' '+v.toString(16));
-        el.title=c.label;
-      };
-      setFromEvent(e);
-      const mv=ev=>setFromEvent(ev);
-      const up=()=>{ document.removeEventListener('pointermove',mv);
-        document.removeEventListener('pointerup',up); };
-      document.addEventListener('pointermove',mv); document.addEventListener('pointerup',up);
-    }
-  };
-  const onUp=()=>{ if(calib) return;
-    if(c.type==='btn' && c.gpio){ el.classList.remove('down'); mainkeyRelease(); return; }
-    if(c.type==='btn' && c.spec){ clearLp(); el.classList.remove('down'); release(); } };
-  el.addEventListener('pointerdown',onDown);
-  el.addEventListener('pointerup',onUp);
-  el.addEventListener('pointerleave',()=>{ if(!calib && c.type==='btn' && el.classList.contains('down')){ clearLp(); el.classList.remove('down'); release(); }});
-  // Browse ROTATE via mouse wheel / touchpad over the central encoder. Accumulate
-  // scroll distance and emit one detent per WHEEL_STEP px (normalised across
-  // deltaMode), batched so a touchpad's many tiny events don't over-scroll.
-  if(c.browseWheel){ let wAcc=0, wT=null; const WHEEL_STEP=80, WHEEL_CAP=3;
-    el.addEventListener('wheel',ev=>{ if(calib) return; ev.preventDefault();
-      let dy=ev.deltaY; if(ev.deltaMode===1) dy*=16; else if(ev.deltaMode===2) dy*=400;
-      wAcc+=dy;
-      if(!wT){ wT=setTimeout(()=>{ wT=null;
-        let s=Math.trunc(wAcc/WHEEL_STEP);
-        s=Math.max(-WHEEL_CAP,Math.min(WHEEL_CAP,s));
-        if(s){ wAcc-=s*WHEEL_STEP; post('/browse',String(s));
-          log('↻ '+c.label+' wheel '+(s>0?'+':'')+s); }
-        else if(Math.abs(wAcc)>WHEEL_STEP*4){ wAcc=0; } }, 70); }
-    }, {passive:false}); }
-}
-function pt(e){ return {x:e.clientX, y:e.clientY}; }
-function clamp(v,a,b){ return v<a?a:v>b?b:v; }
+// ===== widgets ============================================================
+const Kn=window.Knobs;
+const KS={showValueDisplay:false,showValueLabels:false,showTicks:false,label:'',fontFamily:'inherit',
+  dialColor:'#20242b',bezelColor:'#30353d',indicatorColor:'#39b3ff',tickColor:'#4a515b'};
+const d=(cls)=>{ const e=document.createElement('div'); if(cls)e.className=cls; return e; };
+const kwrap=(n)=>{ const w=d('kwrap'); w.appendChild(n); return w; };
+const cap=(t)=>{ const e=d('cap'); e.textContent=t; return e; };
 
-// ---- live screen ----------------------------------------------------------
-const cv=document.getElementById('screen'), cx2=cv.getContext('2d'),
-      conn=document.getElementById('conn'), fps=document.getElementById('fps');
-function layoutScreen(){ cv.style.left=SCREEN.x+'%'; cv.style.top=SCREEN.y+'%';
-  cv.style.width=SCREEN.w+'%'; cv.style.height=SCREEN.h+'%'; positionHandle(); }
-let imgData=null, frames=0, lastFps=performance.now();
-async function pump(){
-  try{
-    const r=await fetch('/raw?t='+Date.now(),{cache:'no-store'});
-    if(!r.ok) throw 0;
-    const w=+r.headers.get('X-Width')||800, h=+r.headers.get('X-Height')||480;
-    const buf=new Uint8Array(await r.arrayBuffer());
-    if(cv.width!==w||cv.height!==h){ cv.width=w; cv.height=h; imgData=null; }
-    if(!imgData) imgData=cx2.createImageData(w,h);
-    const d=imgData.data,n=w*h;
-    for(let i=0,j=0;i<n;i++){ d[j++]=buf[i*3]; d[j++]=buf[i*3+1]; d[j++]=buf[i*3+2]; d[j++]=255; }
-    cx2.putImageData(imgData,0,0);
-    conn.className='conn up'; conn.textContent='screen: live';
-    frames++; const now=performance.now();
-    if(now-lastFps>1000){ fps.textContent=frames+' fps'; frames=0; lastFps=now; }
-    requestAnimationFrame(pump);
-  }catch(e){ conn.className='conn'; conn.textContent='screen: no QEMU'; setTimeout(pump,700); }
+function btnCell(id){ const c=C[id];
+  const el=d('btn'+(c.round?' round':'')+(c.big?' jogbtn':'')+(c.pad?' pad':'')+(c.play?' play':''));
+  const mapped=!!(c.spec||c.gpio||c.usb); if(!mapped) el.classList.add('unmapped');
+  el.textContent=c.l; el.title=c.l+(c.spec?('  ['+c.spec+']'):(c.gpio?('  [gpio '+c.gpio+']'):(c.usb?'  (mount a USB image/device)':'  (unmapped)')));
+  let lp=null;
+  el.addEventListener('pointerdown',e=>{ e.preventDefault();
+    if(c.usb){ el.classList.add('down'); setTimeout(()=>el.classList.remove('down'),160); mountUsb(c.usb); return; }
+    if(c.gpio){ el.classList.add('down'); mainkey(c.gpio); return; }
+    if(!c.spec){ log('· '+c.l+' — unmapped'); return; }
+    el.classList.add('down'); sctrl(c.spec);
+    if(c.longpress) lp=setTimeout(()=>sctrl('B '+c.spec.replace(/^[bB] /,'')),1100);
+    log('▸ '+c.l+'  '+c.spec); });
+  const up=()=>{ if(c.gpio){ el.classList.remove('down'); mainkeyRelease(); return; }
+    if(c.spec){ if(lp){clearTimeout(lp);lp=null;} el.classList.remove('down'); release(); } };
+  el.addEventListener('pointerup',up);
+  el.addEventListener('pointerleave',()=>{ if(el.classList.contains('down')) up(); });
+  return el;
+}
+function knobCell(id){ const c=C[id]; const el=d('cell knob'); const m=d();
+  try{ const k=new Kn.Knob(m,Object.assign({},KS,{mode:'bounded',min:0,max:1023,value:c.v==null?512:c.v,size:100}));
+    if(isAnalog(c.spec)) k.onChange(e=>sctrl(c.spec+' '+Math.round(e.value).toString(16)));
+  }catch(e){ m.textContent='⊘'; }
+  el.append(kwrap(m)); if(c.l) el.appendChild(cap(c.l)); el.title=c.l; return el;
+}
+function faderCell(id){ const c=C[id]; const center=c.t==='vfader-c'; const el=d('cell vfader');
+  const track=d('vtrack'+(center?' ctr':'')); const thumb=d('vthumb'); track.appendChild(thumb);
+  let val=c.v==null?(center?512:0):c.v;
+  const show=()=>{ thumb.style.bottom=(val/1023*100)+'%'; };
+  const emit=()=>{ if(center && c.specNeg && c.specPos){ const lo=Math.round(val),hi=1023-lo;
+      sctrl(c.specNeg+' '+lo.toString(16)+'\n'+c.specPos+' '+hi.toString(16)); }
+    else if(isAnalog(c.spec)) sctrl(c.spec+' '+Math.round(val).toString(16)); };
+  const fromY=e=>{ const r=track.getBoundingClientRect(); let f=1-(e.clientY-r.top)/r.height;
+    val=Math.max(0,Math.min(1,f))*1023; show(); emit(); };
+  let drag=false;
+  track.addEventListener('pointerdown',e=>{ e.preventDefault(); drag=true; try{track.setPointerCapture(e.pointerId);}catch(_){} fromY(e); });
+  track.addEventListener('pointermove',e=>{ if(drag) fromY(e); });
+  const end=()=>{ drag=false; }; track.addEventListener('pointerup',end); track.addEventListener('pointercancel',end);
+  show(); el.append(track); if(c.l) el.appendChild(cap(c.l)); el.title=c.l; return el;
+}
+function xfaderCell(id){ const c=C[id]; const el=d('cell xf'); const track=d('htrack'); const thumb=d('hthumb'); track.appendChild(thumb);
+  let val=c.v==null?512:c.v;
+  const show=()=>{ thumb.style.left=(val/1023*100)+'%'; };
+  const fromX=e=>{ const r=track.getBoundingClientRect(); let f=(e.clientX-r.left)/r.width;
+    val=Math.max(0,Math.min(1,f))*1023; show(); if(isAnalog(c.spec)) sctrl(c.spec+' '+Math.round(val).toString(16)); };
+  let drag=false;
+  track.addEventListener('pointerdown',e=>{ e.preventDefault(); drag=true; try{track.setPointerCapture(e.pointerId);}catch(_){} fromX(e); });
+  track.addEventListener('pointermove',e=>{ if(drag) fromX(e); });
+  const end=()=>{ drag=false; }; track.addEventListener('pointerup',end); track.addEventListener('pointercancel',end);
+  show(); el.append(track); el.title=c.l; return el;
+}
+function rotaryCell(id){ const c=C[id]; const el=d('cell rot'); const m=d(); let last=null,acc=0,t=0; const STEP=.5;
+  const det=s=>{ const sp=s>0?c.specUp:c.specDown; if(sp) sctrl(sp); };
+  try{ const k=Kn.createInfiniteKnob(m,Object.assign({},KS,{size:120,gripBumps:false}));
+    k.onChange(e=>{ if(last==null){last=e.value;return;} let dd=e.value-last; last=e.value; acc+=dd; const now=performance.now();
+      while(acc>=STEP){acc-=STEP; if(now-t>16){det(1);t=now;}} while(acc<=-STEP){acc+=STEP; if(now-t>16){det(-1);t=now;}} });
+  }catch(e){ m.textContent='⊘'; }
+  el.append(kwrap(m)); if(c.l) el.appendChild(cap(c.l)); el.title=c.l; return el;
+}
+function encoderCell(id){ const c=C[id]; const el=d('cell enc'); const m=d(); let last=null,acc=0,t=0; const STEP=.35;
+  try{ const k=Kn.createInfiniteKnob(m,Object.assign({},KS,{size:120,gripBumps:true,gripBumpCount:30,
+      dialColor:'#1b1f26',bezelColor:'#343b45'}));
+    k.onChange(e=>{ if(last==null){last=e.value;return;} let dd=e.value-last; last=e.value; acc+=dd; const now=performance.now();
+      while(acc>=STEP){acc-=STEP; if(now-t>16){post('/browse','1');t=now;}}
+      while(acc<=-STEP){acc+=STEP; if(now-t>16){post('/browse','-1');t=now;}} });
+  }catch(e){ m.textContent='⊘'; }
+  const kw=kwrap(m);
+  const push=d('encpush'); push.textContent='PUSH';
+  push.addEventListener('pointerdown',ev=>{ ev.preventDefault(); ev.stopPropagation(); push.classList.add('down');
+    sctrl(c.pushSpec); log('▸ BROWSE push'); });
+  const pup=()=>{ if(push.classList.contains('down')){ push.classList.remove('down'); release(); } };
+  push.addEventListener('pointerup',pup); push.addEventListener('pointerleave',pup);
+  kw.appendChild(push); el.appendChild(kw);
+  let wa=0,wt=null; el.addEventListener('wheel',ev=>{ ev.preventDefault(); let dy=ev.deltaY;
+    if(ev.deltaMode===1)dy*=16; else if(ev.deltaMode===2)dy*=400; wa+=dy;
+    if(!wt) wt=setTimeout(()=>{ wt=null; let s=Math.max(-3,Math.min(3,Math.trunc(wa/80)));
+      if(s){ wa-=s*80; post('/browse',String(s)); } else if(Math.abs(wa)>320) wa=0; },70); },{passive:false});
+  el.title='BROWSE — rotate to scroll, push to select'; return el;
+}
+function jogCell(id){ const c=C[id]; const el=d('cell jogcell'); const j=d('jog');
+  let dragging=false,lastA=null,acc=0,t=0; const STEP=12;
+  const ang=e=>{ const r=j.getBoundingClientRect(); return Math.atan2(e.clientY-(r.top+r.height/2),e.clientX-(r.left+r.width/2))*180/Math.PI; };
+  const det=s=>{ const sp=s>0?c.specUp:c.specDown; if(sp) sctrl(sp); };
+  j.addEventListener('pointerdown',e=>{ e.preventDefault(); dragging=true; lastA=ang(e); try{ j.setPointerCapture(e.pointerId); }catch(_){} });
+  j.addEventListener('pointermove',e=>{ if(!dragging) return; const a=ang(e); let dd=a-lastA;
+    if(dd>180)dd-=360; if(dd<-180)dd+=360; lastA=a; acc+=dd; const now=performance.now();
+    while(acc>=STEP){acc-=STEP; if(now-t>14){det(1);t=now;}} while(acc<=-STEP){acc+=STEP; if(now-t>14){det(-1);t=now;}} });
+  const end=()=>{ dragging=false; lastA=null; };
+  j.addEventListener('pointerup',end); j.addEventListener('pointercancel',end);
+  let wa=0,wt=null; el.addEventListener('wheel',ev=>{ ev.preventDefault(); let dy=ev.deltaY;
+    if(ev.deltaMode===1)dy*=16; else if(ev.deltaMode===2)dy*=400; wa+=dy;
+    if(!wt) wt=setTimeout(()=>{ wt=null; let s=Math.max(-4,Math.min(4,Math.trunc(wa/60)));
+      if(s){ wa-=s*60; for(let i=0;i<Math.abs(s);i++) det(s>0?1:-1); } else if(Math.abs(wa)>240) wa=0; },60); },{passive:false});
+  el.append(j); el.title=(c.l||'JOG')+' — drag to scratch / pitch-bend'; return el;
+}
+function cell(id){ const c=C[id]; if(!c) return d();
+  switch(c.t){ case 'knob':return knobCell(id); case 'vfader':case 'vfader-c':return faderCell(id);
+    case 'xfader':return xfaderCell(id); case 'rotary':return rotaryCell(id);
+    case 'encoder':return encoderCell(id); case 'jog':return jogCell(id);
+    default:return btnCell(id); } }
+
+// ===== build (absolute placement) =========================================
+function build(){
+  const stage=document.getElementById('stage');
+  for(const z of ZONES){ const p=d('pbg');
+    p.style.left=(z[0]+XOFF)+'%'; p.style.top=z[1]+'%'; p.style.width=z[2]+'%'; p.style.height=z[3]+'%'; stage.appendChild(p); }
+  for(const id in COORDS){ const b=COORDS[id]; if(!C[id]) continue;
+    const box=d('hs'); box.style.left=(b[0]+XOFF)+'%'; box.style.top=b[1]+'%'; box.style.width=b[2]+'%'; box.style.height=b[3]+'%';
+    box.appendChild(cell(id)); stage.appendChild(box); }
+  const sc=d(''); sc.id='screen';
+  sc.style.left=(SCREEN0.x+XOFF)+'%'; sc.style.top=SCREEN0.y+'%'; sc.style.width=SCREEN0.w+'%'; sc.style.height=SCREEN0.h+'%';
+  stage.appendChild(sc);
 }
 
-// ---- calibration: screen rect move/resize ---------------------------------
-const handle=document.getElementById('calhandle');
-function positionHandle(){ const r=cv.getBoundingClientRect(), s=stage.getBoundingClientRect();
-  handle.style.left=(cv.offsetLeft+cv.offsetWidth)+'px'; handle.style.top=(cv.offsetTop+cv.offsetHeight)+'px'; }
-cv.addEventListener('pointerdown',e=>{ if(!calib) return; e.preventDefault();
-  const p=pt(e), st={x:SCREEN.x,y:SCREEN.y}, r=stage.getBoundingClientRect();
-  const mv=ev=>{ const q=pt(ev); SCREEN.x=clamp(st.x+(q.x-p.x)/r.width*100,0,90);
-    SCREEN.y=clamp(st.y+(q.y-p.y)/r.height*100,0,90); layoutScreen(); };
-  const up=()=>{ document.removeEventListener('pointermove',mv); document.removeEventListener('pointerup',up); };
-  document.addEventListener('pointermove',mv); document.addEventListener('pointerup',up); });
-handle.addEventListener('pointerdown',e=>{ if(!calib) return; e.preventDefault(); e.stopPropagation();
-  const p=pt(e), st={w:SCREEN.w,h:SCREEN.h}, r=stage.getBoundingClientRect();
-  const mv=ev=>{ const q=pt(ev); SCREEN.w=clamp(st.w+(q.x-p.x)/r.width*100,4,60);
-    SCREEN.h=clamp(st.h+(q.y-p.y)/r.height*100,4,60); layoutScreen(); };
-  const up=()=>{ document.removeEventListener('pointermove',mv); document.removeEventListener('pointerup',up); };
-  document.addEventListener('pointermove',mv); document.addEventListener('pointerup',up); });
+// ===== live screen ========================================================
+const VNC=new URLSearchParams(location.search).get('vnc');
+const conn=document.getElementById('conn');
+let rfb=null;
+async function startScreen(){
+  const host=document.getElementById('screen'); if(!host) return;
+  if(VNC){ let RFB; try{ ({default:RFB}=await import('/novnc/core/rfb.js')); }
+    catch(e){ conn.textContent='screen: noVNC load failed'; return; }
+    const connect=()=>{ conn.className='conn'; conn.textContent='screen: connecting…';
+      rfb=new RFB(host,VNC); rfb.viewOnly=true; rfb.scaleViewport=true; rfb.clipViewport=false; rfb.background='#000';
+      rfb.addEventListener('connect',()=>{ conn.className='conn up'; conn.textContent='screen: live'; });
+      rfb.addEventListener('disconnect',()=>{ conn.className='conn'; conn.textContent='screen: no QEMU'; setTimeout(connect,1000); }); };
+    connect();
+  } else {
+    const cv=document.createElement('canvas'); cv.width=800; cv.height=480; host.appendChild(cv); const cx=cv.getContext('2d'); let img=null;
+    const pump=async()=>{ try{ const r=await fetch('/raw?t='+Date.now(),{cache:'no-store'}); if(!r.ok) throw 0;
+      const w=+r.headers.get('X-Width')||800,h=+r.headers.get('X-Height')||480; const buf=new Uint8Array(await r.arrayBuffer());
+      if(cv.width!==w||cv.height!==h){ cv.width=w; cv.height=h; img=null; }
+      if(!img) img=cx.createImageData(w,h); const o=img.data,n=w*h;
+      for(let i=0,j=0;i<n;i++){ o[j++]=buf[i*3]; o[j++]=buf[i*3+1]; o[j++]=buf[i*3+2]; o[j++]=255; }
+      cx.putImageData(img,0,0); conn.className='conn up'; conn.textContent='screen: live'; requestAnimationFrame(pump);
+    }catch(e){ conn.className='conn'; conn.textContent='screen: no QEMU'; setTimeout(pump,700); } };
+    pump();
+  }
+}
 
-// ---- toolbar --------------------------------------------------------------
-function setCal(on){ calib=on; document.body.classList.toggle('cal',on);
-  document.getElementById('bcal').classList.toggle('on',on);
-  document.getElementById('bsave').style.display=on?'':'none';
-  document.getElementById('breset').style.display=on?'':'none';
-  positionHandle();
-  log(on?'calibration ON — drag controls & screen, then Save':'calibration off'); }
-document.getElementById('bcal').onclick=()=>setCal(!calib);
-document.getElementById('brel').onclick=()=>{ release(); document.querySelectorAll('.hs.down').forEach(e=>e.classList.remove('down')); log('⏹ release all'); };
-document.getElementById('bsave').onclick=async()=>{
-  const out={screen:SCREEN, ctrls:{}};
-  for(const c of CTRLS) out.ctrls[c.id]={cx:+c.cx.toFixed(2),cy:+c.cy.toFixed(2),w:+c.w.toFixed(2),h:+c.h.toFixed(2)};
-  const r=await fetch('/savecal',{method:'POST',body:JSON.stringify(out)});
-  log(r.ok?'✓ layout saved (assets/calibration.json)':'save failed'); };
-document.getElementById('breset').onclick=async()=>{
-  SCREEN=Object.assign({},SCREEN0); CTRLS=CTRLS0.map(c=>Object.assign({},c));
-  build(); await fetch('/savecal',{method:'POST',body:JSON.stringify({})}); log('layout reset to defaults'); };
-window.addEventListener('keydown',e=>{ if(e.key==='c'||e.key==='C'){ if(e.target.tagName!=='INPUT') setCal(!calib); }});
+// ===== dev calibration overlay (never shipped; ?cal=1 and XDJ_CAL_REF set) =
+function calOverlay(){
+  const q=new URLSearchParams(location.search); if(!q.has('cal')) return;
+  const op=parseFloat(q.get('cal'))||0.45;
+  const img=document.createElement('img'); img.src='/cal-ref';
+  Object.assign(img.style,{position:'absolute',inset:'0',width:'100%',height:'100%',
+    objectFit:'fill',opacity:String(op),pointerEvents:'none',zIndex:'99'});
+  const stage=document.getElementById('stage'); stage.appendChild(img);
+  addEventListener('keydown',e=>{ if(e.key==='='||e.key==='+') img.style.opacity=Math.min(1,parseFloat(img.style.opacity)+0.1);
+    else if(e.key==='-') img.style.opacity=Math.max(0,parseFloat(img.style.opacity)-0.1);
+    else if(e.key==='o') img.style.display=img.style.display==='none'?'block':'none'; });
+}
 
-// ---- load calibration overrides, then build -------------------------------
-async function init(){
-  try{ const r=await fetch('/cal?t='+Date.now()); if(r.ok){ const j=await r.json();
-    if(j.screen) SCREEN=Object.assign({},SCREEN0,j.screen);
-    if(j.ctrls) for(const c of CTRLS){ const o=j.ctrls[c.id]; if(o) Object.assign(c,o); }
-    if(j.screen||j.ctrls) log('loaded saved calibration'); } }catch(e){}
-  build(); pump();
-  for(const ch of [0,1]){ const b=document.getElementById('src'+ch);
-    if(b) b.addEventListener('click', ()=>toggleSrc(ch)); }
-  setSrc(0,'DECK'); setSrc(1,'DECK');   // assert default DECK (UI + server agree)
-  window.addEventListener('resize',()=>{ layoutScreen(); });
+// ===== init ===============================================================
+function init(){
+  if(!Kn) log('Knobs library failed to load (/knobs/knobs.js)');
+  build(); startScreen(); calOverlay();
+  document.getElementById('src0').addEventListener('click',()=>toggleSrc(0));
+  document.getElementById('src1').addEventListener('click',()=>toggleSrc(1));
+  document.getElementById('brel').addEventListener('click',()=>{ release(); mainkeyRelease();
+    document.querySelectorAll('.btn.down,.encpush.down').forEach(e=>e.classList.remove('down')); log('⏹ release all'); });
+  setSrc(0,'DECK'); setSrc(1,'DECK');
 }
 init();
 </script>

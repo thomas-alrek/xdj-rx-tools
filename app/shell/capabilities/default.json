@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Core defaults. The emulator UI is an external localhost page; it may invoke the app's own IPC commands (e.g. the USB file picker).",
+  "windows": ["*"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
+  "permissions": ["core:default", "dialog:allow-open"]
+}

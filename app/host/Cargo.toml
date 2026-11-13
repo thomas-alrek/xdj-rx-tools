@@ -1,0 +1,21 @@
+[package]
+name = "xdj-host"
+version = "0.1.0"
+edition = "2021"
+description = "XDJ-RX emulator orchestrator: supervises QEMU (per-instance QMP/VNC/control sockets), runs the panel sidecar, and bridges noVNC (WebSocket) to QEMU's raw-TCP/unix VNC. Phase 2 of the standalone-app roadmap."
+
+[[bin]]
+name = "xdj-host"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1.44.2", features = ["rt-multi-thread", "macros", "net", "io-util", "process", "signal", "time", "sync"] }
+tokio-tungstenite = "0.24.0"
+futures-util = "0.3.31"
+sha2 = "0.10.8"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = 2

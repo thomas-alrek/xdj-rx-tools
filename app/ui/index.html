@@ -1,0 +1,116 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>XDJ-RX</title>
+  <style>
+    :root { color-scheme: dark; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: #0b0c0e; color: #c7ccd1;
+      font: 15px/1.5 -apple-system, system-ui, "Segoe UI", sans-serif;
+      display: flex; align-items: center; justify-content: center;
+      -webkit-user-select: none; user-select: none;
+    }
+    .card {
+      width: min(560px, 86vw); text-align: center; padding: 36px 28px;
+      border: 2px dashed #2a2e35; border-radius: 16px; background: #101216;
+      transition: border-color .15s, background .15s; cursor: pointer;
+    }
+    .card:hover { border-color: #3a3f47; }
+    body.drag .card { border-color: #d64541; background: #16130f; }
+    #keybox { cursor: default; }
+    h1 { font-size: 20px; margin: 0 0 6px; color: #e6e9ec; font-weight: 600; }
+    .mark { width: 54px; height: 54px; margin: 0 auto 18px; border-radius: 12px;
+      background: #14161a; display: flex; align-items: center; justify-content: center; }
+    .mark i { width: 22px; height: 22px; background: #d64541; border-radius: 5px; display: block; }
+    p { margin: 8px 0 0; color: #9aa0a6; }
+    .hint { font-size: 13px; color: #6b7178; margin-top: 16px; }
+    #status { margin-top: 18px; min-height: 22px; color: #e6e9ec; }
+    #status.err { color: #ff6b66; }
+    .spin { display: inline-block; width: 14px; height: 14px; margin-right: 8px;
+      border: 2px solid #3a3f47; border-top-color: #d64541; border-radius: 50%;
+      vertical-align: -2px; animation: s 0.8s linear infinite; }
+    @keyframes s { to { transform: rotate(360deg); } }
+    /* key prompt */
+    #keybox { margin-top: 22px; padding-top: 18px; border-top: 1px solid #22262d; }
+    #keybox.hidden { display: none; }
+    #keybox .lbl { font-size: 13px; color: #9aa0a6; margin-bottom: 10px; }
+    .keyrow { display: flex; gap: 8px; }
+    #keyhex { flex: 1; min-width: 0; background: #0c0e11; border: 1px solid #2a2e35;
+      border-radius: 8px; color: #e6e9ec; padding: 8px 10px; font: 13px ui-monospace, monospace; }
+    #keyhex:focus { outline: none; border-color: #d64541; }
+    #keysave { background: #d64541; color: #fff; border: 0; border-radius: 8px;
+      padding: 8px 14px; font-weight: 600; cursor: pointer; }
+    #keysave:hover { background: #c23b37; }
+    #keybrowse { background: #1b1f26; color: #c7ccd1; border: 1px solid #2a2e35;
+      border-radius: 8px; padding: 8px 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+    #keybrowse:hover { border-color: #3a3f47; color: #fff; }
+    .okmark { color: #5bd67a; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="mark"><i></i></div>
+    <h1>Pioneer XDJ-RX</h1>
+    <p>Drop a firmware <b>.UPD</b> (or Pioneer <b>.zip</b>) here — or click to browse — to start the emulator.</p>
+    <div id="status"></div>
+
+    <div id="keybox" class="hidden">
+      <div class="lbl">This firmware is encrypted. Add your decryption key once —
+        drop your <b>aes256.key</b> file here, or paste the 64-hex key:</div>
+      <div class="keyrow">
+        <input id="keyhex" placeholder="64 hexadecimal characters" spellcheck="false" autocomplete="off" />
+        <button id="keybrowse">Browse…</button>
+        <button id="keysave">Save key</button>
+      </div>
+    </div>
+
+    <div class="hint">The key and firmware stay on your machine; nothing is uploaded.</div>
+  </div>
+  <script>
+    const invoke = window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke;
+    const statusEl = document.getElementById('status');
+    const keybox = document.getElementById('keybox');
+
+    // Called from the Rust host via window.eval(...) to report progress.
+    function show(msg, isErr) {
+      statusEl.className = isErr ? 'err' : '';
+      statusEl.innerHTML = (msg && !isErr ? '<span class="spin"></span>' : '') + (msg || '');
+    }
+    // Called from the Rust host after a key file is dropped.
+    function keySaved() {
+      keybox.classList.add('hidden');
+      statusEl.className = '';
+      statusEl.innerHTML = '<span class="okmark">✓</span> Key saved.';
+    }
+    async function refreshKey() {
+      if (!invoke) return;               // not in the Tauri shell
+      try { if (!(await invoke('key_present'))) keybox.classList.remove('hidden'); }
+      catch (e) { keybox.classList.remove('hidden'); }
+    }
+    document.getElementById('keysave').addEventListener('click', async () => {
+      const hex = document.getElementById('keyhex').value.trim();
+      if (!invoke) { show('key entry needs the desktop app', true); return; }
+      try { await invoke('set_key_hex', { hex }); keySaved(); }
+      catch (e) { show('Key rejected: ' + e, true); }
+    });
+
+    window.addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('drag'); });
+    window.addEventListener('dragleave', () => document.body.classList.remove('drag'));
+    window.addEventListener('drop', e => { e.preventDefault(); document.body.classList.remove('drag'); });
+
+    // Click the card to browse for a firmware .UPD (ignore clicks on the key controls).
+    document.querySelector('.card').addEventListener('click', e => {
+      if (e.target.closest('#keybox')) return;
+      if (invoke) invoke('browse_firmware');
+    });
+    // Browse for the key file.
+    document.getElementById('keybrowse').addEventListener('click', e => {
+      e.stopPropagation();
+      if (invoke) invoke('browse_key'); else show('file browsing needs the desktop app', true);
+    });
+    refreshKey();
+  </script>
+</body>
+</html>

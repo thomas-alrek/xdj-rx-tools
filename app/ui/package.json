@@ -1,0 +1,9 @@
+{
+  "name": "xdj-rx-panel-ui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "XDJ-RX virtual panel UI dependencies (knobs/faders).",
+  "dependencies": {
+    "audio-knobs": "^1.0.1"
+  }
+}

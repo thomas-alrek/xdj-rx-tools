@@ -63,8 +63,11 @@ import pycdlib
 
 # --- layout -----------------------------------------------------------------
 REPO = Path(__file__).resolve().parent.parent
-ISO = REPO / "build" / "XDJRX.iso"
-Q = REPO / "build" / "qemu"
+# Input ISO + output dir default to the build/ layout (run.sh / watch.sh); the
+# standalone app (Phase 3) overrides them with XDJ_ISO / XDJ_OUT to build into a
+# per-firmware app-data dir. nand.img lands in XDJ_OUT.
+ISO = Path(os.environ["XDJ_ISO"]) if os.environ.get("XDJ_ISO") else REPO / "build" / "XDJRX.iso"
+Q = Path(os.environ["XDJ_OUT"]) if os.environ.get("XDJ_OUT") else REPO / "build" / "qemu"
 BUILD = Q / "sdbuild"
 CRAMFS_EXTRACT = REPO / "qemu" / "cramfs_extract.py"
 
@@ -352,8 +355,7 @@ def assemble_image(out, env_blob, mbr, p1, p2):
 # --- main -------------------------------------------------------------------
 def main():
     if not ISO.exists():
-        die(f"need {ISO.relative_to(REPO)} -- run: "
-            f"python3 xdjrx_upd.py decrypt XDJRX.UPD -o {ISO.relative_to(REPO)}")
+        die(f"need {ISO} -- run: python3 xdjrx_upd.py decrypt <firmware> -o {ISO}")
 
     mke2fs = find_tool("mke2fs")
     debugfs = find_tool("debugfs")
@@ -395,7 +397,11 @@ def main():
     final = Q / "nand.img"
     shutil.move(str(out), str(final))
     shutil.rmtree(BUILD)
-    log(f"built {final.relative_to(REPO)}  ->  qemu/watch.sh   (boots to the UI)")
+    try:
+        shown = final.relative_to(REPO)
+    except ValueError:
+        shown = final                      # app-data build (Phase 3): outside the repo
+    log(f"built {shown}  ->  boots to the UI")
 
 
 if __name__ == "__main__":

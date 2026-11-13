@@ -1,6 +1,28 @@
 # Standalone app roadmap — packaging the XDJ-RX emulator
 
-**Status: PLANNED — 2026-11-12. Not started.**
+> **Architecture & developer handover:** [standalone-app.md](standalone-app.md). This file is the
+> plan/status; that one is how the app actually works and how to build/run/debug/package it.
+
+**Status: IN PROGRESS — Phases 1 (control socket) + 2 (Tauri shell + orchestrator) done 2026-11-12, Phase 3 (firmware drag-drop + app-data) done 2026-11-13; Phase 3b (USB media) plumbing done with a deferred enumeration issue, Phase 4 (audio backend pick) done, Phase 5 macOS .app done (ad-hoc signed; notarization pending). The key prompt, a rebuilt copyright-free panel, native file dialogs, and panel-driven USB LOAD all landed 2026-11-13. Phase 5 Windows/Linux + the Python→Rust port remain.**
+
+### Landed since the Phase 1–5 core (2026-11-13)
+- **Panel rebuilt, copyright-free.** The old UI embedded a Pioneer device **photo** (legal risk); it
+  was deleted and the panel redrawn as an original flat design — absolute photo-calibrated layout
+  (`COORDS`/`SCREEN0`/`ZONES`), npm `audio-knobs` knobs + custom jog platters / faders / combined
+  browse encoder, a dev `?cal` overlay for alignment. See skill [xdj-virtual-panel], memory
+  [[photo-panel]].
+- **Key prompt (§5bis-A) done.** `app-data/key/aes256.key`, content-sniffed; never bundled.
+- **Native file dialogs** (tauri-plugin-dialog): firmware drop-card is clickable, key has a Browse
+  button, and USB LOAD opens a picker. Two paths by window origin — app commands + non-blocking
+  `pick_file` on the local setup window; the dialog plugin JS API + a `remote` capability +
+  `dialog:allow-open` on the external panel (app commands are ACL-blocked for remote origins).
+- **Panel-driven USB LOAD** — `/usb` endpoint mounts a disk image/device on a slot over QMP
+  (`drive_add`/`device_add` + detect file), **eject-first** so re-loading works. See skill [build-xdj-app].
+- **Bug fixes:** first-run firmware load failed with "panel didn't come up" — prep's build scripts
+  polluted the stdout the shell reads as `XDJ_FW_DIR` (clean now; scripts → stderr + last-line read);
+  file dialog froze the app (`blocking_pick_file` on the main thread → non-blocking callback); orphaned
+  QEMU on app kill (parent-death watch + CloseRequested); log box made selectable; cursor kept visible
+  over the noVNC screen.
 The goal: turn today's "custom QEMU + web UI + `/tmp` files" setup into a single
 self-contained, cross-platform desktop app. The user drops a `.UPD` firmware onto
 the app; the app prepares the boot image and runs the emulator, with a native
@@ -90,32 +112,66 @@ live UI renders over RFB. Skipped by decision — it's the same console surface,
 treated as given. (If anything downstream surprises us, this is the first thing to
 sanity-check.)
 
-### Phase 1 — Control socket (QEMU patch rework) ⬜
-Replace the per-frame `/tmp` file poll with a QEMU **chardev** the harness reads.
-- Add `-chardev socket,id=xdjctrl,...` and wire the sub-ucom/main-ucom harness
-  (patches 07/09/13) to read framed commands from that chardev ring instead of
-  `fopen("/tmp/subucom_ctrl")` / `access("/tmp/mainkey")`.
-- **Keep the exact text spec** (`B 12 08`, `A 54 <hex>`, …) and all parsing — only
-  the *source* changes. The compose/hold/browse-ramp logic in server.py is the
-  reference for what to send.
-- Transition aid: keep an env-var path (`XDJ_CTRL_PATH`) fallback so the file path
-  works per-instance during the port.
-- Touch: [qemu/patches/07-imx6-multifield-holds.patch](../qemu/patches/07-imx6-multifield-holds.patch),
+### Phase 1 — Control socket (QEMU patch rework) ✅ (2026-11-12)
+Replaced the per-frame `/tmp` file poll with **two QEMU chardevs** the harness reads
+(one per legacy file), keeping the exact text spec and parsing.
+- **Two channels**: `id=xdjctrl` = the sub-ucom snapshot (patches 07/13);
+  `id=xdjkey` = the main-ucom key GPIO int (patch 09). QEMU is the socket **server**
+  (`-chardev socket,...,server=on,wait=off`); the harness connects as a client.
+- **Framing = NUL-terminated snapshots**: each write is the ENTIRE desired state, so
+  one record == one atomic ctrl-file write (preserves "the whole snapshot replaces the
+  held set"). Empty record = release. Last snapshot is kept on client disconnect.
+- **Parsing byte-identical**: the old inline `fopen`/`fgets`/`sscanf` loop was extracted
+  into a shared `xdj_parse_ctrl()`; only the byte *source* changed. One-shots fire once
+  per fresh record. chardev handlers + the SPI-flush hook both run under the BQL → no locks.
+- **Fallback**: when a channel's chardev is absent the harness reads its env path
+  (`XDJ_CTRL_PATH` / `XDJ_KEY_PATH`, default the legacy `/tmp` names) — also makes the file
+  path per-instance. So existing file-based tooling (inj.py, sweep_*.py) is unchanged.
+- **Opt-in**: both launchers add the chardevs only when `XDJ_RUNTIME_DIR` is set
+  (sockets land in that per-instance dir); unset = today's `/tmp`-file behavior.
+- **Client**: `server.py --ctrl-sock/--key-sock` pushes snapshots to the sockets (file mode
+  stays the default); it remains the reference for the Phase 2 Rust port.
+- **Verified live** (2026-11-12): over `xdjctrl`, a TEMPO-RANGE one-shot cycled DECK1 ±10→±16
+  (direct) and DECK2 via server.py HTTP; over `xdjkey`, a mainkey press toggled the deck
+  time display. File fallback still works with no chardevs. Full patch series reproduces the
+  live tree byte-for-byte + builds from scratch.
+- Touched: [qemu/patches/07-imx6-multifield-holds.patch](../qemu/patches/07-imx6-multifield-holds.patch),
   [09](../qemu/patches/09-imx6-mainucom-keys.patch),
-  [13](../qemu/patches/13-imx6-subucom-autolevel.patch). See skill `qemu-imx6-patches`.
+  [13](../qemu/patches/13-imx6-subucom-autolevel.patch),
+  [tools/xdj-panel/server.py](../tools/xdj-panel/server.py),
+  [qemu/watch.sh](../qemu/watch.sh), [relaunch.sh](../tools/xdj-panel/debug/relaunch.sh).
+  See skill `qemu-imx6-patches`.
 
-### Phase 2 — Tauri shell + orchestrator ⬜
-- Scaffold the Tauri app. Rust host spawns & supervises the qemu child and owns
-  **three per-instance sockets** (QMP / VNC / control) in the app runtime dir —
-  no global `/tmp`, so multiple instances are possible.
-- Webview loads panel.html. Screen pane becomes **noVNC**.
-  - Wrinkle: noVNC speaks **RFB-over-WebSocket**; QEMU `-vnc` is **raw-TCP RFB**.
-    The Rust host runs a tiny `websockify`-style WS↔TCP bridge (trivial w/ tokio).
-  - panel overlay / hotspots / calibration stay as-is.
-- Port server.py's control composition (input-select DECK/LINE holds, browse
-  counter ramp, one-shot vs hold) into Rust — **or** run server.py as a bundled
-  sidecar first to move faster, port later.
-- Retire the HTTP `/raw` screendump path once the screen pane is live.
+### Phase 2 — Tauri shell + orchestrator 🔶 (orchestrator core done 2026-11-12)
+**Orchestrator core — ✅ done & verified (headless), in [app/host](../app/host) (`xdj-host`):**
+- Rust host spawns & supervises the qemu child and owns the **per-instance sockets**
+  (QMP / VNC / control chardevs) in a runtime dir — no global `/tmp`. Supervises:
+  qemu/sidecar exit or Ctrl-C tears the rest down and cleans the sockets.
+- Screen pane = **noVNC**. QEMU `-vnc unix:` is raw RFB; the Rust host runs a tokio
+  **WS↔unix bridge** so noVNC (RFB-over-WebSocket) can show it.
+  [panel.html](../tools/xdj-panel/panel.html) uses noVNC when opened with
+  `?vnc=ws://…`, else the old `/raw` poll; the same SCREEN calibration positions
+  either; overlay/hotspots/calibration unchanged. noVNC vendored at
+  [app/ui/novnc](../app/ui/novnc); served at `/novnc/*`.
+- Control composition: **server.py runs as a sidecar** (the "sidecar first, port to
+  Rust later" option — port is Phase 5.1).
+- Verified live: `xdj-host` boots QEMU to the live UI; a frame captured over the
+  WS+RFB bridge is the full 800×480 rekordbox UI; a control injected via the sidecar
+  (DECK1 tempo range) shows up in the next VNC capture; Ctrl-C shuts the tree down.
+- `/raw` is retired for the app path (kept as a fallback for the legacy server.py-only
+  setup).
+
+**Tauri native shell — ✅ in [app/shell](../app/shell) (`xdj-rx-shell`):** a Tauri 2 window
+that spawns `xdj-host`, waits for the panel port, then opens on the live UI (panel skin +
+noVNC screen). On exit it sends `xdj-host` SIGTERM so the whole tree (QEMU + sidecar +
+sockets) tears down cleanly (a hard kill would orphan them). Verified: builds + launches,
+spawns and supervises the full stack, the URL it loads serves the live 800×480 UI
+(captured via its own bridge), and the **native window launches on the user's display
+(confirmed 2026-11-12)**.
+
+**Phase 2 remaining / follow-ups:** climb the screen-rendering ladder only if noVNC feel
+isn't tight enough (rung 2/3, §Screen rendering); a small splash while QEMU boots; multi-
+instance (pick free ports/runtime dir per instance — the plumbing is already per-instance).
 
 **Screen rendering — a performance ladder (not noVNC-or-nothing).**
 The webview carries two very different things: the **panel skin** (photoreal
@@ -142,29 +198,59 @@ Rationale for the ladder: today's sluggishness is dominated by the pull-poll
 DJ-UI feel (scrolling waveforms, jog response) still isn't tight enough. Don't
 pre-build rung 3 — measure at each rung first.
 
-### Phase 3 — Firmware drag-and-drop + app-data ⬜
-- Webview drag-drop target accepts a `.UPD`/`.zip`. Rust runs the prep pipeline
-  (bundled Python sidecar initially) on the dropped file.
-- Output to a real app-data dir, **keyed by firmware hash**, so re-dropping the
-  same firmware is instant:
+### Phase 3 — Firmware drag-and-drop + app-data ✅ (2026-11-13)
+- **Prep engine** (`xdj-host prep <firmware.UPD|.zip>`): SHA-256 the firmware, cache
+  dir = `<app-data>/<hash>`, and if incomplete run the pipeline into it via the repo's
+  Python (venv/uv/system): `xdjrx_upd.py decrypt` → `fw.iso`, `qemu_prepare.py` → boot
+  blobs, `build-nand.py` → `nand.img`. A complete cache dir is reused instantly.
   - macOS: `~/Library/Application Support/XDJ-RX/<hash>/`
   - Linux: `$XDG_DATA_HOME/xdj-rx/<hash>/` (fallback `~/.local/share`)
-- Repoint the scripts from "URL + `build/`" to "input path + output dir":
-  [xdjrx_upd.py](../xdjrx_upd.py), [qemu_prepare.py](../qemu_prepare.py),
-  `build-nand` (skill `build-xdj-sd-image`). AES-key fetch
-  ([fetch_key.py](../fetch_key.py)) stays automatic + cached.
-- Progress UI driven from Rust (the pipeline is ~minutes on a cold firmware).
-- **Distribution rule (enforced by this model):** ship the emulator + tooling
-  only. **Never** bundle firmware, the AES key, or `nand.img` — boot blobs are
-  generated at runtime from the user's `.UPD`. This is what keeps the app legally
-  distributable and matches the preservation framing in
-  [emulator-status.md](emulator-status.md).
+- **Scripts repointed** off the hardcoded `build/` layout: [qemu_prepare.py](../qemu_prepare.py)
+  honors `XDJ_OUT`; [build-nand.py](../qemu/build-nand.py) honors `XDJ_OUT`+`XDJ_ISO`;
+  [xdjrx_upd.py](../xdjrx_upd.py) already took `-o` (and has a built-in key, so no
+  fetch needed). All default to `build/` so run.sh/watch.sh are unchanged.
+- **Drag-drop** in the shell: drop a `.UPD`/`.zip` on the window → prep (with a progress
+  overlay) → boot. Startup boots the last-used firmware (recorded in app-data) or the dev
+  `build/qemu` layout, else shows the drop target. `xdj-host` run takes `XDJ_FW_DIR`.
+- **Distribution rule (enforced):** nothing firmware-derived is committed or bundled —
+  boot artifacts are generated at runtime from the user's own `.UPD` into app-data.
+- **Before release (see §5bis):** (A) the AES key must be **prompted from the user**, not
+  the dev `.env`/auto-fetch — prep today only works because a dev `.env` exists; (B) the
+  Python + e2fsprogs prep pipeline must be **bundled per-platform** (the engine's current
+  venv/uv/system Python lookup is a dev assumption).
+- Verified: `prep` built fw.iso+blobs+nand into app-data and the second run was an instant
+  cache hit; `XDJ_FW_DIR=<that dir> xdj-host` booted it to the live UI; the shell auto-boots
+  a prepared firmware and (with `XDJ_FORCE_SETUP=1`) shows the drop target with no emulator.
+  The actual drop→prep→boot transition needs a real file-drop on the window (user-confirmed,
+  like the window launch); its pieces (prep, start_host, drop screen) are each verified.
 
-### Phase 3b — Physical USB passthrough ⬜
-Mount a **real** host USB stick into the guest, the same way images mount today.
-Already supported by the current QEMU build — **no new patch** (verified: the
-binary knows `usb-host` *and* `usb-storage`, and libusb was auto-detected). Same
-"media in" surface as firmware drag-drop, hence a Phase 3 sibling.
+### Phase 3b — USB media (disk image + physical device) 🔶 (orchestrator plumbing done 2026-11-13)
+Mount a USB into the guest — a **disk image** (`.img`) or a **real host stick** — the same
+way, after boot. **Orchestrator plumbing done** in [app/host](../app/host) (`maybe_insert_usb`),
+**no new QEMU patch**:
+- Boot **hub-only** (USB-2.0 hub on `usb-bus.1` port 1), then after rbp is up (console
+  marker `Resolve xrun` + `XDJ_USB_DELAY`s settle) run the proven insert choreography over
+  QMP: `drive_add` + `device_add usb-storage,bus=usb-bus.1,port=1.1` (USB2) / `1.2` (USB1),
+  then assert the slot's detect GPIO (`/tmp/usb2_insert` / `/tmp/usb_insert`, patch 06).
+- Driven by env: `XDJ_USB=<image.img|/dev/diskN>`, `XDJ_USB_SLOT=usb1|usb2` (default usb2),
+  `XDJ_USB_WRITE=1` (default: `snapshot=on`, writes discarded — protects a real stick).
+  A physical device is `diskutil unmountDisk`'d (mac) / `umount`'d (linux) first.
+- **Verified**: QEMU attaches the MSD at the correct topology (`info usb` → Port 1.1) with a
+  snapshot overlay over the backing (`info block`), and rbp sees the slot.
+- **KNOWN ISSUE (deferred, 2026-11-13):** the device doesn't auto-enumerate/mount — rbp shows
+  the **"USB Error. Remove the device."** modal (the mount-rendezvous race from
+  usb-slot-topology.md; the detect-GPIO → HOST1-resume path isn't completing through the
+  orchestrator the way the manual `relaunch.sh` recipe does). **Temporarily clearable by
+  pressing USB2.** To tackle later: compare against the manual recipe (boot-time drive
+  backend?), the readiness window, and whether pressing USB2 (mainkey 158) is the missing
+  trigger. The per-instance wart also remains: the detect hooks are still global `/tmp` files
+  (patch 06), not socketized like Phase 1.
+
+Remaining 3b work: the UI picker (enumerate host USB block devices, list beside the image
+picker; `diskutil list` / `lsblk`), `usb-host` passthrough mode (B, below), and resolving the
+enumeration race above.
+
+Media mechanisms, different fidelity:
 
 Two mechanisms, different fidelity:
 - **A. Raw host block device as `usb-storage` (default).** Point `-drive` at the
@@ -201,13 +287,40 @@ UI beside the image picker, unmount, attach via A (B behind a toggle). No QEMU
 patch. See [usb-mount-howto.md](usb-mount-howto.md),
 [usb-slot-topology.md](usb-slot-topology.md).
 
-### Phase 4 — Audio backend selection ⬜
-- Rust picks `-audio` by OS with a **fallback chain** (Linux: `pipewire`→`pa`→
-  `alsa`; macOS: `coreaudio`; Windows: `wasapi`/`dsound`), always keeping
-  `timer-period=1451` (see watch.sh for why). Expose a device picker in the UI.
-- Mostly lifting the OS split already in watch.sh into the orchestrator.
+### Phase 4 — Audio backend selection ✅ (backend pick done 2026-11-13)
+- The Rust host (`pick_audio`) chooses `-audio` by OS, keeping `timer-period=1451`:
+  macOS `coreaudio`; Windows `wasapi`; Linux prefers whatever is actually running —
+  `pipewire` (if `$XDG_RUNTIME_DIR/pipewire-0`), else `pa` (if `…/pulse/native`), else
+  `alsa`. `XDJAUDIO` overrides the whole value (incl. `none` to disable host audio).
+- Verified: macOS still emits `-audio coreaudio,timer-period=1451` (unchanged, and audio
+  to the host was already confirmed in Phase 2). The Linux/Windows branches are selection
+  logic only (not runnable to verify on the dev Mac).
+- Remaining: a **device picker** in the UI (which output device), and — if a chosen backend
+  ever fails at QEMU startup — an actual relaunch-based fallback (today it's a best-effort
+  pre-launch pick, not a runtime retry).
 
-### Phase 5 — Packaging & cross-platform build 🧱 (the long pole) ⬜
+### Phase 5 — Packaging & cross-platform build 🧱 (the long pole) 🔶 (macOS .app done 2026-11-13)
+
+**macOS .app — ✅ done & verified** via [packaging/build-macos-app.sh](../packaging/build-macos-app.sh)
+(→ `dist/XDJ-RX.app`, ~145 MB, self-contained):
+- Bundles the Tauri shell + `xdj-host` + patched `qemu-system-arm` (Homebrew dylibs
+  relocated with `dylibbundler`, prefix `@executable_path/libs/` so inter-lib deps
+  resolve; duplicate `LC_RPATH`s stripped) + the prep scripts + the panel sidecar +
+  vendored noVNC + e2fsprogs (dylibs relocated) + a standalone CPython with the prep
+  deps (`pycdlib`/`pycryptodome`/`inflate64`). Firmware/key/nand are **never** bundled.
+- Code is **relocatable**: `xdj-host`/shell resolve resources via `XDJ_RESOURCES` or
+  next-to-exe (Contents/Resources), falling back to the dev repo; runtime dir + prepared
+  firmware live in app-data, not the (read-only) bundle.
+- **QEMU built `--disable-sdl`** — on macOS the SDL dep is sdl2-compat, which dlopen's
+  libSDL3 (a dependency bundlers can't follow → "Failed loading SDL3 library"); we use
+  cocoa/vnc/none, so SDL is dropped. QEMU gets `-L <bundled keymaps>` (it's relocated
+  from its build tree, so `-vnc` would otherwise fail to find `keymaps/en-us`).
+- Verified: `dist/XDJ-RX.app` boots a prepared firmware to the **full live UI**, entirely
+  from bundled resources (captured via the bundled VNC bridge).
+- **Not done (as agreed):** Developer-ID signing + **notarization** (binaries are only
+  **ad-hoc** signed — required for arm64 to run at all, but a notarized build is what a
+  user double-clicks without Gatekeeper warnings). **Drag-drop prep now works** once the
+  user supplies a key via the in-app key prompt (§5bis-A, done) — the .app ships no key.
 
 **Target platforms (minimum):** macOS, Windows, Ubuntu/Debian (`.deb`).
 **Goal:** truly portable, **no user install step** (no "install Python/Homebrew/
@@ -312,6 +425,65 @@ two e2fsprogs shell-outs (5.2), which bundling keeps install-free.
 - Screen rendering: how far up the Phase 2 ladder (noVNC → Rust-decode → native
   GPU surface) perf actually forces us. Decide by measuring at each rung, not up
   front. Today's UI is already sluggish, so rung 1 is the baseline to beat.
+
+## 5bis. Deferred items raised during Phases 1–3 (must tackle before release)
+
+### A. The AES decryption key must be user-supplied, never bundled — ✅ IMPLEMENTED 2026-11-13
+Key prompt built: the shell accepts a **dropped `aes256.key` file** (or a text file of
+64 hex) and a **pasted 64-hex key** (`set_key_hex` command, `withGlobalTauri`), stores it
+per-user as `<app-data>/key/aes256.key` (content sniffed at use: 64-hex → `XDJRX_AES_KEY`,
+else a passphrase file → `--key-file`), and `xdj-host prep`
+(`resolve_firmware_key`) uses it — app-data key first, else the dev `.env`, else a clear
+"add your aes256.key" error. Dropping a `.UPD` before a key is set prompts for the key.
+The key is never bundled. **Verified**: the bundled `.app`'s prep decrypts + builds a
+firmware end-to-end using a key placed in app-data (bundled Python + e2fsprogs + the key).
+The GUI drop/paste itself needs on-device confirmation (headless can't drive it). Original
+analysis below for context.
+
+The `.UPD` payload is a cryptoloop AES-256 image; decrypting it needs Pioneer's key.
+**Good news: the key is NOT baked into our source.** [xdjrx_upd.py](../xdjrx_upd.py)
+`_load_key` takes it, in order, from `--key-file aes256.key` (a passphrase file), the
+`XDJRX_AES_KEY` env var, or a `.env` (git-ignored) — and **errors out if none is
+present** (the `--help` line "else built-in key" is stale wording; there is no built-in
+fallback). [fetch_key.py](../fetch_key.py) can *derive* the key from Pioneer's own
+public GPL source release (~280 MB download) and write `.env`.
+
+Why it's a release blocker: today the prep path (Phase 3 `xdj-host prep`) only works
+because the dev `.env` exists in the repo. A shipped app has no `.env`, and we must
+**not** bundle the key or silently auto-fetch it — shipping the key (or a one-click
+grab of it) distributes Pioneer-owned material, exactly what CLAUDE.md's standing
+constraint forbids.
+
+Plan (when we reach it):
+- On first firmware drop with no key on hand, **prompt the user** for the key — accept
+  an `aes256.key` passphrase file (drag/drop or file picker) or a 64-hex string, and
+  wire it straight through to the prep step (`--key-file` / `XDJRX_AES_KEY`). The user
+  owns the device and supplies the key, the app never ships it.
+- Cache the supplied key per-user in app-data (same place as the prepared firmware), so
+  it's asked for once — decide: store the raw key vs. only remember "key present".
+- `fetch_key.py` (auto-derive from the GPL source): keep it a **dev-only convenience**,
+  off by default in the app; at most offer it as an explicit, user-initiated action with
+  clear provenance. Decide the exact policy when building the key-prompt UX.
+- `xdj-host prep` currently passes no key (relies on `.env`); add a key argument/env it
+  forwards to `xdjrx_upd.py`, and surface a clear "firmware key required" error instead
+  of a Python traceback when it's missing.
+
+### B. The nand.img / prep pipeline must ship and run on every target (raised 2026-11-13)
+Phase 3's prep is **Python** ([xdjrx_upd.py](../xdjrx_upd.py),
+[qemu_prepare.py](../qemu_prepare.py), [qemu/build-nand.py](../qemu/build-nand.py)) and
+shells out to **e2fsprogs** (`mke2fs`+`debugfs`) for the ext4 rootfs. The current engine
+(`xdj-host`'s `python_cmd`) finds a Python via the repo venv / `uv` / system `python3` —
+a **dev-only assumption**; a shipped app has none of those. This is the same portability
+problem already analysed in **§5.1 (Python→Rust port)** and **§5.2 (ext4 creation is the
+one hard dep)** — recording it here so Phase 3's engine is revisited during packaging:
+- Interim (unblocks macOS + Linux now): **bundle** a standalone Python + the prep scripts
+  + `mke2fs`/`debugfs` inside the app, and have `xdj-host` call the bundled copies instead
+  of a system Python (replace `python_cmd`'s dev lookup with a resource-relative path).
+- Windows is the weak point: e2fsprogs needs an MSYS2/Cygwin build (§5.2). This is the
+  main argument for eventually **porting the pipeline (incl. an ext4 writer) to Rust** so
+  prep is a single native binary with no Python/e2fsprogs runtime at all.
+- Decide per platform: bundled-sidecar everywhere first, then Rust-port the ext4 step when
+  Windows packaging demands it (§5.2).
 
 ## 6. Related
 - [emulator-status.md](emulator-status.md) — feature board (boot/USB/audio/panel).
