@@ -21,6 +21,7 @@
 //! Firmware is never touched -- everything here is host-side orchestration.
 
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
@@ -268,12 +269,26 @@ fn qemu_args(cfg: &Config) -> Vec<String> {
     a
 }
 
+/// stdout+stderr redirected to a log file in the runtime dir (so a child's errors are
+/// captured even when the app is launched from Finder). Falls back to inherited stdio.
+fn log_stdio(cfg: &Config, name: &str) -> (Stdio, Stdio) {
+    if let Ok(f) = std::fs::File::create(cfg.rt(name)) {
+        if let Ok(f2) = f.try_clone() {
+            return (Stdio::from(f), Stdio::from(f2));
+        }
+    }
+    (Stdio::inherit(), Stdio::inherit())
+}
+
 fn spawn_qemu(cfg: &Config) -> std::io::Result<Child> {
     let args = qemu_args(cfg);
     eprintln!("[host] qemu: {} {}", cfg.qemu.display(), args.join(" "));
+    let (out, err) = log_stdio(cfg, "qemu.log");
     Command::new(&cfg.qemu)
         .args(&args)
         .current_dir(&cfg.repo)
+        .stdout(out)
+        .stderr(err)
         .kill_on_drop(true)
         .spawn()
 }
@@ -286,8 +301,9 @@ fn spawn_sidecar(cfg: &Config) -> std::io::Result<Child> {
         "--key-sock".into(), cfg.rt("key.sock").to_string_lossy().into_owned(),
     ];
     eprintln!("[host] sidecar: {} {}", cfg.python, args.join(" "));
+    let (out, err) = log_stdio(cfg, "sidecar.log");
     let mut c = Command::new(&cfg.python);
-    c.args(&args).current_dir(&cfg.repo).kill_on_drop(true);
+    c.args(&args).current_dir(&cfg.repo).stdout(out).stderr(err).kill_on_drop(true);
     // Packaged: tell the sidecar where the bundled noVNC lives (its default is a
     // repo-relative path that doesn't exist in the .app).
     if let Some(n) = &cfg.novnc_dir {

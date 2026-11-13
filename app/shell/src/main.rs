@@ -15,7 +15,7 @@
 //! user's own file.
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -136,13 +136,27 @@ fn prep_firmware(repo: &Path, upd: &Path) -> Result<PathBuf, String> {
 /// Spawn `xdj-host` for `fw_dir` and wait for the panel port. Replaces any running host.
 fn start_host(state: &AppState, fw_dir: &Path) -> Result<(), String> {
     stop_host(state);
-    let child = host_command(&state.repo)
-        .env("XDJ_FW_DIR", fw_dir)
+    // Hardcoded ports (8765/6080) ⇒ one instance at a time. A leftover instance would
+    // otherwise make our sidecar fail to bind and surface as a confusing 60s timeout.
+    if std::net::TcpStream::connect(("127.0.0.1", PANEL_PORT)).is_ok() {
+        return Err("another XDJ-RX instance appears to be running (port 8765 is busy). Quit it and try again.".into());
+    }
+    // Capture xdj-host's output to app-data/host.log so failures are diagnosable even
+    // when launched from Finder (where stderr would otherwise go to the system log).
+    let mut cmd = host_command(&state.repo);
+    cmd.env("XDJ_FW_DIR", fw_dir);
+    let _ = std::fs::create_dir_all(app_data_root());
+    if let Ok(f) = std::fs::File::create(app_data_root().join("host.log")) {
+        if let Ok(f2) = f.try_clone() {
+            cmd.stdout(Stdio::from(f)).stderr(Stdio::from(f2));
+        }
+    }
+    let child = cmd
         .spawn()
         .map_err(|e| format!("could not start xdj-host: {e}"))?;
     *state.host.lock().unwrap() = Some(child);
     if !wait_port(("127.0.0.1", PANEL_PORT), Duration::from_secs(60)) {
-        return Err("panel did not come up".into());
+        return Err("the emulator panel didn’t come up — see host.log in the app data folder".into());
     }
     Ok(())
 }
