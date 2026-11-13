@@ -330,21 +330,38 @@ fn key_present() -> bool {
     has_key()
 }
 
-/// Native file picker for the panel's USB LOAD buttons. Opens an OS file dialog and
-/// returns the chosen path (or None if cancelled); the panel then POSTs it to the
-/// sidecar's /usb endpoint, which does the drive_add/device_add insert over QMP.
+/// Browse for a firmware .UPD/.zip (the setup page's drop area is also clickable).
 #[tauri::command]
-fn pick_usb_image(app: tauri::AppHandle, slot: String) -> Option<String> {
+fn browse_firmware(app: tauri::AppHandle) {
     use tauri_plugin_dialog::DialogExt;
-    let title = format!("Select a USB disk image for {}", slot.to_uppercase());
-    app.dialog()
+    if let Some(p) = app
+        .dialog()
         .file()
-        .set_title(title)
-        .add_filter("Disk images", &["img", "dmg", "iso", "bin", "raw"])
+        .set_title("Select a firmware .UPD (or Pioneer .zip)")
+        .add_filter("Firmware", &["UPD", "upd", "zip"])
         .add_filter("All files", &["*"])
         .blocking_pick_file()
         .and_then(|f| f.into_path().ok())
-        .map(|p| p.to_string_lossy().into_owned())
+    {
+        on_firmware_dropped(&app, p);
+    }
+}
+
+/// Browse for the firmware decryption key file (the setup page's "Browse…" button).
+#[tauri::command]
+fn browse_key(app: tauri::AppHandle) {
+    use tauri_plugin_dialog::DialogExt;
+    if let Some(p) = app
+        .dialog()
+        .file()
+        .set_title("Select your firmware key (aes256.key)")
+        .add_filter("Key", &["key"])
+        .add_filter("All files", &["*"])
+        .blocking_pick_file()
+        .and_then(|f| f.into_path().ok())
+    {
+        on_key_dropped(&app, p);
+    }
 }
 
 /// A dropped non-firmware file is treated as the firmware key.
@@ -372,7 +389,7 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState { repo: repo.clone(), host: Mutex::new(None), busy: Mutex::new(false) })
-        .invoke_handler(tauri::generate_handler![set_key_hex, key_present, pick_usb_image])
+        .invoke_handler(tauri::generate_handler![set_key_hex, key_present, browse_firmware, browse_key])
         .setup(move |app| {
             match &startup_fw {
                 Some(dir) => {

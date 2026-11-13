@@ -15,9 +15,11 @@
     .card {
       width: min(560px, 86vw); text-align: center; padding: 36px 28px;
       border: 2px dashed #2a2e35; border-radius: 16px; background: #101216;
-      transition: border-color .15s, background .15s;
+      transition: border-color .15s, background .15s; cursor: pointer;
     }
+    .card:hover { border-color: #3a3f47; }
     body.drag .card { border-color: #d64541; background: #16130f; }
+    #keybox { cursor: default; }
     h1 { font-size: 20px; margin: 0 0 6px; color: #e6e9ec; font-weight: 600; }
     .mark { width: 54px; height: 54px; margin: 0 auto 18px; border-radius: 12px;
       background: #14161a; display: flex; align-items: center; justify-content: center; }
@@ -41,6 +43,9 @@
     #keysave { background: #d64541; color: #fff; border: 0; border-radius: 8px;
       padding: 8px 14px; font-weight: 600; cursor: pointer; }
     #keysave:hover { background: #c23b37; }
+    #keybrowse { background: #1b1f26; color: #c7ccd1; border: 1px solid #2a2e35;
+      border-radius: 8px; padding: 8px 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+    #keybrowse:hover { border-color: #3a3f47; color: #fff; }
     .okmark { color: #5bd67a; }
   </style>
 </head>
@@ -48,7 +53,7 @@
   <div class="card">
     <div class="mark"><i></i></div>
     <h1>Pioneer XDJ-RX</h1>
-    <p>Drop a firmware <b>.UPD</b> (or Pioneer <b>.zip</b>) here to start the emulator.</p>
+    <p>Drop a firmware <b>.UPD</b> (or Pioneer <b>.zip</b>) here — or click to browse — to start the emulator.</p>
     <div id="status"></div>
 
     <div id="keybox" class="hidden">
@@ -56,6 +61,7 @@
         drop your <b>aes256.key</b> file here, or paste the 64-hex key:</div>
       <div class="keyrow">
         <input id="keyhex" placeholder="64 hexadecimal characters" spellcheck="false" autocomplete="off" />
+        <button id="keybrowse">Browse…</button>
         <button id="keysave">Save key</button>
       </div>
     </div>
@@ -93,6 +99,17 @@
     window.addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('drag'); });
     window.addEventListener('dragleave', () => document.body.classList.remove('drag'));
     window.addEventListener('drop', e => { e.preventDefault(); document.body.classList.remove('drag'); });
+
+    // Click the card to browse for a firmware .UPD (ignore clicks on the key controls).
+    document.querySelector('.card').addEventListener('click', e => {
+      if (e.target.closest('#keybox')) return;
+      if (invoke) invoke('browse_firmware');
+    });
+    // Browse for the key file.
+    document.getElementById('keybrowse').addEventListener('click', e => {
+      e.stopPropagation();
+      if (invoke) invoke('browse_key'); else show('file browsing needs the desktop app', true);
+    });
     refreshKey();
   </script>
 </body>

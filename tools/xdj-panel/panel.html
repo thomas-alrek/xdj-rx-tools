@@ -276,12 +276,15 @@ async function doMount(slot, path){
 }
 async function mountUsb(slot){
   const S=slot.toUpperCase();
-  const T=window.__TAURI__;
-  if(T && T.core && T.core.invoke){
+  const D=window.__TAURI__ && window.__TAURI__.dialog;
+  if(D && D.open){
     log('⏏ '+S+': choosing an image…');
-    try{ const p=await T.core.invoke('pick_usb_image',{slot});
+    try{ const p=await D.open({ multiple:false, directory:false,
+        title:'Select a USB disk image for '+S,
+        filters:[{name:'Disk images',extensions:['img','dmg','iso','bin','raw']},
+                 {name:'All files',extensions:['*']}] });
       if(!p){ log('… '+S+' cancelled'); return; }
-      return doMount(slot, p);
+      return doMount(slot, Array.isArray(p)?p[0]:p);
     }catch(e){ log('✖ file dialog failed: '+e); return; }
   }
   // dev browser (no Tauri): type a path
