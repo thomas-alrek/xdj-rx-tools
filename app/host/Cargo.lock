@@ -443,6 +443,7 @@ name = "xdj-host"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "libc",
  "sha2",
  "tokio",
  "tokio-tungstenite",

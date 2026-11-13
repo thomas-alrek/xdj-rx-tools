@@ -103,7 +103,7 @@ fn app_resources() -> Option<PathBuf> {
 /// Build a Command for xdj-host, bundle-aware: the bundled binary + XDJ_RESOURCES when
 /// packaged, else the dev build + XDJ_REPO. `repo` is the dev fallback root.
 fn host_command(repo: &Path) -> Command {
-    if let Some(res) = app_resources() {
+    let mut c = if let Some(res) = app_resources() {
         let mut c = Command::new(res.join("xdj-host"));
         c.env("XDJ_RESOURCES", &res).current_dir(&res);
         c
@@ -111,7 +111,10 @@ fn host_command(repo: &Path) -> Command {
         let mut c = Command::new(repo.join("app/host/target/debug/xdj-host"));
         c.env("XDJ_REPO", repo).current_dir(repo);
         c
-    }
+    };
+    // So xdj-host can tear QEMU down if we (the shell) die without a clean exit.
+    c.env("XDJ_PARENT_PID", std::process::id().to_string());
+    c
 }
 
 /// Run `xdj-host prep <upd>`; returns the prepared firmware dir (its stdout).
@@ -371,14 +374,24 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) = event {
-                if let Some(p) = paths.first() {
-                    if is_firmware(p) {
-                        on_firmware_dropped(window.app_handle(), p.clone());
-                    } else {
-                        on_key_dropped(window.app_handle(), p.clone());
+            match event {
+                WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
+                    if let Some(p) = paths.first() {
+                        if is_firmware(p) {
+                            on_firmware_dropped(window.app_handle(), p.clone());
+                        } else {
+                            on_key_dropped(window.app_handle(), p.clone());
+                        }
                     }
                 }
+                // Closing the emulator window stops the whole emulator stack now
+                // (don't leave a headless QEMU running).
+                WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed => {
+                    if window.label() == "main" {
+                        stop_host(&window.app_handle().state::<AppState>());
+                    }
+                }
+                _ => {}
             }
         })
         .build(tauri::generate_context!())

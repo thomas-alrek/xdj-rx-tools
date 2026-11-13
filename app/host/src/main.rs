@@ -408,6 +408,29 @@ async fn terminated() {
     std::future::pending::<()>().await;
 }
 
+/// Resolves when our parent process (the Tauri shell, which passes XDJ_PARENT_PID)
+/// is no longer alive — so we tear QEMU down however the app was killed (window
+/// close, force-quit, crash), not only on a clean SIGTERM. Never resolves if the
+/// var is unset (standalone/dev use), so `nohup xdj-host` isn't affected.
+#[cfg(unix)]
+async fn parent_gone() {
+    let pid: i32 = match std::env::var("XDJ_PARENT_PID").ok().and_then(|v| v.parse().ok()) {
+        Some(p) => p,
+        None => return std::future::pending::<()>().await,
+    };
+    loop {
+        // kill(pid, 0) == 0 while the parent is alive; -1/ESRCH once it's gone.
+        if unsafe { libc::kill(pid, 0) } != 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+#[cfg(not(unix))]
+async fn parent_gone() {
+    std::future::pending::<()>().await;
+}
+
 fn clean_stale(cfg: &Config) {
     for s in ["qmp.sock", "vnc.sock", "ctrl.sock", "key.sock", "usb_usb1.img", "usb_usb2.img"] {
         let _ = std::fs::remove_file(cfg.rt(s));
@@ -844,6 +867,11 @@ async fn main() {
         }
         _ = terminated() => {
             eprintln!("[host] shutting down (SIGTERM)");
+            let _ = qemu.kill().await;
+            let _ = sidecar.kill().await;
+        }
+        _ = parent_gone() => {
+            eprintln!("[host] parent (shell) exited; shutting down");
             let _ = qemu.kill().await;
             let _ = sidecar.kill().await;
         }
