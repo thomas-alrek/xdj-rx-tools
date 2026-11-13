@@ -1,6 +1,6 @@
 # Standalone app roadmap — packaging the XDJ-RX emulator
 
-**Status: IN PROGRESS — Phases 1 (control socket) + 2 (Tauri shell + orchestrator) done 2026-11-12, Phase 3 (firmware drag-drop + app-data) done 2026-11-13; Phase 3b (USB media) plumbing done with a deferred enumeration issue, Phase 4 (audio backend pick) done; Phase 5 planned.**
+**Status: IN PROGRESS — Phases 1 (control socket) + 2 (Tauri shell + orchestrator) done 2026-11-12, Phase 3 (firmware drag-drop + app-data) done 2026-11-13; Phase 3b (USB media) plumbing done with a deferred enumeration issue, Phase 4 (audio backend pick) done, Phase 5 macOS .app done (ad-hoc signed; notarization + key-prompt pending); Phase 5 Windows/Linux + the Python→Rust port remain.**
 The goal: turn today's "custom QEMU + web UI + `/tmp` files" setup into a single
 self-contained, cross-platform desktop app. The user drops a `.UPD` firmware onto
 the app; the app prepares the boot image and runs the emulator, with a native
@@ -277,7 +277,29 @@ patch. See [usb-mount-howto.md](usb-mount-howto.md),
   ever fails at QEMU startup — an actual relaunch-based fallback (today it's a best-effort
   pre-launch pick, not a runtime retry).
 
-### Phase 5 — Packaging & cross-platform build 🧱 (the long pole) ⬜
+### Phase 5 — Packaging & cross-platform build 🧱 (the long pole) 🔶 (macOS .app done 2026-11-13)
+
+**macOS .app — ✅ done & verified** via [packaging/build-macos-app.sh](../packaging/build-macos-app.sh)
+(→ `dist/XDJ-RX.app`, ~145 MB, self-contained):
+- Bundles the Tauri shell + `xdj-host` + patched `qemu-system-arm` (Homebrew dylibs
+  relocated with `dylibbundler`, prefix `@executable_path/libs/` so inter-lib deps
+  resolve; duplicate `LC_RPATH`s stripped) + the prep scripts + the panel sidecar +
+  vendored noVNC + e2fsprogs (dylibs relocated) + a standalone CPython with the prep
+  deps (`pycdlib`/`pycryptodome`/`inflate64`). Firmware/key/nand are **never** bundled.
+- Code is **relocatable**: `xdj-host`/shell resolve resources via `XDJ_RESOURCES` or
+  next-to-exe (Contents/Resources), falling back to the dev repo; runtime dir + prepared
+  firmware live in app-data, not the (read-only) bundle.
+- **QEMU built `--disable-sdl`** — on macOS the SDL dep is sdl2-compat, which dlopen's
+  libSDL3 (a dependency bundlers can't follow → "Failed loading SDL3 library"); we use
+  cocoa/vnc/none, so SDL is dropped. QEMU gets `-L <bundled keymaps>` (it's relocated
+  from its build tree, so `-vnc` would otherwise fail to find `keymaps/en-us`).
+- Verified: `dist/XDJ-RX.app` boots a prepared firmware to the **full live UI**, entirely
+  from bundled resources (captured via the bundled VNC bridge).
+- **Not done (as agreed):** Developer-ID signing + **notarization** (binaries are only
+  **ad-hoc** signed — required for arm64 to run at all, but a notarized build is what a
+  user double-clicks without Gatekeeper warnings). And **drag-drop prep needs the AES key**
+  (§5bis-A): a freshly-dropped `.UPD` fails at decrypt in the .app because no key is shipped
+  (correct!) — the key-prompt UX is the blocker there.
 
 **Target platforms (minimum):** macOS, Windows, Ubuntu/Debian (`.deb`).
 **Goal:** truly portable, **no user install step** (no "install Python/Homebrew/

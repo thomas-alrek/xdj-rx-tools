@@ -84,17 +84,36 @@ fn resolve_startup_fw(repo: &Path) -> Option<PathBuf> {
     None
 }
 
-fn xdj_host_bin(repo: &Path) -> PathBuf {
-    repo.join("app/host/target/debug/xdj-host")
+/// The bundled resources dir (Contents/Resources) when running from a .app, else None.
+fn app_resources() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let res = exe.parent()?.parent()?.join("Resources");
+    if res.join("xdj-host").exists() {
+        Some(res)
+    } else {
+        None
+    }
+}
+
+/// Build a Command for xdj-host, bundle-aware: the bundled binary + XDJ_RESOURCES when
+/// packaged, else the dev build + XDJ_REPO. `repo` is the dev fallback root.
+fn host_command(repo: &Path) -> Command {
+    if let Some(res) = app_resources() {
+        let mut c = Command::new(res.join("xdj-host"));
+        c.env("XDJ_RESOURCES", &res).current_dir(&res);
+        c
+    } else {
+        let mut c = Command::new(repo.join("app/host/target/debug/xdj-host"));
+        c.env("XDJ_REPO", repo).current_dir(repo);
+        c
+    }
 }
 
 /// Run `xdj-host prep <upd>`; returns the prepared firmware dir (its stdout).
 fn prep_firmware(repo: &Path, upd: &Path) -> Result<PathBuf, String> {
-    let out = Command::new(xdj_host_bin(repo))
+    let out = host_command(repo)
         .arg("prep")
         .arg(upd)
-        .env("XDJ_REPO", repo)
-        .current_dir(repo)
         .output()
         .map_err(|e| format!("could not run xdj-host prep: {e}"))?;
     if !out.status.success() {
@@ -112,10 +131,8 @@ fn prep_firmware(repo: &Path, upd: &Path) -> Result<PathBuf, String> {
 /// Spawn `xdj-host` for `fw_dir` and wait for the panel port. Replaces any running host.
 fn start_host(state: &AppState, fw_dir: &Path) -> Result<(), String> {
     stop_host(state);
-    let child = Command::new(xdj_host_bin(&state.repo))
-        .env("XDJ_REPO", &state.repo)
+    let child = host_command(&state.repo)
         .env("XDJ_FW_DIR", fw_dir)
-        .current_dir(&state.repo)
         .spawn()
         .map_err(|e| format!("could not start xdj-host: {e}"))?;
     *state.host.lock().unwrap() = Some(child);

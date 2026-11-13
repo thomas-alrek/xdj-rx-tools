@@ -37,12 +37,37 @@ struct Config {
     fw_dir: PathBuf, // prepared firmware dir (boot blobs + nand.img)
     qemu: PathBuf,
     nand: PathBuf,
-    python: String,
+    python: String,                // sidecar (server.py) interpreter
+    python_bin: Option<PathBuf>,   // bundled python with the prep deps, if packaged
     server_py: PathBuf,
+    scripts_dir: PathBuf,          // dir holding xdjrx_upd.py / qemu_prepare.py / build-nand.py
+    e2fsprogs_dir: Option<PathBuf>, // bundled mke2fs/debugfs dir, prepended to PATH for prep
+    novnc_dir: Option<PathBuf>,    // bundled noVNC dir, passed to the sidecar
+    qemu_data: Option<PathBuf>,    // bundled qemu data dir (keymaps); passed via -L when packaged
     panel_port: u16,
     vnc_ws_port: u16,
     smp: String,
     audio: String, // "none" disables host audio
+}
+
+/// The bundled resources dir, if we're running packaged: XDJ_RESOURCES, else next to
+/// the executable when it looks like a bundle (holds qemu-system-arm / scripts/).
+/// None in the dev tree, where paths resolve against the repo instead.
+fn resources_root() -> Option<PathBuf> {
+    if let Some(r) = std::env::var_os("XDJ_RESOURCES") {
+        let p = PathBuf::from(r);
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            if dir.join("qemu-system-arm").exists() || dir.join("scripts").is_dir() {
+                return Some(dir.to_path_buf());
+            }
+        }
+    }
+    None
 }
 
 impl Config {
@@ -51,9 +76,28 @@ impl Config {
             Some(p) => PathBuf::from(p),
             None => std::env::current_dir()?,
         };
+        let res = resources_root();
+        // Resolve a resource: the bundle copy if present, else the dev repo path.
+        let pick = |bundle_rel: &str, repo_rel: &str| -> PathBuf {
+            if let Some(r) = &res {
+                let p = r.join(bundle_rel);
+                if p.exists() {
+                    return p;
+                }
+            }
+            repo.join(repo_rel)
+        };
+        // Per-instance sockets/console. Packaged, the repo isn't writable (the .app may
+        // live in /Applications), so use app-data; dev uses build/run.
         let runtime_dir = std::env::var_os("XDJ_RUNTIME_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|| repo.join("build/run"));
+            .unwrap_or_else(|| {
+                if res.is_some() {
+                    app_data_root().join("run")
+                } else {
+                    repo.join("build/run")
+                }
+            });
         // The prepared firmware (boot blobs + nand.img). Phase 3 sets XDJ_FW_DIR to a
         // per-firmware app-data dir; the dev default is the build/qemu layout.
         let fw_dir = std::env::var_os("XDJ_FW_DIR")
@@ -61,12 +105,34 @@ impl Config {
             .unwrap_or_else(|| repo.join("build/qemu"));
         let qemu = std::env::var_os("XDJ_QEMU")
             .map(PathBuf::from)
-            .unwrap_or_else(|| default_qemu(&repo));
+            .unwrap_or_else(|| {
+                res.as_ref()
+                    .map(|r| r.join("qemu-system-arm"))
+                    .filter(|p| p.exists())
+                    .unwrap_or_else(|| default_qemu(&repo))
+            });
         let nand = std::env::var_os("XDJ_NAND")
             .map(PathBuf::from)
             .unwrap_or_else(|| fw_dir.join("nand.img"));
-        let python = std::env::var("XDJ_PYTHON").unwrap_or_else(|_| "python3".into());
-        let server_py = repo.join("tools/xdj-panel/server.py");
+        let python_bin = res
+            .as_ref()
+            .map(|r| r.join("python/bin/python3"))
+            .filter(|p| p.exists());
+        let python = std::env::var("XDJ_PYTHON").unwrap_or_else(|_| {
+            python_bin
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "python3".into())
+        });
+        let server_py = pick("panel/server.py", "tools/xdj-panel/server.py");
+        let scripts_dir = res
+            .as_ref()
+            .map(|r| r.join("scripts"))
+            .filter(|p| p.is_dir())
+            .unwrap_or_else(|| repo.clone());
+        let e2fsprogs_dir = res.as_ref().map(|r| r.join("e2fsprogs")).filter(|p| p.is_dir());
+        let novnc_dir = res.as_ref().map(|r| r.join("ui/novnc")).filter(|p| p.is_dir());
+        let qemu_data = res.as_ref().map(|r| r.join("qemu-bios")).filter(|p| p.is_dir());
         let panel_port = env_u16("XDJ_PANEL_PORT", 8765);
         let vnc_ws_port = env_u16("XDJ_VNC_WS_PORT", 6080);
         let smp = std::env::var("XDJSMP").unwrap_or_else(|_| "2".into());
@@ -78,7 +144,12 @@ impl Config {
             qemu,
             nand,
             python,
+            python_bin,
             server_py,
+            scripts_dir,
+            e2fsprogs_dir,
+            novnc_dir,
+            qemu_data,
             panel_port,
             vnc_ws_port,
             smp,
@@ -88,6 +159,20 @@ impl Config {
 
     fn rt(&self, name: &str) -> PathBuf {
         self.runtime_dir.join(name)
+    }
+
+    /// Python for the prep scripts: the bundled interpreter (deps installed) if
+    /// packaged, else the dev venv / uv / system python.
+    fn prep_python(&self) -> (String, Vec<String>) {
+        if let Some(p) = &self.python_bin {
+            (p.to_string_lossy().into_owned(), vec![])
+        } else {
+            python_cmd(&self.repo)
+        }
+    }
+
+    fn script(&self, name: &str) -> PathBuf {
+        self.scripts_dir.join(name)
     }
 }
 
@@ -149,6 +234,12 @@ fn qemu_args(cfg: &Config) -> Vec<String> {
         // Headless: the screen reaches the UI via VNC, not a native window.
         "-display".into(), "none".into(),
     ];
+    // Packaged: qemu is relocated away from its build tree, so point it at the bundled
+    // data dir (keymaps) — else `-vnc` fails with "could not find keymap file".
+    if let Some(d) = &cfg.qemu_data {
+        a.push("-L".into());
+        a.push(d.to_string_lossy().into_owned());
+    }
     if cfg.audio != "none" {
         a.push("-audio".into());
         a.push(cfg.audio.clone());
@@ -195,11 +286,14 @@ fn spawn_sidecar(cfg: &Config) -> std::io::Result<Child> {
         "--key-sock".into(), cfg.rt("key.sock").to_string_lossy().into_owned(),
     ];
     eprintln!("[host] sidecar: {} {}", cfg.python, args.join(" "));
-    Command::new(&cfg.python)
-        .args(&args)
-        .current_dir(&cfg.repo)
-        .kill_on_drop(true)
-        .spawn()
+    let mut c = Command::new(&cfg.python);
+    c.args(&args).current_dir(&cfg.repo).kill_on_drop(true);
+    // Packaged: tell the sidecar where the bundled noVNC lives (its default is a
+    // repo-relative path that doesn't exist in the .app).
+    if let Some(n) = &cfg.novnc_dir {
+        c.env("XDJ_NOVNC_DIR", n);
+    }
+    c.spawn()
 }
 
 /// Accept WS clients and bridge each to QEMU's VNC unix socket (byte-transparent:
@@ -385,7 +479,7 @@ fn python_cmd(repo: &Path) -> (String, Vec<String>) {
 /// Prepare (or reuse a cached) firmware: decrypt -> boot blobs -> nand.img into
 /// app-data/<hash>/. Idempotent — a complete cache dir is reused instantly. Returns
 /// the prepared dir (pass it back as XDJ_FW_DIR to run).
-fn prep_firmware(repo: &Path, upd: &Path) -> Result<PathBuf, String> {
+fn prep_firmware(cfg: &Config, upd: &Path) -> Result<PathBuf, String> {
     let upd = upd
         .canonicalize()
         .map_err(|e| format!("firmware not found: {} ({e})", upd.display()))?;
@@ -398,13 +492,21 @@ fn prep_firmware(repo: &Path, upd: &Path) -> Result<PathBuf, String> {
     }
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
 
-    let (py, pre) = python_cmd(repo);
+    let (py, pre) = cfg.prep_python();
+    // Prepend the bundled e2fsprogs (if packaged) so build-nand.py finds mke2fs/debugfs.
+    let path_env = cfg.e2fsprogs_dir.as_ref().map(|d| {
+        let cur = std::env::var("PATH").unwrap_or_default();
+        format!("{}:{}", d.to_string_lossy(), cur)
+    });
     let iso = dir.join("fw.iso");
     let dirs = dir.to_string_lossy().into_owned();
     let run = |desc: &str, args: Vec<String>, envs: Vec<(&str, String)>| -> Result<(), String> {
         eprintln!("[prep] {desc}…");
         let mut c = std::process::Command::new(&py);
-        c.args(&pre).args(&args).current_dir(repo);
+        c.args(&pre).args(&args).current_dir(&cfg.repo);
+        if let Some(p) = &path_env {
+            c.env("PATH", p);
+        }
         for (k, v) in &envs {
             c.env(k, v);
         }
@@ -414,7 +516,7 @@ fn prep_firmware(repo: &Path, upd: &Path) -> Result<PathBuf, String> {
         }
         Ok(())
     };
-    let script = |rel: &str| repo.join(rel).to_string_lossy().into_owned();
+    let script = |rel: &str| cfg.script(rel).to_string_lossy().into_owned();
 
     // 1. decrypt the .UPD/.zip -> ISO (xdjrx_upd.py has a built-in key)
     run(
@@ -604,14 +706,12 @@ async fn main() {
     // and prints the prepared dir (for use as XDJ_FW_DIR). No args = run the emulator.
     let argv: Vec<String> = std::env::args().collect();
     if argv.get(1).map(String::as_str) == Some("prep") {
-        let repo = std::env::var_os("XDJ_REPO")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| std::env::current_dir().expect("cwd"));
         let Some(upd) = argv.get(2) else {
             eprintln!("usage: xdj-host prep <firmware.UPD|.zip>");
             std::process::exit(2);
         };
-        match prep_firmware(&repo, Path::new(upd)) {
+        let cfg = Config::from_env().expect("config");
+        match prep_firmware(&cfg, Path::new(upd)) {
             Ok(dir) => println!("{}", dir.display()),
             Err(e) => {
                 eprintln!("[prep] failed: {e}");

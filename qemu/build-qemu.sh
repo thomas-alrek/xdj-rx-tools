@@ -168,7 +168,12 @@ for p in "$PATCHES"/*.patch; do
 done
 
 mkdir -p build && cd build
-[ -f build.ninja ] || ../configure --target-list=arm-softmmu --disable-werror --disable-docs --disable-tools
+# --disable-sdl: we never use the SDL display/audio backend (dev uses cocoa, the
+# standalone app uses VNC). On macOS the SDL dep is sdl2-compat, which dlopen's
+# libSDL3 at runtime — a dependency bundlers can't follow, so it breaks the .app
+# ("Failed loading SDL3 library"). Dropping it removes the problem and shrinks the
+# bundle. cocoa/vnc/none all remain.
+[ -f build.ninja ] || ../configure --target-list=arm-softmmu --disable-werror --disable-docs --disable-tools --disable-sdl
 ninja qemu-system-arm
 echo
 echo "built: $(pwd)/qemu-system-arm"

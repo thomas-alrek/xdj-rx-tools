@@ -33,7 +33,9 @@ ASSETS = os.path.join(HERE, "assets")
 CAL = os.path.join(ASSETS, "calibration.json")
 # Vendored noVNC (served at /novnc/* so panel.html's screen pane can use RFB-over-
 # WebSocket when launched with ?vnc=ws://... -- the standalone-app Phase 2 path).
-NOVNC = os.path.normpath(os.path.join(HERE, "..", "..", "app", "ui", "novnc"))
+# XDJ_NOVNC_DIR overrides the dev repo path (the packaged .app sets it; Phase 5).
+NOVNC = os.environ.get("XDJ_NOVNC_DIR") or os.path.normpath(
+    os.path.join(HERE, "..", "..", "app", "ui", "novnc"))
 CTRL = "/tmp/subucom_ctrl"
 MAINKEY = "/tmp/mainkey"        # MAIN-UCOM direct-key GPIO (USB1/USB2/rekordbox/MIDI)
 MON = "/tmp/d_mon4.sock"
