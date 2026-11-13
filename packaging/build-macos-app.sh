@@ -76,6 +76,9 @@ cp qemu/build-nand.py qemu/cramfs_extract.py "$RES/scripts/qemu/"
 cp tools/xdj-panel/server.py tools/xdj-panel/panel.html "$RES/panel/"
 cp -R tools/xdj-panel/assets "$RES/panel/assets"
 cp -R app/ui/novnc "$RES/ui/novnc"
+# Knobs library (npm: audio-knobs). Install if missing, then vendor just dist/.
+[ -d app/ui/node_modules/audio-knobs/dist ] || ( cd app/ui && npm install --no-audit --no-fund )
+cp -R app/ui/node_modules/audio-knobs/dist "$RES/ui/knobs"
 
 # e2fsprogs + relocate its dylibs to Resources/e2fsprogs/libs
 cp "$E2FS_SBIN/mke2fs" "$E2FS_SBIN/debugfs" "$RES/e2fsprogs/"

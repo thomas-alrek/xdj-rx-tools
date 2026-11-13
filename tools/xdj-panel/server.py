@@ -36,6 +36,10 @@ CAL = os.path.join(ASSETS, "calibration.json")
 # XDJ_NOVNC_DIR overrides the dev repo path (the packaged .app sets it; Phase 5).
 NOVNC = os.environ.get("XDJ_NOVNC_DIR") or os.path.normpath(
     os.path.join(HERE, "..", "..", "app", "ui", "novnc"))
+# The Knobs library (npm: audio-knobs), served at /knobs/* for the panel's knobs/faders.
+# Dev: the npm install under app/ui/node_modules; the packaged .app sets XDJ_KNOBS_DIR.
+KNOBS = os.environ.get("XDJ_KNOBS_DIR") or os.path.normpath(
+    os.path.join(HERE, "..", "..", "app", "ui", "node_modules", "audio-knobs", "dist"))
 CTRL = "/tmp/subucom_ctrl"
 MAINKEY = "/tmp/mainkey"        # MAIN-UCOM direct-key GPIO (USB1/USB2/rekordbox/MIDI)
 MON = "/tmp/d_mon4.sock"
@@ -306,6 +310,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_file(path[len("/assets/"):], base=ASSETS)
         elif path.startswith("/novnc/"):
             self._send_file(path[len("/novnc/"):], base=NOVNC)
+        elif path.startswith("/knobs/"):
+            self._send_file(path[len("/knobs/"):], base=KNOBS)
         elif path == "/cal":
             if os.path.isfile(CAL):
                 self._send_file("calibration.json", base=ASSETS)

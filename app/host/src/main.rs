@@ -44,6 +44,7 @@ struct Config {
     scripts_dir: PathBuf,          // dir holding xdjrx_upd.py / qemu_prepare.py / build-nand.py
     e2fsprogs_dir: Option<PathBuf>, // bundled mke2fs/debugfs dir, prepended to PATH for prep
     novnc_dir: Option<PathBuf>,    // bundled noVNC dir, passed to the sidecar
+    knobs_dir: Option<PathBuf>,    // bundled Knobs (audio-knobs) dist, passed to the sidecar
     qemu_data: Option<PathBuf>,    // bundled qemu data dir (keymaps); passed via -L when packaged
     panel_port: u16,
     vnc_ws_port: u16,
@@ -133,6 +134,7 @@ impl Config {
             .unwrap_or_else(|| repo.clone());
         let e2fsprogs_dir = res.as_ref().map(|r| r.join("e2fsprogs")).filter(|p| p.is_dir());
         let novnc_dir = res.as_ref().map(|r| r.join("ui/novnc")).filter(|p| p.is_dir());
+        let knobs_dir = res.as_ref().map(|r| r.join("ui/knobs")).filter(|p| p.is_dir());
         let qemu_data = res.as_ref().map(|r| r.join("qemu-bios")).filter(|p| p.is_dir());
         let panel_port = env_u16("XDJ_PANEL_PORT", 8765);
         let vnc_ws_port = env_u16("XDJ_VNC_WS_PORT", 6080);
@@ -150,6 +152,7 @@ impl Config {
             scripts_dir,
             e2fsprogs_dir,
             novnc_dir,
+            knobs_dir,
             qemu_data,
             panel_port,
             vnc_ws_port,
@@ -308,6 +311,9 @@ fn spawn_sidecar(cfg: &Config) -> std::io::Result<Child> {
     // repo-relative path that doesn't exist in the .app).
     if let Some(n) = &cfg.novnc_dir {
         c.env("XDJ_NOVNC_DIR", n);
+    }
+    if let Some(k) = &cfg.knobs_dir {
+        c.env("XDJ_KNOBS_DIR", k);
     }
     c.spawn()
 }
