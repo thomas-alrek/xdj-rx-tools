@@ -320,8 +320,48 @@ def _hmp_raw(cmds):
     return out
 
 
+def _mon(cmds):
+    """Run HMP command-lines over QMP (the .app) or the raw HMP monitor (dev)."""
+    return _qmp_hmp(QMP, cmds) if QMP else _hmp_raw(cmds)
+
+
+def _mon_quiet(cmds):
+    """Best-effort monitor commands; ignore any failure (e.g. device not present)."""
+    try:
+        _mon(cmds)
+    except Exception:
+        pass
+
+
+# Current panel-mounted drive/device id per slot, so a re-LOAD can eject it first.
+_usb_cur = {"usb1": None, "usb2": None}
+
+
+def eject_usb(slot):
+    """Detach whatever the panel (or the boot auto-insert) put on this slot."""
+    detect = "/tmp/usb_insert" if slot == "usb1" else "/tmp/usb2_insert"
+    cur = _usb_cur.get(slot)
+    # Candidates: our previous panel insertion + the host's boot auto-insert id.
+    pairs = []
+    if cur:
+        pairs.append(cur)
+    pairs.append(("xdjusb_%s" % slot, "xdjusb_%s_dev" % slot))
+    for _drive, dev in pairs:
+        _mon_quiet(["device_del %s" % dev])      # async unplug; frees the hub port
+    time.sleep(0.4)
+    for drive, _dev in pairs:
+        _mon_quiet(["drive_del %s" % drive])
+    try:
+        os.remove(detect)                        # removal edge for the detect GPIO
+    except FileNotFoundError:
+        pass
+    _usb_cur[slot] = None
+    time.sleep(0.15)
+
+
 def mount_usb(slot, imgpath, write=False):
-    """Insert `imgpath` (file or /dev device) on the given front slot (usb1|usb2)."""
+    """Insert `imgpath` (file or /dev device) on the given front slot (usb1|usb2),
+    ejecting any previous insertion first so re-LOAD works without a duplicate-ID."""
     port, detect = ("1.2", "/tmp/usb_insert") if slot == "usb1" else ("1.1", "/tmp/usb2_insert")
     real = os.path.realpath(imgpath)
     # A physical disk must be released by the host OS first (macOS/Linux, best-effort).
@@ -331,6 +371,8 @@ def mount_usb(slot, imgpath, write=False):
                 subprocess.run(cmd, capture_output=True, timeout=15); break
             except Exception:
                 continue
+    # Eject anything already on this slot (previous LOAD or the boot auto-insert).
+    eject_usb(slot)
     # HMP drive_add doesn't quote paths; symlink to a space-free path.
     link = "/tmp/xdjpanel_%s.img" % slot
     try:
@@ -338,16 +380,19 @@ def mount_usb(slot, imgpath, write=False):
     except FileNotFoundError:
         pass
     os.symlink(real, link)
-    did = "xdjpanel_" + slot
+    # Unique ids per insertion so a slow async unplug can't collide with the new one.
+    did = "xdjpanel_%s_%d" % (slot, int(time.time() * 1000))
+    dev = did + "_dev"
     snap = "" if write else ",snapshot=on"
     cmds = [
         "drive_add 0 if=none,id=%s,file=%s,format=raw%s" % (did, link, snap),
-        "device_add usb-storage,bus=usb-bus.1,port=%s,drive=%s,id=%s_dev,removable=on" % (port, did, did),
+        "device_add usb-storage,bus=usb-bus.1,port=%s,drive=%s,id=%s,removable=on" % (port, did, dev),
     ]
-    outs = _qmp_hmp(QMP, cmds) if QMP else _hmp_raw(cmds)
+    outs = _mon(cmds)
     blob = json.dumps(outs).lower()
     if '"error"' in blob or "failed" in blob or "duplicate" in blob or "in use" in blob:
-        raise RuntimeError("monitor rejected insert (already mounted? STOP the slot first): %s" % outs)
+        raise RuntimeError("monitor rejected insert: %s" % outs)
+    _usb_cur[slot] = (did, dev)
     # Assert the slot's detect GPIO so the firmware resumes HOST1 and mounts it.
     with open(detect, "wb"):
         pass
