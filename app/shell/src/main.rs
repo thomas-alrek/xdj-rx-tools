@@ -193,6 +193,15 @@ fn show_emulator(app: &tauri::AppHandle) {
 
 /// Handle a dropped firmware file: prep (with progress) then boot it.
 fn on_firmware_dropped(app: &tauri::AppHandle, path: PathBuf) {
+    if !has_key() {
+        if let Some(w) = app.get_webview_window("setup") {
+            let _ = w.eval(&format!(
+                "show({}, true)",
+                js_str("Add your firmware decryption key first — drop your aes256.key file, or paste the 64-hex key below.")
+            ));
+        }
+        return;
+    }
     let state = app.state::<AppState>();
     {
         let mut busy = state.busy.lock().unwrap();
@@ -253,12 +262,75 @@ fn is_firmware(p: &Path) -> bool {
     )
 }
 
+// ---- firmware AES key (§5bis-A): user-supplied, stored in app-data, never bundled ----
+
+fn key_dir() -> PathBuf {
+    app_data_root().join("key")
+}
+fn has_key() -> bool {
+    key_dir().join("key.hex").exists() || key_dir().join("aes256.key").exists()
+}
+fn is_hex_key(s: &str) -> bool {
+    let t = s.trim();
+    t.len() == 64 && t.bytes().all(|b| b.is_ascii_hexdigit())
+}
+fn store_key_hex(hex: &str) -> Result<(), String> {
+    let t = hex.trim();
+    if !is_hex_key(t) {
+        return Err("the key must be 64 hex characters".into());
+    }
+    let d = key_dir();
+    std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(d.join("aes256.key"));
+    std::fs::write(d.join("key.hex"), t).map_err(|e| e.to_string())
+}
+/// A dropped key file: a text file of 64 hex becomes the hex key; anything else is
+/// kept as an `aes256.key` passphrase file (xdjrx_upd derives the key from it).
+fn store_key_file(path: &Path) -> Result<(), String> {
+    let content = std::fs::read_to_string(path).unwrap_or_default();
+    if is_hex_key(&content) {
+        return store_key_hex(&content);
+    }
+    let d = key_dir();
+    std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(d.join("key.hex"));
+    std::fs::copy(path, d.join("aes256.key")).map(|_| ()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_key_hex(hex: String) -> Result<(), String> {
+    store_key_hex(&hex)
+}
+#[tauri::command]
+fn key_present() -> bool {
+    has_key()
+}
+
+/// A dropped non-firmware file is treated as the firmware key.
+fn on_key_dropped(app: &tauri::AppHandle, path: PathBuf) {
+    let setup = app.get_webview_window("setup");
+    match store_key_file(&path) {
+        Ok(()) => {
+            if let Some(w) = &setup {
+                let _ = w.eval("keySaved&&keySaved()");
+                let _ = w.eval(&format!("show({}, false)", js_str("Firmware key saved — now drop a firmware .UPD.")));
+            }
+        }
+        Err(e) => {
+            if let Some(w) = &setup {
+                let _ = w.eval(&format!("show({}, true)", js_str(&format!("That didn’t look like a key: {e}"))));
+            }
+        }
+    }
+}
+
 fn main() {
     let repo = repo_root();
     let startup_fw = resolve_startup_fw(&repo);
 
     let app = tauri::Builder::default()
         .manage(AppState { repo: repo.clone(), host: Mutex::new(None), busy: Mutex::new(false) })
+        .invoke_handler(tauri::generate_handler![set_key_hex, key_present])
         .setup(move |app| {
             match &startup_fw {
                 Some(dir) => {
@@ -279,8 +351,12 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) = event {
-                if let Some(p) = paths.iter().find(|p| is_firmware(p)) {
-                    on_firmware_dropped(window.app_handle(), p.clone());
+                if let Some(p) = paths.first() {
+                    if is_firmware(p) {
+                        on_firmware_dropped(window.app_handle(), p.clone());
+                    } else {
+                        on_key_dropped(window.app_handle(), p.clone());
+                    }
                 }
             }
         })

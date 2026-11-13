@@ -13,7 +13,7 @@
       -webkit-user-select: none; user-select: none;
     }
     .card {
-      width: min(560px, 86vw); text-align: center; padding: 40px 28px;
+      width: min(560px, 86vw); text-align: center; padding: 36px 28px;
       border: 2px dashed #2a2e35; border-radius: 16px; background: #101216;
       transition: border-color .15s, background .15s;
     }
@@ -23,13 +23,25 @@
       background: #14161a; display: flex; align-items: center; justify-content: center; }
     .mark i { width: 22px; height: 22px; background: #d64541; border-radius: 5px; display: block; }
     p { margin: 8px 0 0; color: #9aa0a6; }
-    .hint { font-size: 13px; color: #6b7178; margin-top: 18px; }
-    #status { margin-top: 20px; min-height: 22px; color: #e6e9ec; }
+    .hint { font-size: 13px; color: #6b7178; margin-top: 16px; }
+    #status { margin-top: 18px; min-height: 22px; color: #e6e9ec; }
     #status.err { color: #ff6b66; }
     .spin { display: inline-block; width: 14px; height: 14px; margin-right: 8px;
       border: 2px solid #3a3f47; border-top-color: #d64541; border-radius: 50%;
       vertical-align: -2px; animation: s 0.8s linear infinite; }
     @keyframes s { to { transform: rotate(360deg); } }
+    /* key prompt */
+    #keybox { margin-top: 22px; padding-top: 18px; border-top: 1px solid #22262d; }
+    #keybox.hidden { display: none; }
+    #keybox .lbl { font-size: 13px; color: #9aa0a6; margin-bottom: 10px; }
+    .keyrow { display: flex; gap: 8px; }
+    #keyhex { flex: 1; min-width: 0; background: #0c0e11; border: 1px solid #2a2e35;
+      border-radius: 8px; color: #e6e9ec; padding: 8px 10px; font: 13px ui-monospace, monospace; }
+    #keyhex:focus { outline: none; border-color: #d64541; }
+    #keysave { background: #d64541; color: #fff; border: 0; border-radius: 8px;
+      padding: 8px 14px; font-weight: 600; cursor: pointer; }
+    #keysave:hover { background: #c23b37; }
+    .okmark { color: #5bd67a; }
   </style>
 </head>
 <body>
@@ -38,20 +50,50 @@
     <h1>Pioneer XDJ-RX</h1>
     <p>Drop a firmware <b>.UPD</b> (or Pioneer <b>.zip</b>) here to start the emulator.</p>
     <div id="status"></div>
-    <div class="hint">The firmware is decrypted and prepared on your machine; nothing is uploaded.</div>
+
+    <div id="keybox" class="hidden">
+      <div class="lbl">This firmware is encrypted. Add your decryption key once —
+        drop your <b>aes256.key</b> file here, or paste the 64-hex key:</div>
+      <div class="keyrow">
+        <input id="keyhex" placeholder="64 hexadecimal characters" spellcheck="false" autocomplete="off" />
+        <button id="keysave">Save key</button>
+      </div>
+    </div>
+
+    <div class="hint">The key and firmware stay on your machine; nothing is uploaded.</div>
   </div>
   <script>
+    const invoke = window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke;
+    const statusEl = document.getElementById('status');
+    const keybox = document.getElementById('keybox');
+
     // Called from the Rust host via window.eval(...) to report progress.
     function show(msg, isErr) {
-      const el = document.getElementById('status');
-      el.className = isErr ? 'err' : '';
-      el.innerHTML = (msg && !isErr ? '<span class="spin"></span>' : '') + (msg || '');
+      statusEl.className = isErr ? 'err' : '';
+      statusEl.innerHTML = (msg && !isErr ? '<span class="spin"></span>' : '') + (msg || '');
     }
-    // Visual feedback while dragging over the window (the actual drop is handled
-    // natively by the Tauri host, which gets the real file path).
+    // Called from the Rust host after a key file is dropped.
+    function keySaved() {
+      keybox.classList.add('hidden');
+      statusEl.className = '';
+      statusEl.innerHTML = '<span class="okmark">✓</span> Key saved.';
+    }
+    async function refreshKey() {
+      if (!invoke) return;               // not in the Tauri shell
+      try { if (!(await invoke('key_present'))) keybox.classList.remove('hidden'); }
+      catch (e) { keybox.classList.remove('hidden'); }
+    }
+    document.getElementById('keysave').addEventListener('click', async () => {
+      const hex = document.getElementById('keyhex').value.trim();
+      if (!invoke) { show('key entry needs the desktop app', true); return; }
+      try { await invoke('set_key_hex', { hex }); keySaved(); }
+      catch (e) { show('Key rejected: ' + e, true); }
+    });
+
     window.addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('drag'); });
-    window.addEventListener('dragleave', e => { document.body.classList.remove('drag'); });
+    window.addEventListener('dragleave', () => document.body.classList.remove('drag'));
     window.addEventListener('drop', e => { e.preventDefault(); document.body.classList.remove('drag'); });
+    refreshKey();
   </script>
 </body>
 </html>

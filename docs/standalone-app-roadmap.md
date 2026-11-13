@@ -297,9 +297,8 @@ patch. See [usb-mount-howto.md](usb-mount-howto.md),
   from bundled resources (captured via the bundled VNC bridge).
 - **Not done (as agreed):** Developer-ID signing + **notarization** (binaries are only
   **ad-hoc** signed — required for arm64 to run at all, but a notarized build is what a
-  user double-clicks without Gatekeeper warnings). And **drag-drop prep needs the AES key**
-  (§5bis-A): a freshly-dropped `.UPD` fails at decrypt in the .app because no key is shipped
-  (correct!) — the key-prompt UX is the blocker there.
+  user double-clicks without Gatekeeper warnings). **Drag-drop prep now works** once the
+  user supplies a key via the in-app key prompt (§5bis-A, done) — the .app ships no key.
 
 **Target platforms (minimum):** macOS, Windows, Ubuntu/Debian (`.deb`).
 **Goal:** truly portable, **no user install step** (no "install Python/Homebrew/
@@ -407,7 +406,17 @@ two e2fsprogs shell-outs (5.2), which bundling keeps install-free.
 
 ## 5bis. Deferred items raised during Phases 1–3 (must tackle before release)
 
-### A. The AES decryption key must be user-supplied, never bundled (raised 2026-11-13)
+### A. The AES decryption key must be user-supplied, never bundled — ✅ IMPLEMENTED 2026-11-13
+Key prompt built: the shell accepts a **dropped `aes256.key` file** (or a text file of
+64 hex) and a **pasted 64-hex key** (`set_key_hex` command, `withGlobalTauri`), stores it
+per-user in `<app-data>/key/` (`key.hex` or `aes256.key`), and `xdj-host prep`
+(`resolve_firmware_key`) uses it — app-data key first, else the dev `.env`, else a clear
+"add your aes256.key" error. Dropping a `.UPD` before a key is set prompts for the key.
+The key is never bundled. **Verified**: the bundled `.app`'s prep decrypts + builds a
+firmware end-to-end using a key placed in app-data (bundled Python + e2fsprogs + the key).
+The GUI drop/paste itself needs on-device confirmation (headless can't drive it). Original
+analysis below for context.
+
 The `.UPD` payload is a cryptoloop AES-256 image; decrypting it needs Pioneer's key.
 **Good news: the key is NOT baked into our source.** [xdjrx_upd.py](../xdjrx_upd.py)
 `_load_key` takes it, in order, from `--key-file aes256.key` (a passphrase file), the

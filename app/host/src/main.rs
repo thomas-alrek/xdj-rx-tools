@@ -438,6 +438,32 @@ fn app_data_root() -> PathBuf {
     }
 }
 
+/// Where the user-supplied firmware key lives (the shell's key prompt writes it here).
+/// Never bundled. `key.hex` = 64-hex AES key; `aes256.key` = a passphrase file.
+fn firmware_key_dir() -> PathBuf {
+    app_data_root().join("key")
+}
+
+/// Resolve the firmware decryption key for the decrypt step: returns extra
+/// xdjrx_upd.py args + env. Prefers the app-data key; falls back to the dev .env that
+/// xdjrx_upd reads; errors only if no key is available anywhere.
+fn resolve_firmware_key(cfg: &Config) -> Result<(Vec<String>, Vec<(&'static str, String)>), String> {
+    let d = firmware_key_dir();
+    let hex = d.join("key.hex");
+    let kf = d.join("aes256.key");
+    if hex.exists() {
+        let h = std::fs::read_to_string(&hex).map_err(|e| format!("reading saved key: {e}"))?;
+        return Ok((vec![], vec![("XDJRX_AES_KEY", h.trim().to_string())]));
+    }
+    if kf.exists() {
+        return Ok((vec!["--key-file".into(), kf.to_string_lossy().into_owned()], vec![]));
+    }
+    if cfg.repo.join(".env").exists() || cfg.scripts_dir.join(".env").exists() {
+        return Ok((vec![], vec![])); // dev: xdjrx_upd reads .env
+    }
+    Err("firmware decryption key required — add your aes256.key in the app first".into())
+}
+
 /// First 16 hex chars of the firmware file's SHA-256 — the cache key.
 fn firmware_hash(path: &Path) -> std::io::Result<String> {
     use std::io::Read;
@@ -518,12 +544,20 @@ fn prep_firmware(cfg: &Config, upd: &Path) -> Result<PathBuf, String> {
     };
     let script = |rel: &str| cfg.script(rel).to_string_lossy().into_owned();
 
-    // 1. decrypt the .UPD/.zip -> ISO (xdjrx_upd.py has a built-in key)
-    run(
-        "decrypt firmware",
-        vec![script("xdjrx_upd.py"), "decrypt".into(), upd.to_string_lossy().into_owned(), "-o".into(), iso.to_string_lossy().into_owned()],
-        vec![],
-    )?;
+    // 1. decrypt the .UPD/.zip -> ISO. The AES key is USER-SUPPLIED, never bundled
+    // (§5bis-A): prefer the key saved in app-data (the shell's key prompt stores it
+    // there), else fall back to the dev .env that xdjrx_upd reads. No key anywhere ->
+    // a clear error the shell turns into "add your firmware key".
+    let (key_args, key_env) = resolve_firmware_key(cfg)?;
+    let mut dargs = vec![script("xdjrx_upd.py")];
+    dargs.extend(key_args);
+    dargs.extend([
+        "decrypt".into(),
+        upd.to_string_lossy().into_owned(),
+        "-o".into(),
+        iso.to_string_lossy().into_owned(),
+    ]);
+    run("decrypt firmware", dargs, key_env)?;
     // 2. kernel + SABRE-SD boot blobs -> dir
     run(
         "build boot blobs",
