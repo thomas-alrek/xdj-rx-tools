@@ -1,5 +1,8 @@
 # Standalone app roadmap — packaging the XDJ-RX emulator
 
+> **Architecture & developer handover:** [standalone-app.md](standalone-app.md). This file is the
+> plan/status; that one is how the app actually works and how to build/run/debug/package it.
+
 **Status: IN PROGRESS — Phases 1 (control socket) + 2 (Tauri shell + orchestrator) done 2026-11-12, Phase 3 (firmware drag-drop + app-data) done 2026-11-13; Phase 3b (USB media) plumbing done with a deferred enumeration issue, Phase 4 (audio backend pick) done, Phase 5 macOS .app done (ad-hoc signed; notarization pending). The key prompt, a rebuilt copyright-free panel, native file dialogs, and panel-driven USB LOAD all landed 2026-11-13. Phase 5 Windows/Linux + the Python→Rust port remain.**
 
 ### Landed since the Phase 1–5 core (2026-11-13)

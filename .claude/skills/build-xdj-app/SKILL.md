@@ -89,4 +89,5 @@ to update them.
 
 ## References
 `app/shell/src/main.rs`, `app/host/src/main.rs`, `app/shell/{tauri.conf.json,capabilities/default.json}`,
-`packaging/build-macos-app.sh`, `docs/standalone-app-roadmap.md`, `docs/usb-mount-howto.md`.
+`packaging/build-macos-app.sh`, **`docs/standalone-app.md`** (full architecture + handover),
+`docs/standalone-app-roadmap.md`, `docs/usb-mount-howto.md`.
