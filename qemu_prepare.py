@@ -31,7 +31,9 @@ Then:
 import gzip, os, struct, sys, zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(HERE, "build", "qemu")
+# Output dir for the boot blobs. Defaults to build/qemu (the run.sh / watch.sh
+# layout); the standalone app (Phase 3) sets XDJ_OUT to a per-firmware app-data dir.
+OUT = os.environ.get("XDJ_OUT") or os.path.join(HERE, "build", "qemu")
 KERNEL_ENTRY = 0x10008000          # uImage load/entry (i.MX6 DRAM base 0x10000000 + 0x8000)
 ATAGS_ADDR   = 0x10000100
 TRAMP_ADDR   = 0x10000000

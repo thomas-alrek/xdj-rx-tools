@@ -23,6 +23,7 @@
 use std::path::{Path, PathBuf};
 
 use futures_util::{SinkExt, StreamExt};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UnixStream};
 use tokio::process::{Child, Command};
@@ -32,6 +33,7 @@ use tokio_tungstenite::tungstenite::Message;
 struct Config {
     repo: PathBuf,
     runtime_dir: PathBuf,
+    fw_dir: PathBuf, // prepared firmware dir (boot blobs + nand.img)
     qemu: PathBuf,
     nand: PathBuf,
     python: String,
@@ -51,12 +53,17 @@ impl Config {
         let runtime_dir = std::env::var_os("XDJ_RUNTIME_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| repo.join("build/run"));
+        // The prepared firmware (boot blobs + nand.img). Phase 3 sets XDJ_FW_DIR to a
+        // per-firmware app-data dir; the dev default is the build/qemu layout.
+        let fw_dir = std::env::var_os("XDJ_FW_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| repo.join("build/qemu"));
         let qemu = std::env::var_os("XDJ_QEMU")
             .map(PathBuf::from)
             .unwrap_or_else(|| default_qemu(&repo));
         let nand = std::env::var_os("XDJ_NAND")
             .map(PathBuf::from)
-            .unwrap_or_else(|| repo.join("build/qemu/nand.img"));
+            .unwrap_or_else(|| fw_dir.join("nand.img"));
         let python = std::env::var("XDJ_PYTHON").unwrap_or_else(|_| "python3".into());
         let server_py = repo.join("tools/xdj-panel/server.py");
         let panel_port = env_u16("XDJ_PANEL_PORT", 8765);
@@ -73,6 +80,7 @@ impl Config {
         Ok(Config {
             repo,
             runtime_dir,
+            fw_dir,
             qemu,
             nand,
             python,
@@ -107,7 +115,7 @@ fn env_u16(key: &str, default: u16) -> u16 {
 }
 
 fn qemu_args(cfg: &Config) -> Vec<String> {
-    let q = cfg.repo.join("build/qemu");
+    let q = cfg.fw_dir.clone();
     let s = |p: PathBuf| p.to_string_lossy().into_owned();
     let mut a: Vec<String> = vec![
         "-M".into(), "sabrelite".into(),
@@ -270,9 +278,12 @@ fn preflight(cfg: &Config) -> Result<(), String> {
         return Err(format!("nand image not found: {} (build it with qemu/build-nand.sh, or set XDJ_NAND)", cfg.nand.display()));
     }
     for b in ["vmlinux.bin", "tramp.bin", "atags.bin"] {
-        let p = cfg.repo.join("build/qemu").join(b);
+        let p = cfg.fw_dir.join(b);
         if !p.exists() {
-            return Err(format!("boot blob missing: {} (run: python3 qemu_prepare.py)", p.display()));
+            return Err(format!(
+                "boot blob missing: {} (prepare a firmware first: `xdj-host prep <firmware.UPD|.zip>`, or run qemu_prepare.py)",
+                p.display()
+            ));
         }
     }
     if !cfg.server_py.exists() {
@@ -281,8 +292,142 @@ fn preflight(cfg: &Config) -> Result<(), String> {
     Ok(())
 }
 
+// ---- Phase 3: firmware preparation (drag-drop a .UPD -> cached boot artifacts) ----
+
+/// App-data root where prepared firmwares are cached, keyed by firmware hash.
+/// macOS: ~/Library/Application Support/XDJ-RX ; else $XDG_DATA_HOME/xdj-rx (or
+/// ~/.local/share/xdj-rx). Never ships firmware — it's generated from the user's .UPD.
+fn app_data_root() -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/XDJ-RX")
+    } else {
+        std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".local/share"))
+            .join("xdj-rx")
+    }
+}
+
+/// First 16 hex chars of the firmware file's SHA-256 — the cache key.
+fn firmware_hash(path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 1 << 16];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect())
+}
+
+fn which(bin: &str) -> bool {
+    std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("command -v {bin}"))
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// A Python with the firmware-tool deps (pycdlib/pycryptodome): the repo venv that
+/// run.sh builds, else `uv run`, else system python3. Returns (program, prefix-args).
+fn python_cmd(repo: &Path) -> (String, Vec<String>) {
+    let venv = repo.join("build/.venv/bin/python3");
+    if venv.exists() {
+        (venv.to_string_lossy().into_owned(), vec![])
+    } else if which("uv") {
+        ("uv".into(), vec!["run".into()])
+    } else {
+        ("python3".into(), vec![])
+    }
+}
+
+/// Prepare (or reuse a cached) firmware: decrypt -> boot blobs -> nand.img into
+/// app-data/<hash>/. Idempotent — a complete cache dir is reused instantly. Returns
+/// the prepared dir (pass it back as XDJ_FW_DIR to run).
+fn prep_firmware(repo: &Path, upd: &Path) -> Result<PathBuf, String> {
+    let upd = upd
+        .canonicalize()
+        .map_err(|e| format!("firmware not found: {} ({e})", upd.display()))?;
+    let hash = firmware_hash(&upd).map_err(|e| format!("cannot hash firmware: {e}"))?;
+    let dir = app_data_root().join(&hash);
+    let needed = ["vmlinux.bin", "tramp.bin", "atags.bin", "nand.img"];
+    if needed.iter().all(|f| dir.join(f).exists()) {
+        eprintln!("[prep] cache hit: {}", dir.display());
+        return Ok(dir);
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+
+    let (py, pre) = python_cmd(repo);
+    let iso = dir.join("fw.iso");
+    let dirs = dir.to_string_lossy().into_owned();
+    let run = |desc: &str, args: Vec<String>, envs: Vec<(&str, String)>| -> Result<(), String> {
+        eprintln!("[prep] {desc}…");
+        let mut c = std::process::Command::new(&py);
+        c.args(&pre).args(&args).current_dir(repo);
+        for (k, v) in &envs {
+            c.env(k, v);
+        }
+        let st = c.status().map_err(|e| format!("{desc}: spawn failed: {e}"))?;
+        if !st.success() {
+            return Err(format!("{desc}: exited with {st}"));
+        }
+        Ok(())
+    };
+    let script = |rel: &str| repo.join(rel).to_string_lossy().into_owned();
+
+    // 1. decrypt the .UPD/.zip -> ISO (xdjrx_upd.py has a built-in key)
+    run(
+        "decrypt firmware",
+        vec![script("xdjrx_upd.py"), "decrypt".into(), upd.to_string_lossy().into_owned(), "-o".into(), iso.to_string_lossy().into_owned()],
+        vec![],
+    )?;
+    // 2. kernel + SABRE-SD boot blobs -> dir
+    run(
+        "build boot blobs",
+        vec![script("qemu_prepare.py"), iso.to_string_lossy().into_owned()],
+        vec![("XDJ_OUT", dirs.clone())],
+    )?;
+    // 3. nand.img (rootfs + GUI + env + MBR) -> dir
+    run(
+        "build nand image",
+        vec![script("qemu/build-nand.py")],
+        vec![("XDJ_OUT", dirs.clone()), ("XDJ_ISO", iso.to_string_lossy().into_owned())],
+    )?;
+    eprintln!("[prep] done: {}", dir.display());
+    Ok(dir)
+}
+
 #[tokio::main]
 async fn main() {
+    // Subcommand: `xdj-host prep <firmware.UPD|.zip>` prepares/caches boot artifacts
+    // and prints the prepared dir (for use as XDJ_FW_DIR). No args = run the emulator.
+    let argv: Vec<String> = std::env::args().collect();
+    if argv.get(1).map(String::as_str) == Some("prep") {
+        let repo = std::env::var_os("XDJ_REPO")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().expect("cwd"));
+        let Some(upd) = argv.get(2) else {
+            eprintln!("usage: xdj-host prep <firmware.UPD|.zip>");
+            std::process::exit(2);
+        };
+        match prep_firmware(&repo, Path::new(upd)) {
+            Ok(dir) => println!("{}", dir.display()),
+            Err(e) => {
+                eprintln!("[prep] failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     let cfg = match Config::from_env() {
         Ok(c) => c,
         Err(e) => {
