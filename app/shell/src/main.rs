@@ -330,6 +330,23 @@ fn key_present() -> bool {
     has_key()
 }
 
+/// Native file picker for the panel's USB LOAD buttons. Opens an OS file dialog and
+/// returns the chosen path (or None if cancelled); the panel then POSTs it to the
+/// sidecar's /usb endpoint, which does the drive_add/device_add insert over QMP.
+#[tauri::command]
+fn pick_usb_image(app: tauri::AppHandle, slot: String) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let title = format!("Select a USB disk image for {}", slot.to_uppercase());
+    app.dialog()
+        .file()
+        .set_title(title)
+        .add_filter("Disk images", &["img", "dmg", "iso", "bin", "raw"])
+        .add_filter("All files", &["*"])
+        .blocking_pick_file()
+        .and_then(|f| f.into_path().ok())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
 /// A dropped non-firmware file is treated as the firmware key.
 fn on_key_dropped(app: &tauri::AppHandle, path: PathBuf) {
     let setup = app.get_webview_window("setup");
@@ -353,8 +370,9 @@ fn main() {
     let startup_fw = resolve_startup_fw(&repo);
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState { repo: repo.clone(), host: Mutex::new(None), busy: Mutex::new(false) })
-        .invoke_handler(tauri::generate_handler![set_key_hex, key_present])
+        .invoke_handler(tauri::generate_handler![set_key_hex, key_present, pick_usb_image])
         .setup(move |app| {
             match &startup_fw {
                 Some(dir) => {

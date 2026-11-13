@@ -265,15 +265,29 @@ function _srcUI(ch){ const b=document.getElementById('src'+ch); if(!b) return; c
 function setSrc(ch,s){ _src[ch]=s; _srcUI(ch); post('/input', ch+' '+s); log('CH'+(ch+1)+' input: '+s); }
 function toggleSrc(ch){ setSrc(ch, _src[ch]==='DECK'?'LINE':'DECK'); }
 const isAnalog=s=>!!s && /^a /i.test(s);
-// USB mount: prompt for a disk image / device path and ask the server to insert it.
+// USB mount: in the app, open a native file dialog via the Tauri `pick_usb_image`
+// command; in a plain dev browser, fall back to a typed path. Either way the chosen
+// path is POSTed to /usb, which does the drive_add/device_add insert.
 const _lastUsb={usb1:'',usb2:''};
+async function doMount(slot, path){
+  const S=slot.toUpperCase(); _lastUsb[slot]=path; log('⏏ '+S+': mounting '+path+' …');
+  try{ const r=await fetch('/usb',{method:'POST',body:slot+' '+path}); const t=(await r.text()).trim();
+    log((r.ok?'✔ ':'✖ ')+t); }catch(e){ log('✖ '+S+' mount request failed'); }
+}
 async function mountUsb(slot){
-  const p=prompt('Mount USB on '+slot.toUpperCase()+
-    '\nPath to a disk image (.img / .dmg) or a device (/dev/...):', _lastUsb[slot]||'');
-  if(p==null) return; const path=p.trim(); if(!path) return; _lastUsb[slot]=path;
-  log('⏏ '+slot.toUpperCase()+': mounting '+path+' …');
-  try{ const r=await fetch('/usb',{method:'POST',body:slot+' '+path}); const t=await r.text();
-    log((r.ok?'✔ ':'✖ ')+t); }catch(e){ log('✖ '+slot.toUpperCase()+' mount request failed'); }
+  const S=slot.toUpperCase();
+  const T=window.__TAURI__;
+  if(T && T.core && T.core.invoke){
+    log('⏏ '+S+': choosing an image…');
+    try{ const p=await T.core.invoke('pick_usb_image',{slot});
+      if(!p){ log('… '+S+' cancelled'); return; }
+      return doMount(slot, p);
+    }catch(e){ log('✖ file dialog failed: '+e); return; }
+  }
+  // dev browser (no Tauri): type a path
+  const p=prompt('Mount USB on '+S+'\nPath to a disk image (.img / .dmg) or a device (/dev/...):',
+    _lastUsb[slot]||'');
+  if(p==null) return; const path=p.trim(); if(path) doMount(slot, path);
 }
 
 // ===== widgets ============================================================
