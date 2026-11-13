@@ -70,14 +70,7 @@ impl Config {
         let panel_port = env_u16("XDJ_PANEL_PORT", 8765);
         let vnc_ws_port = env_u16("XDJ_VNC_WS_PORT", 6080);
         let smp = std::env::var("XDJSMP").unwrap_or_else(|_| "2".into());
-        // Match watch.sh: coreaudio on macOS, pa elsewhere, keep timer-period=1451.
-        let audio = std::env::var("XDJAUDIO").unwrap_or_else(|_| {
-            if cfg!(target_os = "macos") {
-                "coreaudio,timer-period=1451".into()
-            } else {
-                "pa,timer-period=1451".into()
-            }
-        });
+        let audio = pick_audio();
         Ok(Config {
             repo,
             runtime_dir,
@@ -106,6 +99,35 @@ fn default_qemu(repo: &Path) -> PathBuf {
     } else {
         PathBuf::from("qemu-system-arm")
     }
+}
+
+/// Pick QEMU's `-audio` backend by OS, keeping `timer-period=1451` (without it the
+/// guest ALSA ring starves and audio is slow/silent — see qemu/watch.sh). On Linux,
+/// prefer whatever's actually running (pipewire → pulse → alsa). XDJAUDIO overrides
+/// the whole value (incl. `none` to disable host audio).
+fn pick_audio() -> String {
+    if let Ok(a) = std::env::var("XDJAUDIO") {
+        return a;
+    }
+    let backend = if cfg!(target_os = "macos") {
+        "coreaudio"
+    } else if cfg!(target_os = "windows") {
+        "wasapi"
+    } else if runtime_sock_exists("pipewire-0") {
+        "pipewire"
+    } else if runtime_sock_exists("pulse/native") {
+        "pa"
+    } else {
+        "alsa"
+    };
+    format!("{backend},timer-period=1451")
+}
+
+/// True if $XDG_RUNTIME_DIR/<rel> exists (a running audio daemon's socket).
+fn runtime_sock_exists(rel: &str) -> bool {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(|d| Path::new(&d).join(rel).exists())
+        .unwrap_or(false)
 }
 
 fn env_u16(key: &str, default: u16) -> u16 {

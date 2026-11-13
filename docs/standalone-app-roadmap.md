@@ -1,6 +1,6 @@
 # Standalone app roadmap — packaging the XDJ-RX emulator
 
-**Status: IN PROGRESS — Phases 1 (control socket) + 2 (Tauri shell + orchestrator) done 2026-11-12, Phase 3 (firmware drag-drop + app-data) done 2026-11-13; Phase 3b (USB media) plumbing done with a deferred enumeration issue; Phases 4–5 planned.**
+**Status: IN PROGRESS — Phases 1 (control socket) + 2 (Tauri shell + orchestrator) done 2026-11-12, Phase 3 (firmware drag-drop + app-data) done 2026-11-13; Phase 3b (USB media) plumbing done with a deferred enumeration issue, Phase 4 (audio backend pick) done; Phase 5 planned.**
 The goal: turn today's "custom QEMU + web UI + `/tmp` files" setup into a single
 self-contained, cross-platform desktop app. The user drops a `.UPD` firmware onto
 the app; the app prepares the boot image and runs the emulator, with a native
@@ -265,11 +265,17 @@ UI beside the image picker, unmount, attach via A (B behind a toggle). No QEMU
 patch. See [usb-mount-howto.md](usb-mount-howto.md),
 [usb-slot-topology.md](usb-slot-topology.md).
 
-### Phase 4 — Audio backend selection ⬜
-- Rust picks `-audio` by OS with a **fallback chain** (Linux: `pipewire`→`pa`→
-  `alsa`; macOS: `coreaudio`; Windows: `wasapi`/`dsound`), always keeping
-  `timer-period=1451` (see watch.sh for why). Expose a device picker in the UI.
-- Mostly lifting the OS split already in watch.sh into the orchestrator.
+### Phase 4 — Audio backend selection ✅ (backend pick done 2026-11-13)
+- The Rust host (`pick_audio`) chooses `-audio` by OS, keeping `timer-period=1451`:
+  macOS `coreaudio`; Windows `wasapi`; Linux prefers whatever is actually running —
+  `pipewire` (if `$XDG_RUNTIME_DIR/pipewire-0`), else `pa` (if `…/pulse/native`), else
+  `alsa`. `XDJAUDIO` overrides the whole value (incl. `none` to disable host audio).
+- Verified: macOS still emits `-audio coreaudio,timer-period=1451` (unchanged, and audio
+  to the host was already confirmed in Phase 2). The Linux/Windows branches are selection
+  logic only (not runnable to verify on the dev Mac).
+- Remaining: a **device picker** in the UI (which output device), and — if a chosen backend
+  ever fails at QEMU startup — an actual relaunch-based fallback (today it's a best-effort
+  pre-launch pick, not a runtime retry).
 
 ### Phase 5 — Packaging & cross-platform build 🧱 (the long pole) ⬜
 
