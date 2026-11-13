@@ -77,9 +77,14 @@ fn resolve_startup_fw(repo: &Path) -> Option<PathBuf> {
             return Some(d);
         }
     }
-    let dev = repo.join("build/qemu");
-    if fw_complete(&dev) {
-        return Some(dev);
+    // Dev convenience only: the repo's build/qemu layout. NEVER in the packaged app —
+    // there `repo` is the compile-time dev path, which would wrongly auto-boot the dev
+    // firmware instead of showing the drop/key prompt.
+    if app_resources().is_none() {
+        let dev = repo.join("build/qemu");
+        if fw_complete(&dev) {
+            return Some(dev);
+        }
     }
     None
 }
