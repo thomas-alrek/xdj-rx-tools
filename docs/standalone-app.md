@@ -9,6 +9,19 @@ operational cheat-sheets, see the skills `build-xdj-app` and `xdj-virtual-panel`
 `.claude/skills/`. The hard constraint from [../CLAUDE.md](../CLAUDE.md) applies throughout:
 **never modify the guest (`rbp`, kernel, rootfs)** — everything here is host-side.
 
+> **Keep this doc in sync.** It states facts that live in code and will drift. Update the relevant
+> section (and the `build-xdj-app` / `xdj-virtual-panel` skills) when you change any of:
+> - **ports / sockets** (8765, 6080, `*.sock`) — §6, §11, `qemu_args` / `Config::from_env`;
+> - **env vars** — §11, `Config::from_env` + the shell;
+> - the **prep pipeline / cache key / stdout contract** — §4, `prep_firmware`;
+> - **QEMU args** (machine, memory, loader addresses, devices) — §6, `qemu_args`;
+> - the **`xdj-host prep` → stdout → `XDJ_FW_DIR`** contract — §4;
+> - **dialog / capability / ACL** wiring or the Tauri major version — §9, `capabilities/default.json`;
+> - **packaging** (bundle layout, signing, relocation) — §13, `packaging/build-macos-app.sh`;
+> - **startup/teardown** behaviour — §3, §10.
+> Version-specific claims (e.g. "remote capabilities are stable on Tauri 2.12") are true as of the
+> commit that added them — re-verify on a Tauri upgrade.
+
 ---
 
 ## 1. What it is (mental model)
