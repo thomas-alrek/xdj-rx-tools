@@ -4,22 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>XDJ-RX panel</title>
-<!-- Knobs/faders: the MIT-licensed "audio-knobs" library (HowdyMoto/Knobs), served
-     from /knobs/ (npm: app/ui/node_modules/audio-knobs/dist). Pure SVG, no deps. -->
+<!-- Knobs/faders: MIT-licensed "audio-knobs" (HowdyMoto/Knobs), served from /knobs/
+     (npm: app/ui/node_modules/audio-knobs/dist). Pure SVG, no deps. -->
 <script src="/knobs/knobs.js"></script>
 <style>
   :root{
-    --bg:#0a0b0d; --panel:#131519; --panel2:#171a1f; --edge:#262a31; --edge2:#333945;
-    --ink:#e8ebf0; --dim:#8b94a1; --accent:#39b3ff; --accent2:#4ecdc4;
-    --ok:#39d98a; --red:#e5484d; --amber:#e0a63a;
+    --bg:#0a0b0d; --panel:#131519; --panel2:#171a1f; --deck:#14171c; --edge:#262a31;
+    --edge2:#333945; --ink:#e8ebf0; --dim:#8b94a1; --accent:#39b3ff; --accent2:#4ecdc4;
+    --ok:#39d98a; --red:#e5484d; --amber:#e0a63a; --purp:#b06bff;
   }
   *{box-sizing:border-box}
-  html,body{height:100%}
-  body{margin:0;background:
-      radial-gradient(1200px 600px at 50% -10%, #15181d 0%, var(--bg) 60%);
+  body{margin:0;background:radial-gradient(1400px 700px at 50% -8%, #15181d 0%, var(--bg) 62%);
     color:var(--ink);font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
     -webkit-user-select:none;user-select:none}
-  /* top bar */
   .bar{display:flex;align-items:center;gap:10px;padding:9px 16px;background:var(--panel);
     border-bottom:1px solid var(--edge);position:sticky;top:0;z-index:50;flex-wrap:wrap}
   .bar h1{font-size:13px;margin:0;letter-spacing:2px;font-weight:800;color:#cdd3db}
@@ -32,59 +29,83 @@
   .tgl.deck{background:#13303f;border-color:#2a6b8f;color:#bfe3ff}
   .tgl.line{background:#3a2f1e;border-color:#6b572e;color:#ffe0a8}
   .tgl.red{background:#3a1e1f;border-color:#6b2e30;color:#ffb4b6}
-  /* console layout */
-  .console{display:grid;grid-template-columns:minmax(240px,1fr) minmax(460px,1.6fr) minmax(240px,1fr);
-    gap:14px;max-width:1500px;margin:0 auto;padding:16px}
-  @media(max-width:1100px){ .console{grid-template-columns:1fr} }
-  .col{display:flex;flex-direction:column;gap:12px;min-width:0}
-  .deck{background:linear-gradient(180deg,var(--panel2),#101216);border:1px solid var(--edge);
-    border-radius:14px;padding:14px}
-  .deckhdr{display:flex;align-items:center;justify-content:space-between;margin:-2px 0 10px}
-  .deckhdr .dn{font-size:12px;font-weight:800;letter-spacing:2px;color:var(--accent)}
-  .deckhdr .dn.r{color:var(--accent2)}
-  .card{background:var(--panel2);border:1px solid var(--edge);border-radius:12px;padding:12px}
-  .grp{margin-bottom:10px}
-  .grp:last-child{margin-bottom:0}
-  .gt{font-size:9px;letter-spacing:1.6px;color:var(--dim);font-weight:700;margin:0 0 7px 2px;text-transform:uppercase}
-  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end}
-  .row.center{justify-content:center}
+
+  /* overall rig */
+  .rig{max-width:1600px;margin:0 auto;padding:14px}
+  .topstrip{display:flex;align-items:stretch;gap:10px;flex-wrap:wrap;
+    background:linear-gradient(180deg,var(--panel2),#101216);border:1px solid var(--edge);
+    border-radius:14px;padding:12px;margin-bottom:12px}
+  .screenz{flex:1 1 360px;min-width:320px;display:flex;align-items:center;justify-content:center}
+  .screenwrap{background:#000;border:1px solid var(--edge2);border-radius:10px;overflow:hidden;
+    aspect-ratio:800/480;width:100%;max-width:520px;box-shadow:0 8px 30px #0008}
+  #screen{width:100%;height:100%}
+  #screen canvas{width:100%!important;height:100%!important;display:block}
+  .main{display:grid;grid-template-columns:minmax(300px,1fr) minmax(420px,1.25fr) minmax(300px,1fr);
+    gap:12px;align-items:start}
+  @media(max-width:1180px){ .main{grid-template-columns:1fr} }
+  .deck,.mixer{background:linear-gradient(180deg,var(--deck),#0f1115);border:1px solid var(--edge);
+    border-radius:14px;padding:12px;min-width:0}
+  .dh{font-size:11px;font-weight:800;letter-spacing:2px;color:var(--accent);margin:0 2px 10px}
+  .dh.r{color:var(--accent2);text-align:right}
+
+  /* clusters */
+  .zone{background:var(--panel2);border:1px solid var(--edge);border-radius:10px;padding:8px 9px;
+    display:flex;flex-direction:column;gap:6px}
+  .gt{font-size:8.5px;letter-spacing:1.4px;color:var(--dim);font-weight:700;text-transform:uppercase}
+  .clrow{display:flex;flex-wrap:wrap;gap:7px;align-items:flex-end}
+  .clrow.col{flex-direction:column;align-items:center}
+  .clrow.ctr{justify-content:center}
+
+  /* deck internal */
+  .deckmid{display:flex;gap:8px;align-items:stretch;margin:8px 0}
+  .deckmid .edge,.deckmid .side{flex:0 0 auto}
+  .deckmid .jogz{flex:1 1 auto;display:flex;align-items:center;justify-content:center;
+    background:var(--panel2);border:1px solid var(--edge);border-radius:12px;padding:6px}
+  .deckmid .tempoz{flex:0 0 auto;background:var(--panel2);border:1px solid var(--edge);
+    border-radius:10px;padding:8px 6px;display:flex;align-items:center;justify-content:center}
+  .deckbot{display:flex;gap:8px;align-items:stretch}
+  .deckbot .trans{flex:0 0 auto}
+  .deckbot .padwrap{flex:1 1 auto;display:flex;flex-direction:column;gap:6px}
+
+  /* mixer internal */
+  .mixgrid{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:start;margin-bottom:8px}
+  .chcol{display:flex;flex-direction:column;gap:7px;align-items:center;background:var(--panel2);
+    border:1px solid var(--edge);border-radius:10px;padding:8px 6px}
+  .chcol .cn{font-size:10px;font-weight:800;letter-spacing:1px;color:var(--dim)}
+  .midfx{display:flex;flex-direction:column;gap:7px}
+  .faders{display:grid;grid-template-columns:auto 1fr 1fr auto;gap:8px;align-items:end;
+    background:var(--panel2);border:1px solid var(--edge);border-radius:10px;padding:8px;margin-bottom:8px}
+  .xfrow{display:flex;flex-direction:column;gap:5px;background:var(--panel2);border:1px solid var(--edge);
+    border-radius:10px;padding:9px 10px}
+
   /* widgets */
-  .w{display:flex;flex-direction:column;align-items:center;gap:4px}
-  .wlab{font-size:8.5px;letter-spacing:.4px;color:var(--dim);font-weight:700;text-align:center;
-    max-width:72px;line-height:1.1}
+  .w{display:flex;flex-direction:column;align-items:center;gap:3px}
+  .wlab{font-size:8px;letter-spacing:.3px;color:var(--dim);font-weight:700;text-align:center;
+    max-width:76px;line-height:1.1}
   /* buttons */
   .pad{appearance:none;cursor:pointer;color:#cdd3db;background:linear-gradient(180deg,#232832,#191d24);
-    border:1px solid var(--edge2);border-radius:8px;padding:0 9px;min-width:40px;height:30px;
-    font-size:9.5px;font-weight:700;letter-spacing:.3px;display:inline-flex;align-items:center;
+    border:1px solid var(--edge2);border-radius:7px;padding:0 8px;min-width:38px;height:28px;
+    font-size:9px;font-weight:700;letter-spacing:.2px;display:inline-flex;align-items:center;
     justify-content:center;text-align:center;line-height:1.05;transition:.06s;box-shadow:0 1px 0 #0006 inset}
   .pad:hover{border-color:#49515e;color:#fff}
   .pad:active,.pad.down{background:linear-gradient(180deg,#1b4a63,#123246);border-color:var(--accent);
-    color:#eaf6ff;box-shadow:0 0 10px #39b3ff55, 0 1px 0 #0006 inset}
-  .pad.round{border-radius:50%;width:46px;height:46px;min-width:0;padding:0}
-  .pad.big{height:48px;min-width:64px;font-size:11px}
-  .pad.play.down,.pad.play:active{background:linear-gradient(180deg,#1b633a,#123a24);border-color:var(--ok);box-shadow:0 0 10px #39d98a55}
-  .pad.hot{background:linear-gradient(180deg,#2a2433,#1c1824);border-color:#4a3a63}
-  .pad.hot:active,.pad.hot.down{background:linear-gradient(180deg,#5a2b7a,#3a1c52);border-color:#b06bff;box-shadow:0 0 10px #b06bff55}
-  .pad.unmapped{opacity:.5;border-style:dashed}
-  .pad.wide{min-width:60px}
-  /* screen */
-  .screenwrap{background:#000;border:1px solid var(--edge2);border-radius:10px;overflow:hidden;
-    aspect-ratio:800/480;width:100%;box-shadow:0 0 0 1px #000, 0 8px 30px #0008}
-  #screen{width:100%;height:100%}
-  #screen canvas{width:100%!important;height:100%!important;display:block}
+    color:#eaf6ff;box-shadow:0 0 9px #39b3ff55, 0 1px 0 #0006 inset}
+  .pad.round{border-radius:50%;width:44px;height:44px;min-width:0;padding:0;font-size:9px}
+  .pad.big{height:44px;min-width:56px;font-size:10px}
+  .pad.play.down,.pad.play:active{background:linear-gradient(180deg,#1b633a,#123a24);border-color:var(--ok);box-shadow:0 0 10px #39d98a66}
+  .pad.hotpad{height:44px;min-width:54px;font-size:13px;background:linear-gradient(180deg,#2a2433,#1c1824);border-color:#4a3a63;color:#d9c7ef}
+  .pad.hotpad:active,.pad.hotpad.down{background:linear-gradient(180deg,#5a2b7a,#3a1c52);border-color:var(--purp);color:#fff;box-shadow:0 0 10px #b06bff66}
+  .pad.unmapped{opacity:.45;border-style:dashed}
   /* crossfader */
-  .xfaderw{width:100%;align-items:stretch}
   input[type=range].xf{-webkit-appearance:none;appearance:none;width:100%;height:10px;border-radius:6px;
-    background:#20242b;border:1px solid var(--edge2);outline:none}
-  input[type=range].xf::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:26px;border-radius:5px;
+    background:#20242b;border:1px solid var(--edge2);outline:none;margin:2px 0}
+  input[type=range].xf::-webkit-slider-thumb{-webkit-appearance:none;width:24px;height:26px;border-radius:5px;
     background:linear-gradient(180deg,#cfd6df,#8b94a1);border:1px solid #0008;cursor:ew-resize}
+
   /* log */
-  .logwrap{max-width:1500px;margin:0 auto;padding:0 16px 20px}
-  #logbox{height:72px;overflow:auto;background:#0b0d10;border:1px solid var(--edge);border-radius:8px;
+  .logwrap{max-width:1600px;margin:0 auto;padding:10px 16px 20px}
+  #logbox{height:64px;overflow:auto;background:#0b0d10;border:1px solid var(--edge);border-radius:8px;
     padding:6px 9px;font:11px/1.45 ui-monospace,Menlo,monospace;color:#9aa7b4;white-space:pre-wrap}
-  .legend{display:flex;gap:18px;color:var(--dim);font-size:10.5px;margin:7px 2px}
-  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px;vertical-align:middle}
-  .dot.ok{background:var(--ok)} .dot.guess{background:var(--amber)} .dot.un{background:var(--red)}
 </style>
 </head>
 <body>
@@ -97,27 +118,32 @@
   <button class="tgl red" id="brel">Release all</button>
 </div>
 
-<div class="console">
-  <div class="col"><div class="deck"><div class="deckhdr"><span class="dn">DECK 1</span></div><div id="deck1"></div></div></div>
-  <div class="col" id="center"></div>
-  <div class="col"><div class="deck"><div class="deckhdr"><span class="dn r">DECK 2</span></div><div id="deck2"></div></div></div>
+<div class="rig">
+  <!-- TOP STRIP: usb1/mic | sources | SCREEN | utils | master/rec | usb2 -->
+  <div class="topstrip">
+    <div class="zone" id="z_usb1"></div>
+    <div class="zone" id="z_mic"></div>
+    <div class="zone" id="z_src"></div>
+    <div class="screenz"><div class="screenwrap"><div id="screen"></div></div></div>
+    <div class="zone" id="z_util"></div>
+    <div class="zone" id="z_master"></div>
+    <div class="zone" id="z_usb2"></div>
+  </div>
+  <!-- MAIN: deck 1 | mixer | deck 2 -->
+  <div class="main">
+    <div class="deck"><div class="dh">DECK 1</div><div id="deck1"></div></div>
+    <div class="mixer"><div id="mixer"></div></div>
+    <div class="deck"><div class="dh r">DECK 2</div><div id="deck2"></div></div>
+  </div>
 </div>
 
-<div class="logwrap">
-  <div class="legend">
-    <span><span class="dot ok"></span>verified</span>
-    <span><span class="dot guess"></span>best-guess</span>
-    <span><span class="dot un"></span>unmapped</span>
-  </div>
-  <div id="logbox"></div>
-</div>
+<div class="logwrap"><div id="logbox"></div></div>
 
 <script>
 // ================= control map (id -> inject spec) =========================
 // Functional data (not artwork): which sub-ucom frame field / GPIO each control
-// drives. type: btn | knob | vfader | vfader-c | hfader | rotary. spec: "B off bit"
-// (button) or "A off" (analog) hex; gpio: MAIN-UCOM key; browse: ±detents.
-// (Same map the old photo panel used; see docs/xdj-rx-control-map.md.)
+// drives. type: btn | knob | vfader | vfader-c | hfader | rotary. See
+// docs/xdj-rx-control-map.md. Same map the photo panel used.
 const CTRLS = [
   {id:'browse', label:'BROWSE', type:'btn', spec:'B 16 01'},
   {id:'taglist', label:'TAG LIST', type:'btn', spec:'b 5e 02'},
@@ -126,10 +152,8 @@ const CTRLS = [
   {id:'back', label:'BACK', type:'btn', spec:'b 5e 01'},
   {id:'tagtrk', label:'TAG TRK', type:'btn', spec:null},
   {id:'enc', label:'PUSH', type:'btn', spec:'b 5d 10', browseWheel:true},
-  {id:'encL', label:'ROT−', type:'btn', browse:-1},
-  {id:'encR', label:'ROT+', type:'btn', browse:1},
-  {id:'loadL', label:'◄ LOAD 1', type:'btn', spec:'b 5d 40'},
-  {id:'loadR', label:'LOAD 2 ►', type:'btn', spec:'b 5d 20'},
+  {id:'loadL', label:'◄ LOAD', type:'btn', spec:'b 5d 40'},
+  {id:'loadR', label:'LOAD ►', type:'btn', spec:'b 5d 20'},
   {id:'quant', label:'QUANTIZE', type:'btn', spec:'B 19 01'},
   {id:'deck12', label:'DECK 1/2', type:'btn', gpio:149},
   {id:'timemd', label:'TIME MODE', type:'btn', gpio:146},
@@ -157,69 +181,69 @@ const CTRLS = [
   {id:'fxtap', label:'TAP', type:'btn', spec:'B 5b 08'},
   {id:'fxsel', label:'FX SELECT', type:'rotary', specUp:'b 5a 04', specDown:'b 5a 01'},
   {id:'fxch', label:'CH SELECT', type:'btn', spec:'B 5a 20'},
-  {id:'fxlev', label:'FX LEVEL', type:'knob', spec:'A 54', val:512},
+  {id:'fxlev', label:'LEVEL/DEPTH', type:'knob', spec:'A 54', val:512},
   {id:'fxtime', label:'TIME', type:'knob', spec:null, val:512},
   {id:'fxon', label:'ON/OFF', type:'btn', spec:'B 5b 04'},
-  {id:'d1play', label:'PLAY', type:'btn', spec:'b 13 40', big:true, kind:'play'},
-  {id:'d1cue', label:'CUE', type:'btn', spec:'b 13 80', big:true},
+  {id:'d1play', label:'PLAY', type:'btn', spec:'b 13 40', big:true, kind:'play', round:true},
+  {id:'d1cue', label:'CUE', type:'btn', spec:'b 13 80', big:true, round:true},
   {id:'d1sync', label:'SYNC', type:'btn', spec:'b 12 20'},
   {id:'d1_syncmaster', label:'MASTER', type:'btn', spec:'b 12 10'},
   {id:'d1shift', label:'SHIFT', type:'btn', spec:'b 12 01'},
   {id:'d1_mastertempo', label:'M.TEMPO', type:'btn', spec:'b 12 04'},
   {id:'d1_hotcuemode', label:'HOT CUE', type:'btn', spec:'b 11 08'},
-  {id:'d1h1', label:'1', type:'btn', spec:'b 10 80', kind:'hot'},
-  {id:'d1h2', label:'2', type:'btn', spec:'b 10 40', kind:'hot'},
-  {id:'d1h3', label:'3', type:'btn', spec:'b 10 20', kind:'hot'},
-  {id:'d1h4', label:'4', type:'btn', spec:'b 10 10', kind:'hot'},
+  {id:'d1auto', label:'AUTO LOOP', type:'btn', spec:'b 11 04'},
   {id:'d1_loopslice', label:'LOOP SLICE', type:'btn', spec:null},
-  {id:'d1in', label:'IN', type:'btn', spec:'B 13 01'},
-  {id:'d1out', label:'OUT', type:'btn', spec:'b 13 02'},
+  {id:'d1h1', label:'A', type:'btn', spec:'b 10 80', kind:'hot'},
+  {id:'d1h2', label:'B', type:'btn', spec:'b 10 40', kind:'hot'},
+  {id:'d1h3', label:'C', type:'btn', spec:'b 10 20', kind:'hot'},
+  {id:'d1h4', label:'D', type:'btn', spec:'b 10 10', kind:'hot'},
+  {id:'d1in', label:'LOOP IN', type:'btn', spec:'B 13 01'},
+  {id:'d1out', label:'LOOP OUT', type:'btn', spec:'b 13 02'},
   {id:'d1reloop', label:'RELOOP', type:'btn', spec:'b 12 80'},
-  {id:'d1auto', label:'AUTO', type:'btn', spec:'b 11 04'},
   {id:'d1jog', label:'JOG 1', type:'rotary', specUp:'b 13 20', specDown:'b 13 10'},
   {id:'d1slip', label:'SLIP', type:'btn', spec:'b 11 02'},
-  {id:'d1_jogmode', label:'JOG MODE', type:'btn', spec:'b 12 40'},
+  {id:'d1_jogmode', label:'JOG · VINYL', type:'btn', spec:'b 12 40'},
   {id:'d1_rev', label:'REV', type:'btn', spec:'b 13 01'},
   {id:'d1_vinyladj', label:'VINYL ADJ', type:'btn', spec:'b 13 04'},
   {id:'d1trng', label:'TEMPO RANGE', type:'btn', spec:'B 12 08'},
-  {id:'d1tempo', label:'TEMPO 1', type:'vfader-c', specNeg:'A 04', specPos:'A 0a', val:512},
+  {id:'d1tempo', label:'TEMPO', type:'vfader-c', specNeg:'A 04', specPos:'A 0a', val:512},
   {id:'d1_call_l', label:'CALL ◄', type:'btn', spec:null},
   {id:'d1_call_r', label:'CALL ►', type:'btn', spec:null},
   {id:'d1_delete', label:'DELETE', type:'btn', spec:'b 13 10'},
   {id:'d1_memory', label:'MEMORY', type:'btn', spec:'b 13 20'},
-  {id:'d1_srchL', label:'SEARCH ◄', type:'btn', spec:'b 13 08'},
-  {id:'d1_srchR', label:'SEARCH ►', type:'btn', spec:null},
+  {id:'d1_srchL', label:'◄◄', type:'btn', spec:'b 13 08'},
+  {id:'d1_srchR', label:'►►', type:'btn', spec:null},
   {id:'d1_tsL', label:'TRACK ◄', type:'btn', spec:null},
   {id:'d1_tsR', label:'TRACK ►', type:'btn', spec:null},
-  {id:'d2play', label:'PLAY', type:'btn', spec:'b 23 40', big:true, kind:'play'},
-  {id:'d2cue', label:'CUE', type:'btn', spec:'b 23 80', big:true},
+  {id:'d2play', label:'PLAY', type:'btn', spec:'b 23 40', big:true, kind:'play', round:true},
+  {id:'d2cue', label:'CUE', type:'btn', spec:'b 23 80', big:true, round:true},
   {id:'d2sync', label:'SYNC', type:'btn', spec:'b 22 20'},
   {id:'d2_syncmaster', label:'MASTER', type:'btn', spec:'b 22 10'},
   {id:'d2shift', label:'SHIFT', type:'btn', spec:'b 22 01'},
   {id:'d2_mastertempo', label:'M.TEMPO', type:'btn', spec:'b 22 04'},
   {id:'d2_hotcuemode', label:'HOT CUE', type:'btn', spec:'b 21 08'},
-  {id:'d2h1', label:'1', type:'btn', spec:'b 20 80', kind:'hot'},
-  {id:'d2h2', label:'2', type:'btn', spec:'b 20 40', kind:'hot'},
-  {id:'d2h3', label:'3', type:'btn', spec:'b 20 20', kind:'hot'},
-  {id:'d2h4', label:'4', type:'btn', spec:'b 20 10', kind:'hot'},
+  {id:'d2auto', label:'AUTO LOOP', type:'btn', spec:'b 21 04'},
   {id:'d2_loopslice', label:'LOOP SLICE', type:'btn', spec:null},
-  {id:'d2in', label:'IN', type:'btn', spec:'B 23 01'},
-  {id:'d2out', label:'OUT', type:'btn', spec:'b 23 02'},
+  {id:'d2h1', label:'A', type:'btn', spec:'b 20 80', kind:'hot'},
+  {id:'d2h2', label:'B', type:'btn', spec:'b 20 40', kind:'hot'},
+  {id:'d2h3', label:'C', type:'btn', spec:'b 20 20', kind:'hot'},
+  {id:'d2h4', label:'D', type:'btn', spec:'b 20 10', kind:'hot'},
+  {id:'d2in', label:'LOOP IN', type:'btn', spec:'B 23 01'},
+  {id:'d2out', label:'LOOP OUT', type:'btn', spec:'b 23 02'},
   {id:'d2reloop', label:'RELOOP', type:'btn', spec:'b 22 80'},
-  {id:'d2auto', label:'AUTO', type:'btn', spec:'b 21 04'},
   {id:'d2jog', label:'JOG 2', type:'rotary', specUp:'b 23 20', specDown:'b 23 10'},
   {id:'d2slip', label:'SLIP', type:'btn', spec:'b 21 02'},
-  {id:'d2_jogmode', label:'JOG MODE', type:'btn', spec:'b 22 40'},
+  {id:'d2_jogmode', label:'JOG · VINYL', type:'btn', spec:'b 22 40'},
   {id:'d2_rev', label:'REV', type:'btn', spec:'b 23 01'},
   {id:'d2_vinyladj', label:'VINYL ADJ', type:'btn', spec:'b 23 04'},
   {id:'d2trng', label:'TEMPO RANGE', type:'btn', spec:'B 22 08'},
-  {id:'d2tempo', label:'TEMPO 2', type:'vfader-c', specNeg:'A 14', specPos:'A 1a', val:512},
+  {id:'d2tempo', label:'TEMPO', type:'vfader-c', specNeg:'A 14', specPos:'A 1a', val:512},
   {id:'d2_call_l', label:'CALL ◄', type:'btn', spec:null},
   {id:'d2_call_r', label:'CALL ►', type:'btn', spec:null},
   {id:'d2_delete', label:'DELETE', type:'btn', spec:'b 23 10'},
   {id:'d2_memory', label:'MEMORY', type:'btn', spec:'b 23 20'},
-  {id:'d2_srchL', label:'SEARCH ◄', type:'btn', spec:'b 23 08'},
-  {id:'d2_srchR', label:'SEARCH ►', type:'btn', spec:null},
+  {id:'d2_srchL', label:'◄◄', type:'btn', spec:'b 23 08'},
+  {id:'d2_srchR', label:'►►', type:'btn', spec:null},
   {id:'d2_tsL', label:'TRACK ◄', type:'btn', spec:null},
   {id:'d2_tsR', label:'TRACK ►', type:'btn', spec:null},
   {id:'trim1', label:'TRIM', type:'knob', spec:'A 26', val:512},
@@ -230,12 +254,12 @@ const CTRLS = [
   {id:'hp_lvl', label:'HP LEVEL', type:'knob', spec:'A 4c', val:512},
   {id:'booth', label:'BOOTH', type:'knob', spec:'A 48', val:512},
   {id:'masterlvl', label:'MASTER', type:'knob', spec:'A 50', val:512},
-  {id:'deck1src', label:'CH1 PH/LINE', type:'btn', gpio:119},
-  {id:'deck2src', label:'CH2 PH/LINE', type:'btn', gpio:120},
+  {id:'deck1src', label:'CH1 PH/LN', type:'btn', gpio:119},
+  {id:'deck2src', label:'CH2 PH/LN', type:'btn', gpio:120},
   {id:'mic1', label:'MIC 1', type:'knob', spec:'A 44', val:512},
   {id:'mic2', label:'MIC 2', type:'knob', spec:'A 46', val:512},
-  {id:'miceqhi', label:'MIC HI', type:'knob', spec:null, val:512},
-  {id:'miceqlow', label:'MIC LOW', type:'knob', spec:null, val:512},
+  {id:'miceqhi', label:'HI', type:'knob', spec:null, val:512},
+  {id:'miceqlow', label:'LOW', type:'knob', spec:null, val:512},
   {id:'micsw', label:'MIC', type:'btn', spec:null},
   {id:'scfx_noise', label:'NOISE', type:'btn', spec:null},
   {id:'scfx_gate', label:'GATE', type:'btn', spec:null},
@@ -244,38 +268,6 @@ const CTRLS = [
   {id:'xfcurve', label:'XF CURVE', type:'btn', spec:null},
 ];
 const CMAP = Object.fromEntries(CTRLS.map(c=>[c.id,c]));
-
-// ================= layout (original; grouped, no device photo) ==============
-const LAYOUT = [
-  // --- DECK 1 ---
-  {col:'deck1', t:'Transport', ids:['d1play','d1cue','d1sync','d1_syncmaster','d1shift','d1_mastertempo']},
-  {col:'deck1', t:'Performance', ids:['d1_hotcuemode','d1h1','d1h2','d1h3','d1h4','d1_loopslice']},
-  {col:'deck1', t:'Loop', ids:['d1in','d1out','d1reloop','d1auto','d1slip','d1_jogmode','d1_rev']},
-  {col:'deck1', t:'Jog', ids:['d1jog'], wide:true},
-  {col:'deck1', t:'Browse / cue', ids:['d1_srchL','d1_srchR','d1_tsL','d1_tsR','d1_call_l','d1_call_r','d1_memory','d1_delete','d1_vinyladj']},
-  {col:'deck1', t:'Tempo', ids:['d1trng','d1tempo']},
-
-  // --- CENTER ---
-  {col:'center', t:'Top panel', ids:['src_rb','src_midi','src_usb1','src_usb2','deck12','timemd','quant']},
-  {col:'center', screen:true},
-  {col:'center', t:'Browse', ids:['browse','taglist','info','menu','back','tagtrk'], encoder:true, after:['loadL','enc','loadR']},
-  {col:'center', t:'EQ', ids:['trim1','eq_hi1','eq_mid1','eq_low1','color1','trim2','eq_hi2','eq_mid2','eq_low2','color2']},
-  {col:'center', t:'Channel faders', ids:['cue1','ch1','ch2','cue2']},
-  {col:'center', t:'Crossfader', ids:['xf','xfcurve']},
-  {col:'center', t:'Master / phones', ids:['masterlvl','booth','hp_lvl','hp_mix','deck1src','deck2src']},
-  {col:'center', t:'Beat FX', ids:['beatL','beatR','fxch','fxsel','fxtap','fxlev','fxtime','fxon']},
-  {col:'center', t:'Sound Color FX', ids:['scfx_noise','scfx_gate','scfx_crush','scfx_filter']},
-  {col:'center', t:'Mic', ids:['mic1','mic2','miceqhi','miceqlow','micsw']},
-  {col:'center', t:'Recording / eject', ids:['usb1stop','usb2stop','mrec','tmark']},
-
-  // --- DECK 2 ---
-  {col:'deck2', t:'Transport', ids:['d2play','d2cue','d2sync','d2_syncmaster','d2shift','d2_mastertempo']},
-  {col:'deck2', t:'Performance', ids:['d2_hotcuemode','d2h1','d2h2','d2h3','d2h4','d2_loopslice']},
-  {col:'deck2', t:'Loop', ids:['d2in','d2out','d2reloop','d2auto','d2slip','d2_jogmode','d2_rev']},
-  {col:'deck2', t:'Jog', ids:['d2jog'], wide:true},
-  {col:'deck2', t:'Browse / cue', ids:['d2_srchL','d2_srchR','d2_tsL','d2_tsR','d2_call_l','d2_call_r','d2_memory','d2_delete','d2_vinyladj']},
-  {col:'deck2', t:'Tempo', ids:['d2trng','d2tempo']},
-];
 
 // ================= server I/O (unchanged protocol) =========================
 const logbox=document.getElementById('logbox');
@@ -296,74 +288,56 @@ const isAnalog=s=>!!s && /^a /i.test(s);
 
 // ================= widgets =================================================
 const Kn = window.Knobs;
-const KNOB_STYLE={showValueDisplay:false,showTicks:true,tickCount:11,fontFamily:'inherit',
-  dialColor:'#20242b',bezelColor:'#30353d',indicatorColor:'#39b3ff',tickColor:'#4a515b',size:48};
+const KS={showValueDisplay:false,showTicks:true,tickCount:11,fontFamily:'inherit',
+  dialColor:'#20242b',bezelColor:'#30353d',indicatorColor:'#39b3ff',tickColor:'#4a515b'};
+function lw(c,node,cls){ const w=document.createElement('div'); w.className='w '+(cls||'');
+  w.appendChild(node); if(c.label){ const l=document.createElement('div'); l.className='wlab';
+  l.textContent=c.label; w.appendChild(l); } return w; }
 
-function labelWrap(c,node,cls){ const w=document.createElement('div'); w.className='w '+(cls||'');
-  w.appendChild(node); const l=document.createElement('div'); l.className='wlab'; l.textContent=c.label;
-  w.appendChild(l); return w; }
-
-function buildKnob(c){ const mount=document.createElement('div');
-  try{
-    const k=new Kn.Knob(mount,Object.assign({},KNOB_STYLE,{mode:'bounded',min:0,max:1023,value:(c.val==null?512:c.val)}));
+function buildKnob(c,size){ const m=document.createElement('div');
+  try{ const k=new Kn.Knob(m,Object.assign({},KS,{mode:'bounded',min:0,max:1023,value:(c.val==null?512:c.val),size:size||46}));
     if(isAnalog(c.spec)) k.onChange(e=>ctrl(c.spec+' '+Math.round(e.value).toString(16)));
-  }catch(e){ mount.textContent='⊘'; }
-  return labelWrap(c,mount,'knobw');
-}
-function buildFader(c){ const mount=document.createElement('div'); const center=c.type==='vfader-c';
-  try{
-    const s=new Kn.Slider(mount,{min:0,max:1023,value:(c.val==null?(center?512:0):c.val),
-      length:132,width:30,showTicks:center,tickCount:center?9:0,showValueDisplay:false,
+  }catch(e){ m.textContent='⊘'; } return lw(c,m,'knobw'); }
+
+function buildFader(c,len){ const m=document.createElement('div'); const center=c.type==='vfader-c';
+  try{ const s=new Kn.Slider(m,{min:0,max:1023,value:(c.val==null?(center?512:0):c.val),
+      length:len||130,width:28,showTicks:center,tickCount:center?9:0,showValueDisplay:false,
       trackColor:'#20242b',thumbColor:'#c7ced8',tickColor:'#4a515b',labelColor:'#8b94a1',fontFamily:'inherit'});
     if(center && c.specNeg && c.specPos){
-      s.onChange(e=>{ const lo=Math.round(e.value), hi=1023-lo;   // top = −, bottom = +
+      s.onChange(e=>{ const lo=Math.round(e.value), hi=1023-lo;      // top=−, bottom=+
         ctrl(c.specNeg+' '+lo.toString(16)+'\n'+c.specPos+' '+hi.toString(16)); });
-    } else if(isAnalog(c.spec)){
-      s.onChange(e=>ctrl(c.spec+' '+Math.round(e.value).toString(16)));
-    }
-  }catch(e){ mount.textContent='⊘'; }
-  return labelWrap(c,mount,'faderw2');
-}
-function buildXfader(c){ const w=document.createElement('div'); w.className='w xfaderw';
+    } else if(isAnalog(c.spec)){ s.onChange(e=>ctrl(c.spec+' '+Math.round(e.value).toString(16))); }
+  }catch(e){ m.textContent='⊘'; } return lw(c,m,'faderw'); }
+
+function buildXfader(c){ const w=document.createElement('div'); w.className='w'; w.style.width='100%';
   const r=document.createElement('input'); r.type='range'; r.min=0; r.max=1023; r.step=1;
   r.value=(c.val==null?512:c.val); r.className='xf';
   if(isAnalog(c.spec)) r.addEventListener('input',()=>ctrl(c.spec+' '+(+r.value).toString(16)));
   const l=document.createElement('div'); l.className='wlab'; l.textContent=c.label;
-  w.appendChild(r); w.appendChild(l); return w;
-}
-// Endless encoder (jog / fx-select / browse): degrees -> detents (20/rev).
-function buildEncoder(c, onDetent, size){
-  const mount=document.createElement('div');
-  let lastAng=null, acc=0, lastT=0;
-  try{
-    const k=Kn.createInfiniteKnob(mount,Object.assign({},KNOB_STYLE,{size:size||56,gripBumps:true,gripBumpCount:20,showTicks:false}));
-    k.onChange(e=>{ if(lastAng==null){lastAng=e.angle;return;} let d=e.angle-lastAng;
-      if(d>180)d-=360; if(d<-180)d+=360; lastAng=e.angle; acc+=d;
-      const now=performance.now();
-      while(acc>=18){ acc-=18; if(now-lastT>30){ onDetent(1); lastT=now; } }
-      while(acc<=-18){ acc+=18; if(now-lastT>30){ onDetent(-1); lastT=now; } } });
-  }catch(e){ mount.textContent='⊘'; }
-  return labelWrap(c,mount,'encw');
-}
+  w.appendChild(r); w.appendChild(l); return w; }
 
-function buildButton(c){
-  const b=document.createElement('button');
-  b.className='pad'+(c.big?' big':'')+(c.kind==='hot'?' hot':'')+(c.kind==='play'?' play':'')
-    +(c.id.startsWith('d')&&(c.id.endsWith('play')||c.id.endsWith('cue'))?' round':'')
-    +(!(c.spec||c.gpio||c.browse)?' unmapped':'');
-  b.textContent=c.label;
-  const mapped=!!(c.spec||c.gpio||c.browse);
-  b.title=c.label+(mapped?'':'  (unmapped)');
+// Endless encoder (jog / fx-select / browse): angle degrees -> detents (20/rev).
+function buildEncoder(c,onDetent,size){ const m=document.createElement('div');
+  let last=null, acc=0, t=0;
+  try{ const k=Kn.createInfiniteKnob(m,Object.assign({},KS,{size:size||54,gripBumps:true,gripBumpCount:20,showTicks:false}));
+    k.onChange(e=>{ if(last==null){last=e.angle;return;} let d=e.angle-last;
+      if(d>180)d-=360; if(d<-180)d+=360; last=e.angle; acc+=d; const now=performance.now();
+      while(acc>=18){ acc-=18; if(now-t>30){ onDetent(1); t=now; } }
+      while(acc<=-18){ acc+=18; if(now-t>30){ onDetent(-1); t=now; } } });
+  }catch(e){ m.textContent='⊘'; } return lw(c,m,'encw'); }
+
+function buildButton(c){ const b=document.createElement('button');
+  const mapped=!!(c.spec||c.gpio);
+  b.className='pad'+(c.big?' big':'')+(c.round?' round':'')+(c.kind==='hot'?' hotpad':'')
+    +(c.kind==='play'?' play':'')+(mapped?'':' unmapped');
+  b.textContent=c.label; b.title=c.label+(mapped?'':'  (unmapped)');
   let lp=null;
   b.addEventListener('pointerdown',e=>{ e.preventDefault();
-    if(c.browse){ b.classList.add('down'); post('/browse',String(c.browse));
-      setTimeout(()=>b.classList.remove('down'),110); log('↻ '+c.label+' browse '+(c.browse>0?'+':'')+c.browse); return; }
     if(c.gpio){ b.classList.add('down'); mainkey(c.gpio); log('▸ '+c.label+' gpio '+c.gpio); return; }
     if(!c.spec){ log('· '+c.label+' — unmapped'); return; }
     b.classList.add('down'); ctrl(c.spec);
     if(c.longpress){ lp=setTimeout(()=>ctrl('B '+c.spec.replace(/^[bB] /,'')),1100); }
-    log('▸ '+c.label+'  '+c.spec);
-  });
+    log('▸ '+c.label+'  '+c.spec); });
   const up=()=>{ if(c.gpio){ b.classList.remove('down'); mainkeyRelease(); return; }
     if(c.spec){ if(lp){clearTimeout(lp);lp=null;} b.classList.remove('down'); release(); } };
   b.addEventListener('pointerup',up);
@@ -373,39 +347,129 @@ function buildButton(c){
       if(ev.deltaMode===1)dy*=16; else if(ev.deltaMode===2)dy*=400; wa+=dy;
       if(!wt){ wt=setTimeout(()=>{ wt=null; let s=Math.max(-CAP,Math.min(CAP,Math.trunc(wa/STEP)));
         if(s){ wa-=s*STEP; post('/browse',String(s)); } else if(Math.abs(wa)>STEP*4){ wa=0; } },70); }
-    },{passive:false}); }
-  return b;
-}
+    },{passive:false}); } return b; }
 
-function buildWidget(c){
-  if(c.type==='knob') return buildKnob(c);
-  if(c.type==='vfader'||c.type==='vfader-c') return buildFader(c);
+function widget(id,size){ const c=CMAP[id]; if(!c) return document.createComment('missing '+id);
+  if(c.type==='knob') return buildKnob(c,size);
+  if(c.type==='vfader'||c.type==='vfader-c') return buildFader(c,size);
   if(c.type==='hfader') return buildXfader(c);
-  if(c.type==='rotary') return buildEncoder(c, d=>{ const s=d>0?c.specUp:c.specDown;
-      if(s) ctrl(s); }, c.id.indexOf('jog')>=0?84:56);
-  return buildButton(c);   // btn (default)
+  if(c.type==='rotary') return buildEncoder(c, d=>{ const s=d>0?c.specUp:c.specDown; if(s) ctrl(s); },
+     id.indexOf('jog')>=0?150:54);
+  return buildButton(c); }
+
+// ---- layout helpers ----
+function zone(host,title,ids,opts){ opts=opts||{};
+  const z=document.createElement('div'); z.className='zone';
+  if(title){ const t=document.createElement('div'); t.className='gt'; t.textContent=title; z.appendChild(t); }
+  const r=document.createElement('div'); r.className='clrow'+(opts.col?' col':'')+(opts.ctr?' ctr':'');
+  for(const id of ids){ r.appendChild(widget(id,opts.size)); }
+  z.appendChild(r); host.appendChild(z); return z; }
+function row(cls){ const d=document.createElement('div'); d.className=cls; return d; }
+function cl(ids,{title,col,ctr,size}={}){ const g=document.createElement('div');
+  const r=document.createElement('div'); r.className='clrow'+(col?' col':'')+(ctr?' ctr':'');
+  for(const id of ids) r.appendChild(widget(id,size));
+  if(title){ const t=document.createElement('div'); t.className='gt'; t.textContent=title;
+    g.appendChild(t); } g.appendChild(r); return g; }
+
+// ================= render (hardware-like layout) ===========================
+function renderDeck(host,d){ const P='d'+d;
+  // top: loop + call/memory/delete + search/track
+  zone(host,'Loop / Hot cue call',[P+'in',P+'out',P+'reloop',P+'_call_l',P+'_call_r',P+'_memory',P+'_delete']);
+  // middle: edge column | jog | side column | tempo fader
+  const mid=row('deckmid');
+  const edge=document.createElement('div'); edge.className='zone edge';
+  edge.appendChild(cl([P+'_rev',P+'slip'],{col:true}));
+  edge.appendChild(cl([P+'_tsL',P+'_tsR'],{title:'Track',col:false}));
+  edge.appendChild(cl([P+'_srchL',P+'_srchR'],{title:'Search',col:false}));
+  edge.appendChild(cl([P+'_jogmode',P+'_vinyladj'],{col:true}));
+  mid.appendChild(edge);
+  const jz=document.createElement('div'); jz.className='jogz'; jz.appendChild(widget(P+'jog')); mid.appendChild(jz);
+  const side=document.createElement('div'); side.className='zone side';
+  side.appendChild(cl([P+'sync',P+'_syncmaster',P+'_mastertempo'],{col:true}));
+  side.appendChild(cl([P+'trng'],{col:true}));
+  mid.appendChild(side);
+  const tz=document.createElement('div'); tz.className='tempoz'; tz.appendChild(widget(P+'tempo',150)); mid.appendChild(tz);
+  host.appendChild(mid);
+  // bottom: transport (play/cue) + performance pads
+  const bot=row('deckbot');
+  const trans=document.createElement('div'); trans.className='zone trans';
+  trans.appendChild(cl([P+'play',P+'cue'],{col:true}));
+  bot.appendChild(trans);
+  const pw=document.createElement('div'); pw.className='padwrap';
+  const modez=document.createElement('div'); modez.className='zone';
+  modez.appendChild(cl([P+'_hotcuemode',P+'auto',P+'_loopslice',P+'shift'],{title:'Pad mode'}));
+  const padz=document.createElement('div'); padz.className='zone';
+  padz.appendChild(cl([P+'h1',P+'h2',P+'h3',P+'h4'],{title:'Performance pads'}));
+  pw.appendChild(modez); pw.appendChild(padz); bot.appendChild(pw);
+  host.appendChild(bot);
 }
 
-// ================= render ==================================================
+function renderMixer(host){
+  // browse row (sits under the screen)
+  const bz=document.createElement('div'); bz.className='zone';
+  const bt=document.createElement('div'); bt.className='gt'; bt.textContent='Browse'; bz.appendChild(bt);
+  const br=document.createElement('div'); br.className='clrow ctr';
+  br.appendChild(widget('back'));
+  br.appendChild(buildEncoder({id:'browse_enc',label:'SELECT · PUSH'}, d=>post('/browse',String(d)), 64));
+  br.appendChild(widget('enc'));
+  for(const id of ['taglist','info','menu','tagtrk','loadL','loadR']) br.appendChild(widget(id));
+  bz.appendChild(br); host.appendChild(bz);
+
+  // channel strips + center FX
+  const grid=row('mixgrid');
+  const mkChan=(n)=>{ const col=document.createElement('div'); col.className='chcol';
+    const cn=document.createElement('div'); cn.className='cn'; cn.textContent='CH '+n; col.appendChild(cn);
+    col.appendChild(widget('deck'+n+'src'));
+    col.appendChild(widget('trim'+n)); col.appendChild(widget('eq_hi'+n));
+    col.appendChild(widget('eq_mid'+n)); col.appendChild(widget('eq_low'+n));
+    col.appendChild(widget('color'+n)); return col; };
+  grid.appendChild(mkChan(1));
+  const mid=document.createElement('div'); mid.className='midfx';
+  const fx=document.createElement('div'); fx.className='zone';
+  fx.appendChild(cl([],{title:'Beat FX'}));
+  fx.appendChild(cl(['beatL','beatR','fxtap'],{ctr:true}));
+  fx.appendChild(cl(['fxsel','fxch'],{ctr:true}));
+  fx.appendChild(cl(['fxlev','fxtime'],{ctr:true}));
+  fx.appendChild(cl(['fxon'],{ctr:true}));
+  mid.appendChild(fx);
+  const scfx=document.createElement('div'); scfx.className='zone';
+  scfx.appendChild(cl(['scfx_noise','scfx_gate','scfx_crush','scfx_filter'],{title:'Sound Color FX'}));
+  mid.appendChild(scfx);
+  const hp=document.createElement('div'); hp.className='zone';
+  hp.appendChild(cl(['hp_mix','hp_lvl'],{title:'Headphones',ctr:true}));
+  mid.appendChild(hp);
+  grid.appendChild(mid);
+  grid.appendChild(mkChan(2));
+  host.appendChild(grid);
+
+  // channel faders + cue
+  const fz=row('faders');
+  fz.appendChild(cl(['cue1'],{ctr:true}));
+  fz.appendChild(widget('ch1',140));
+  fz.appendChild(widget('ch2',140));
+  fz.appendChild(cl(['cue2'],{ctr:true}));
+  host.appendChild(fz);
+
+  // crossfader
+  const xz=row('xfrow');
+  const xt=document.createElement('div'); xt.className='gt'; xt.textContent='Crossfader'; xz.appendChild(xt);
+  xz.appendChild(widget('xf'));
+  xz.appendChild(cl(['xfcurve'],{ctr:true}));
+  host.appendChild(xz);
+}
+
 function render(){
-  const cols={deck1:document.getElementById('deck1'),center:document.getElementById('center'),
-              deck2:document.getElementById('deck2')};
-  for(const sec of LAYOUT){
-    const host=cols[sec.col];
-    if(sec.screen){ const sw=document.createElement('div'); sw.className='screenwrap';
-      const sc=document.createElement('div'); sc.id='screen'; sw.appendChild(sc); host.appendChild(sw); continue; }
-    const card=document.createElement('div'); card.className='card grp';
-    if(sec.t){ const gt=document.createElement('div'); gt.className='gt'; gt.textContent=sec.t; card.appendChild(gt); }
-    const row=document.createElement('div'); row.className='row'+(sec.wide?' center':'');
-    for(const id of (sec.ids||[])){ const c=CMAP[id]; if(c) row.appendChild(buildWidget(c)); }
-    // the browse section carries the endless encoder + its push/load row
-    if(sec.encoder){
-      const enc=buildEncoder({id:'browse_enc',label:'BROWSE'}, d=>post('/browse',String(d)), 76);
-      row.appendChild(enc);
-      for(const id of (sec.after||[])){ const c=CMAP[id]; if(c) row.appendChild(buildWidget(c)); }
-    }
-    card.appendChild(row); host.appendChild(card);
-  }
+  // top strip
+  zone(document.getElementById('z_usb1'),'USB 1',['usb1stop']);
+  zone(document.getElementById('z_mic'),'Mic',['mic1','mic2','miceqhi','miceqlow','micsw']);
+  zone(document.getElementById('z_src'),'Source',['src_rb','src_midi','src_usb1','src_usb2'],{col:true});
+  zone(document.getElementById('z_util'),'',['quant','deck12','timemd'],{col:true});
+  zone(document.getElementById('z_master'),'Master / Booth',['masterlvl','booth','mrec','tmark']);
+  zone(document.getElementById('z_usb2'),'USB 2',['usb2stop']);
+  // decks + mixer
+  renderDeck(document.getElementById('deck1'),'1');
+  renderMixer(document.getElementById('mixer'));
+  renderDeck(document.getElementById('deck2'),'2');
 }
 
 // ================= live screen (noVNC push, or /raw poll) ==================
@@ -440,8 +504,7 @@ async function startScreen(){
 // ================= init ====================================================
 function init(){
   if(!Kn){ log('Knobs library failed to load (/knobs/knobs.js)'); }
-  render();
-  startScreen();
+  render(); startScreen();
   document.getElementById('src0').addEventListener('click',()=>toggleSrc(0));
   document.getElementById('src1').addEventListener('click',()=>toggleSrc(1));
   document.getElementById('brel').addEventListener('click',()=>{ release(); mainkeyRelease();
