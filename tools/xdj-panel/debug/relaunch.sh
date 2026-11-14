@@ -3,7 +3,7 @@
 # Mirrors the proven prior-session config (single-core, snapshot drives, usb-hub
 # cold, gdb on :1234). XDJ_AUDIO_DEBUG=1 prints per-channel SDMA peaks.
 set -euo pipefail
-cd /Users/thomas/Documents/XDJ-RX
+cd "$(dirname "${BASH_SOURCE[0]}")/../../.."   # repo root
 Q=build/qemu
 QEMU=build/qemu-src/qemu-11.1.0/build/qemu-system-arm
 
@@ -22,12 +22,21 @@ if [ -n "${XDJ_RUNTIME_DIR:-}" ]; then
   echo "ctrl: xdjctrl=$XDJ_RUNTIME_DIR/ctrl.sock  xdjkey=$XDJ_RUNTIME_DIR/key.sock" >&2
 fi
 
+# USB stick backend (id=usbstick) for the post-boot device_add -- only when the image exists.
+USBIMG="${XDJUSB:-test/usb/rekordbox_new.img}"
+USB_ARGS=()
+if [ -f "$USBIMG" ]; then
+  USB_ARGS=(-drive if=none,id=usbstick,file="$USBIMG",format=raw,snapshot=on)
+else
+  echo "relaunch: no USB image at $USBIMG -- booting without the usbstick backend" >&2
+fi
+
 exec env XDJ_AUDIO_DEBUG=1 "$QEMU" \
   -M sabrelite -smp 1 -m 256 -no-reboot \
   -name "Pioneer XDJ-RX (inject/gdb)" \
   -display cocoa,zoom-to-fit=on \
   -audio coreaudio,timer-period=1451 \
-  -drive if=none,id=usbstick,file=test/usb/rekordbox_new.img,format=raw,snapshot=on \
+  ${USB_ARGS[@]+"${USB_ARGS[@]}"} \
   -device usb-hub,bus=usb-bus.1,port=1,id=xdjhub \
   -device loader,file="$Q/vmlinux.bin",addr=0x10008000,force-raw=on \
   -device loader,file="$Q/atags.bin",addr=0x10000100,force-raw=on \
