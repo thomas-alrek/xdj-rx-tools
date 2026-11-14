@@ -19,29 +19,28 @@ device **photo** as its background; that photo was deleted and must never ship a
 - **Widgets** = npm **`audio-knobs`** (MIT, HowdyMoto/Knobs), vendored to `/knobs/`: `Kn.Knob`
   (pots), `Kn.createInfiniteKnob` (FX-select rotary; the browse encoder). Jogs, faders and the
   crossfader are **custom** (the SVG Slider letterboxes too small in narrow cells, and the
-  grip-bump knob looked like a cog): jog = CSS platter (pointer-angle → jog spec); faders =
+  grip-bump knob looked like a cog): jog = CSS platter — static knurled rim + `.jogspin` platter that
+  **rotates with the drag/wheel** (marker shows angle) + static `.jogcap` (blue ring while touched);
+  pointer-angle → jog spec. Faders =
   div track + thumb (`vfader`/`vfader-c`/`xfader`). CUE/PLAY = round `.jogbtn` (play tinted green).
   Browse encoder = infinite knob with a centre **PUSH** button.
-- **Layout = absolute, photo-calibrated.** `const COORDS = {id:[cx,cy,w,h]}` — percent of a
-  fixed-aspect `#stage` (`aspect-ratio: 2142/1236`, the reference photo). `SCREEN0` = the live-screen
-  rect; `ZONES` = decorative boxes (hug their controls); a global `XOFF` centres the console.
-  `const C = {}` is the control registry (`l` label, `t` type, `spec`/`gpio`/`specUp`…). **Decks are
-  identical, NOT mirrored** (both: CUE/PLAY + transport on the left, tempo on the outer edge).
+- **Layout = grid in design units (late 2026-11 overhaul).** Positions are written in units of a
+  `W×H = 2142×1184` canvas via helpers `put/btn/knob/round(id,cx,cy,w,h)` into `L`, then converted to
+  percent `COORDS` of the fixed-aspect `#stage` (`aspect-ratio: 2142/1184`, sized with `min(100cqw,
+  100cqh·aspect)` so it never distorts). Bands/zones are constants (`D1_X`, `D2_X`, `MIX_X`, `MAIN_Y`…);
+  **one `deckLayout(n,x0)` drives both decks** (identical, NOT mirrored: CUE/PLAY + transport left,
+  tempo on the right). The pad row spans exactly the jog diameter; display keys are spread evenly
+  over the screen height in a `disp` housing with a `bezel`. `LBL_U` = engraved section labels.
+  To move a control, edit its `btn/knob/put` call — keep shared rows/columns (`R1`, `RC`, `FL`…).
+  `const C = {}` is the control registry (`l` label, `t` type, `spec`/`gpio`/`specUp`…).
 - **Screen**: noVNC (`?vnc=ws://host/`, RFB over WebSocket) in the app, or `/raw` screendump poll
   in dev. `#screen,#screen *{cursor:default!important}` keeps the pointer visible (noVNC hides it).
 
-### Calibrating the layout (dev overlay)
-Open the panel with `?cal=1` (or `?cal=0.5` opacity) **and** run the server with
-`XDJ_CAL_REF=/path/to/reference-photo.png`. It overlays the reference over `#stage` at adjustable
-opacity (`+`/`-` keys, `o` toggles). The `/cal-ref` route serves `XDJ_CAL_REF` and **404s if unset**,
-so the photo is never bundled/committed. Iterate by rendering headless and nudging `COORDS`/`ZONES`:
-```
-# serve, then screenshot (Chrome is Blink; the app is WebKit — see Gotchas)
-XDJ_CAL_REF=<photo> python3 tools/xdj-panel/server.py --port 8799 &
-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --disable-gpu \
-  --window-size=2142,1351 --screenshot=out.png --virtual-time-budget=2500 \
-  "http://127.0.0.1:8799/?cal=0.5"
-```
+### Checking layout changes
+Serve with `python3 tools/xdj-panel/server.py --port 8799` and screenshot headless Chrome
+(`--headless --window-size=1760,1150 --screenshot=out.png --virtual-time-budget=2500`), **and** in
+WebKit (the app's engine) — a tiny Swift `WKWebView.takeSnapshot` tool works. The old `?cal=` photo
+overlay (`XDJ_CAL_REF`, `/cal-ref`, 404s if unset) still exists but no longer matches the grid layout.
 
 ## server.py
 HTTP bridge. Serves `panel.html` + `/knobs/*` + `/novnc/*`, streams the framebuffer, and turns
@@ -84,8 +83,8 @@ a typed-path prompt), then POSTs `<slot> <path>` to `/usb`. `mount_usb()`:
 ## Adding a control
 1. **Map it** (→ `map-subucom-{button,fader,knob,rotary}` / `map-gpio-control`) for its spec
    (`A <off> <val>` / `B <off> <mask>`) or GPIO.
-2. Add an entry to `C` (`{l,t,spec|gpio|specUp/specDown|pushSpec}`) and its position to `COORDS`
-   (`[cx,cy,w,h]` %, verify with the `?cal` overlay). `t` ∈ `knob|vfader|vfader-c|xfader|rotary|
+2. Add an entry to `C` (`{l,t,spec|gpio|specUp/specDown|pushSpec}`) and place it with a `btn/knob/put` call in the layout block
+   (design units, see Layout above). `t` ∈ `knob|vfader|vfader-c|xfader|rotary|
    encoder|jog|` (default = button). Buttons: `spec` (sub-ucom), `gpio` (mainkey), `pad`/`big`/
    `round` styling, `longpress`, `usb`.
 3. JS helpers in `panel.html`: `sctrl(spec)`, `release()`, `mainkey(n)`, `post(path,body)`,
