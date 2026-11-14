@@ -28,12 +28,20 @@
   .tgl.red{background:#3a1e1f;border-color:#6b2e30;color:#ffb4b6}
 
   /* ---- console: fixed device aspect, controls placed absolutely (photo-calibrated) ---- */
-  .stagewrap{flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;padding:10px}
-  #stage{position:relative;aspect-ratio:2142 / 1236;height:100%;width:auto;max-width:100%;
+  .stagewrap{flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;padding:10px;container-type:size}
+  #stage{position:relative;aspect-ratio:2142 / 1184;width:min(100cqw,calc(100cqh * 2142 / 1184));height:auto;flex:0 0 auto;
     background:radial-gradient(130% 100% at 50% 0%,#16191e,#0a0c0f 72%);
     border:1px solid #23272e;border-radius:14px;overflow:hidden;container-type:size;box-shadow:0 10px 40px #000a}
   /* decorative zone panels behind the controls */
-  .pbg{position:absolute;background:linear-gradient(180deg,#13161b,#0e1115);border:1px solid #20242b;border-radius:12px}
+  .pbg{position:absolute;background:linear-gradient(180deg,#14171c,#0f1216);border:1px solid #20242b;border-radius:1cqw;
+    box-shadow:inset 0 1px 0 #ffffff08,0 2px 10px #0006}
+  /* display housing + screen bezel */
+  .pbg.disp{background:linear-gradient(180deg,#101318,#0b0d10);border-color:#262b33}
+  .bezel{position:absolute;border-radius:.6cqw;background:#030405;
+    box-shadow:0 0 0 1px #2a2f37,inset 0 0 0 1px #000,0 6px 18px #000a}
+  /* engraved section labels */
+  .lbl{position:absolute;transform:translate(-50%,-50%);font-size:.5cqw;font-weight:800;letter-spacing:.12cqw;
+    color:#6c7581;white-space:nowrap;pointer-events:none}
 
   .hs{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:stretch;justify-content:center}
   .hs>.cell,.hs>.btn,.hs>.jogcell{width:100%;height:100%}
@@ -43,46 +51,67 @@
   .kwrap{flex:1 1 auto;min-height:0;width:100%;display:flex;align-items:center;justify-content:center;overflow:visible;position:relative}
   .kwrap svg{width:100%;height:100%;display:block}
   .cell.knob .kwrap svg,.cell.enc .kwrap svg,.cell.rot .kwrap svg{transform:scale(1.28)}
-  .cap{font-size:clamp(4px,.6cqw,8px);line-height:1;color:var(--dim);font-weight:700;letter-spacing:.1px;
+  .cap{font-size:.52cqw;line-height:1;color:var(--dim);font-weight:700;letter-spacing:.04cqw;
     white-space:nowrap;pointer-events:none;text-shadow:0 1px 2px #000;max-width:100%;overflow:hidden;text-overflow:ellipsis;flex:0 0 auto}
 
   /* buttons */
-  .btn{cursor:pointer;border-radius:4px;border:1px solid var(--edge2);width:100%;height:100%;min-height:10px;
-    background:linear-gradient(180deg,#242a33,#171b21);color:#cfd5de;
-    font-size:clamp(4px,.62cqw,9px);font-weight:700;letter-spacing:.1px;text-align:center;line-height:1.02;
-    padding:0 1px;overflow:hidden;transition:.05s;box-shadow:0 1px 0 #0007 inset;
+  .btn{cursor:pointer;border-radius:.3cqw;border:1px solid var(--edge2);width:100%;height:100%;min-height:10px;
+    background:linear-gradient(180deg,#252b34,#181c22);color:#cfd5de;
+    font-size:.5cqw;font-weight:800;letter-spacing:.03cqw;text-align:center;line-height:1.05;
+    padding:0 .15cqw;overflow:hidden;transition:.05s;box-shadow:0 1px 0 #0007 inset;
     display:flex;align-items:center;justify-content:center;white-space:normal;overflow-wrap:anywhere}
   .btn.round{border-radius:50%;aspect-ratio:1/1;height:100%;width:auto;max-width:100%;margin:auto}
   .btn:hover{border-color:#525a66;color:#fff}
   .btn.down,.btn:active{background:linear-gradient(180deg,#1b4a63,#123246);border-color:var(--accent);
     color:#eaf6ff;box-shadow:0 0 10px #39b3ff66,0 1px 0 #0007 inset}
-  .btn.pad{background:linear-gradient(180deg,#2238d0,#16249c);border-color:#4a78ff;color:#dfe6ff;border-radius:5px}
-  .btn.pad.down,.btn.pad:active{background:linear-gradient(180deg,#3a5bff,#2238d0);box-shadow:0 0 12px #4a78ff88}
+  .btn.pad{background:linear-gradient(180deg,#26324a,#1a2234);border-color:#3d5a9a;color:#b9c9f2;
+    border-radius:.4cqw;font-size:.75cqw;box-shadow:inset 0 0 0 1px #00000040,inset 0 -.3cqw .6cqw #0006}
+  .btn.pad:hover{border-color:#5b7fd0;color:#e4ebff}
+  .btn.pad.down,.btn.pad:active{background:linear-gradient(180deg,#3a5bff,#2238d0);border-color:#7d9bff;color:#fff;
+    box-shadow:0 0 .8cqw #4a78ff99}
   .btn.jogbtn{border-radius:50%;aspect-ratio:1/1;height:100%;width:auto;max-width:100%;margin:auto;
-    border:1px solid #5a616c;color:#eef1f5;font-weight:800;font-size:clamp(5px,.8cqw,12px);
+    border:1px solid #5a616c;color:#eef1f5;font-weight:800;font-size:.8cqw;
     background:radial-gradient(circle at 50% 32%,#545a64,#262a31 72%);box-shadow:0 3px 9px #000b,inset 0 1px 0 #ffffff22}
   .btn.jogbtn:hover{border-color:#7b8491;color:#fff}
   .btn.jogbtn.down,.btn.jogbtn:active{background:radial-gradient(circle at 50% 32%,#6c737e,#30353d);box-shadow:inset 0 2px 7px #000b}
   .btn.jogbtn.play{background:radial-gradient(circle at 50% 32%,#51805f,#1d3827 72%);border-color:#3f7a57;color:#ddffea}
   .btn.jogbtn.play.down,.btn.jogbtn.play:active{background:radial-gradient(circle at 50% 32%,#63df93,#1e7a46)}
-  .btn.unmapped{opacity:.5;border-style:dashed;cursor:default}
+  .btn.unmapped{color:#6a727d;background:linear-gradient(180deg,#1a1e24,#14171c);border-color:#2a2f37;cursor:default}
+  .btn.unmapped:hover{color:#6a727d;border-color:#2a2f37}
 
   /* jog platter */
   .jogcell{min-width:0;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
   .jog{aspect-ratio:1/1;width:100%;height:auto;max-height:100%;margin:auto;border-radius:50%;position:relative;
-    cursor:grab;touch-action:none;border:2px solid #090a0c;
-    background:radial-gradient(circle at 50% 40%,#3b4048 0%,#24282e 38%,#161a1f 63%,#0b0d10 100%);
-    box-shadow:0 7px 22px #000c,inset 0 2px 7px #ffffff12,inset 0 -9px 22px #0009}
+    cursor:grab;touch-action:none;
+    background:radial-gradient(circle,#0a0b0d 66%,#2a2f36 67.5%,#14171b 70%,#0d0f12 100%);
+    box-shadow:0 1.2cqw 2.4cqw #000d,0 0 0 1px #000,inset 0 1px 0 #ffffff14}
   .jog:active{cursor:grabbing}
-  .jog::before{content:"";position:absolute;inset:9%;border-radius:50%;opacity:.85;
-    background:repeating-conic-gradient(#1b1f24 0deg 5deg,#13161b 5deg 10deg);box-shadow:inset 0 0 14px #000c}
-  .jog::after{content:"";position:absolute;inset:34%;border-radius:50%;border:1px solid #0a0b0d;
-    background:radial-gradient(circle at 50% 38%,#2d323b,#14171c 72%);box-shadow:inset 0 2px 6px #ffffff14,0 2px 7px #0009}
+  /* knurled grip ring (static) */
+  .jog::before{content:"";position:absolute;inset:2.5%;border-radius:50%;pointer-events:none;
+    background:repeating-conic-gradient(#2b3038 0deg 1.5deg,#15181d 1.5deg 3deg);
+    -webkit-mask:radial-gradient(circle,transparent 87%,#000 87.5%);mask:radial-gradient(circle,transparent 87%,#000 87.5%);opacity:.9}
+  /* rotating platter */
+  .jogspin{position:absolute;inset:13%;border-radius:50%;pointer-events:none;will-change:transform;
+    background:
+      radial-gradient(circle,transparent 61%,#ffffff10 61.5%,transparent 63%),
+      repeating-radial-gradient(circle,#1c1f24 0 1.2%,#16191d 1.2% 2.4%);
+    box-shadow:inset 0 0 0 1px #000}
+  /* fixed lighting over the platter (does NOT rotate) */
+  .jogshade{position:absolute;inset:13%;border-radius:50%;pointer-events:none;
+    background:radial-gradient(circle at 50% 30%,#ffffff12,transparent 55%),radial-gradient(circle at 50% 100%,#0008,transparent 60%);
+    box-shadow:inset 0 .4cqw 1cqw #ffffff0d,inset 0 -1cqw 2cqw #0009}
+  .jogspin::before{content:"";position:absolute;left:50%;top:2.5%;width:1.6%;height:22%;transform:translateX(-50%);
+    border-radius:1cqw;background:linear-gradient(180deg,#e8ecf1,#8f98a4);box-shadow:0 0 .4cqw #000}
+  /* centre cap (static) */
+  .jogcap{position:absolute;inset:37%;border-radius:50%;pointer-events:none;
+    background:radial-gradient(circle at 50% 30%,#4a505a,#22262c 60%,#16191d);
+    box-shadow:0 .3cqw .9cqw #000c,inset 0 1px 0 #ffffff26,0 0 0 1px #000;transition:box-shadow .12s}
+  .jog.touch .jogcap{box-shadow:0 .3cqw .9cqw #000c,inset 0 1px 0 #ffffff26,0 0 0 2px #39b3ff,0 0 1.2cqw #39b3ff88}
 
   /* vertical faders (tempo / channel) */
   .cell.vfader{justify-content:stretch}
   .vtrack{position:relative;flex:1 1 auto;min-height:20px;width:100%;cursor:ns-resize}
-  .vtrack::before{content:"";position:absolute;left:50%;top:3%;bottom:3%;width:5px;transform:translateX(-50%);
+  .vtrack::before{content:"";position:absolute;left:50%;top:5%;bottom:5%;width:5px;transform:translateX(-50%);
     background:linear-gradient(90deg,#050608,#1b1f26,#050608);border-radius:3px;box-shadow:inset 0 0 4px #000c,0 0 0 1px #000}
   .vtrack.ctr::after{content:"";position:absolute;left:50%;top:50%;width:46%;height:2px;transform:translate(-50%,-50%);background:#444b55}
   .vthumb{position:absolute;left:50%;width:80%;max-width:26px;min-width:12px;height:12%;min-height:8px;max-height:15px;
@@ -101,15 +130,14 @@
   /* browse encoder centre push */
   .encpush{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:46%;height:auto;aspect-ratio:1/1;border-radius:50%;
     background:radial-gradient(circle at 50% 34%,#2c333d,#13171e);border:1px solid #3a414b;color:#aeb6c0;
-    font-size:clamp(4px,.56cqw,8px);font-weight:800;letter-spacing:.3px;cursor:pointer;
+    font-size:.5cqw;font-weight:800;letter-spacing:.05cqw;cursor:pointer;
     display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px #000a,inset 0 1px 0 #ffffff12}
   .encpush:hover{color:#fff;border-color:#55606e}
   .encpush.down{background:radial-gradient(circle at 50% 34%,#1b4a63,#0e2636);border-color:var(--accent);
     color:#eaf6ff;box-shadow:0 0 12px #39b3ff88}
 
   /* screen */
-  #screen{position:absolute;background:#000;border-radius:6px;overflow:hidden;
-    box-shadow:0 0 0 1px #000,0 4px 18px #0009;display:flex;align-items:center;justify-content:center}
+  #screen{position:absolute;background:#000;border-radius:.2cqw;overflow:hidden;display:flex;align-items:center;justify-content:center}
   #screen canvas{width:100%!important;height:100%!important;display:block}
   /* noVNC hides the local cursor and draws the remote one; the firmware has no cursor,
      so force our normal pointer over the display area instead of an invisible one. */
@@ -196,62 +224,99 @@ const C = {
   d2cue:{l:'CUE',spec:'b 23 80',big:true}, d2play:{l:'▶❙❙',spec:'b 23 40',big:true,play:true},
   d2tempo:{l:'TEMPO',t:'vfader-c',specNeg:'A 14',specPos:'A 1a',v:512},
 };
-// photo-calibrated positions: id -> [cx, cy, w, h] (percent of the console)
-const SCREEN0={x:36.5,y:5.4,w:22.6,h:19.84};
-const COORDS={
-  // top strip
-  mic1:[9.12,20.38,3.0,3.8], mic2:[13.24,20.42,3.0,3.8], miceqhi:[17.07,20.31,3.0,3.8], miceqlow:[21.06,20.54,3.0,3.8],
-  micsw:[23.5,20.11,3.0,2.4], usb1stop:[3.7,23.62,3.6,2.4], usb1load:[3.7,20.6,3.6,2.4],
-  src_rb:[34.66,7.98,4.3,2.4], src_midi:[34.3,12.2,4.3,2.4], src_usb1:[34.45,16.32,4.3,2.4], src_usb2:[34.47,20.84,4.3,2.4],
-  quant:[61.8,8.08,4.6,2.6], deck12:[61.8,12.03,4.6,2.6], timemd:[61.8,16.5,4.6,2.6],
-  booth:[76.81,20.56,3.0,3.8], masterlvl:[82.41,20.38,3.0,3.8],
-  mrec:[88.32,16.93,3.4,2.4], tmark:[88.33,23.32,3.4,2.4], usb2stop:[93.42,23.21,3.6,2.4], usb2load:[93.42,20.2,3.6,2.4],
-  // mixer
-  browse:[40.06,29.21,3.6,2.4], taglist:[45.7,29.19,3.6,2.4], info:[51.37,29.15,3.4,2.4], menu:[57.11,29.18,3.4,2.4],
-  back:[47.21,36.81,2.6,3.0], tagtrk:[49.9,36.85,2.0,3.0], enc:[48.47,44.85,5.4,9.4],
-  loadL:[46.82,52.24,2.4,2.6], loadR:[50.31,51.81,2.4,2.6],
-  deck1src:[37.96,35.07,2.2,3.0], deck2src:[58.8,35.04,2.2,3.0],
-  trim1:[42.76,35.33,3.0,3.8], trim2:[54.35,35.17,3.0,3.8],
-  eq_hi1:[42.82,41.14,3.6,4.6], eq_mid1:[42.72,47.59,3.6,4.6], eq_low1:[42.59,54.6,3.6,4.6],
-  eq_hi2:[54.4,40.1,3.6,4.6], eq_mid2:[54.4,47.3,3.6,4.6], eq_low2:[54.4,54.6,3.6,4.6],
-  color1:[42.77,62.45,3.0,3.8], color2:[54.19,62.43,3.0,3.8],
-  ch1:[42.69,77.0,3.0,21.0], ch2:[54.33,77.0,3.0,21.0], xf:[48.42,88.3,11.0,3.6],
-  scfx_noise:[36.85,50.3,3.4,2.6], scfx_gate:[36.95,53.88,3.4,2.6], scfx_crush:[36.79,57.52,3.4,2.6], scfx_filter:[36.82,61.08,3.4,2.6],
-  hp_mix:[36.88,69.28,3.0,3.8], hp_lvl:[36.83,76.77,3.0,3.8], cue1:[35.76,83.6,2.6,2.6], cue2:[38.6,83.67,2.6,2.6],
-  beatL:[59.1,42.6,2.3,2.6], beatR:[61.5,42.6,2.3,2.6], fxtap:[60.21,48.14,3.8,4.6],
-  fxsel:[60.2,55.2,4.4,5.6], fxch:[60.13,61.9,3.6,4.4], fxlev:[60.2,74.5,3.6,4.6], fxon:[60.2,83.9,3.8,4.6],
-  fxtime:[60.11,69.14,3.0,3.8], xfcurve:[48.53,81.69,3.2,2.4],
-  // deck 1
-  d1in:[3.6,31.8,2.8,2.8], d1out:[7.1,31.8,2.8,2.8], d1reloop:[11.0,31.9,2.8,2.8],
-  d1_call_l:[16.0,32.12,2.0,2.4], d1_call_r:[18.53,32.22,2.0,2.4],
-  d1_delete:[21.62,31.95,2.6,2.4], d1_memory:[24.59,32.04,2.8,2.4], d1_vinyladj:[30.79,32.24,3.0,3.8],
-  d1_rev:[3.75,41.1,2.8,2.8], d1slip:[8.3,41.1,2.6,2.8],
-  d1_jogmode:[30.85,40.2,3.2,2.8], d1sync:[29.6,46.8,2.8,3.0], d1_syncmaster:[32.3,46.84,2.4,3.0],
-  d1trng:[30.77,52.79,2.8,2.8], d1_mastertempo:[30.94,58.07,2.8,2.8],
-  d1_tsL:[2.73,49.52,2.0,2.4], d1_tsR:[4.94,49.74,2.0,2.4], d1_srchL:[2.85,56.5,2.0,2.4], d1_srchR:[5.02,56.55,2.0,2.4],
-  d1jog:[17.1,58.0,20.0,34.0],
-  d1cue:[4.6,74.9,5.2,6.6], d1play:[4.6,85.4,5.2,6.6],
-  d1_hotcuemode:[10.75,79.6,3.4,2.8], d1auto:[15.1,79.6,3.4,2.8], d1_loopslice:[19.47,79.76,3.6,2.8], d1shift:[23.52,79.71,3.4,2.8],
-  d1h1:[10.94,86.4,3.4,5.0], d1h2:[15.04,86.5,3.4,5.0], d1h3:[19.54,86.4,3.4,5.0], d1h4:[23.76,86.5,3.4,5.0],
-  d1tempo:[31.0,76.0,3.2,26.0],
-  // deck 2 (mirror positions from the photo)
-  d2in:[66.07,32.03,2.8,2.8], d2out:[69.49,31.87,2.8,2.8], d2reloop:[73.3,32.0,2.8,2.8],
-  d2_call_l:[78.38,32.25,2.0,2.4], d2_call_r:[81.02,32.32,2.0,2.4],
-  d2_delete:[84.26,31.87,2.6,2.4], d2_memory:[87.04,31.99,2.8,2.4], d2_vinyladj:[93.38,32.06,3.0,3.8],
-  d2_rev:[66.15,41.1,2.8,2.8], d2slip:[70.7,41.1,2.6,2.8],
-  d2_jogmode:[93.25,40.2,3.2,2.8], d2sync:[92.0,46.9,2.8,3.0], d2_syncmaster:[94.8,46.8,2.4,3.0],
-  d2trng:[93.44,52.9,2.8,2.8], d2_mastertempo:[93.22,58.33,2.8,2.8],
-  d2_tsL:[65.25,49.7,2.0,2.4], d2_tsR:[67.75,49.7,2.0,2.4], d2_srchL:[65.25,56.5,2.0,2.4], d2_srchR:[67.75,56.5,2.0,2.4],
-  d2jog:[79.9,58.0,20.0,34.0],
-  d2cue:[66.99,74.81,5.2,6.6], d2play:[66.92,85.3,5.2,6.6],
-  d2_hotcuemode:[73.39,79.84,3.4,2.8], d2auto:[77.6,79.85,3.4,2.8], d2_loopslice:[81.87,79.78,3.6,2.8], d2shift:[86.22,79.73,3.4,2.8],
-  d2h1:[73.37,86.4,3.4,5.0], d2h2:[77.66,86.5,3.4,5.0], d2h3:[81.85,86.4,3.4,5.0], d2h4:[86.06,86.5,3.4,5.0],
-  d2tempo:[93.38,76.0,3.2,26.0],
-};
-// decorative zone rectangles [x,y,w,h]
-const ZONES=[[1.0,16.5,25.2,10.0],[31.3,2.5,33.0,24.0],[74.5,15.0,21.3,11.5],
-  [0.8,28.0,32.8,63.0],[33.7,28.0,29.9,63.0],[63.7,28.0,32.8,63.0]];
-const XOFF=1.1; // shift whole console right so left/right margins match
+// ===== layout ============================================================
+// Grid layout in design units on a W x H canvas (converted to % of #stage below), so
+// rows/columns line up exactly. Both decks share ONE layout (identical, not mirrored),
+// offset by their zone's x. Rough arrangement follows the device.
+const W=2142, H=1184;
+const L={};                                   // id -> [cx,cy,w,h] in design units
+const put=(id,cx,cy,w,h)=>{ L[id]=[cx,cy,w,h]; };
+const BW=80, BH=40;                           // standard button
+const btn=(id,cx,cy,w=BW,h=BH)=>put(id,cx,cy,w,h);
+const knob=(id,cx,cy,s=76,h=84)=>put(id,cx,cy,s,h);
+const round=(id,cx,cy,dd=62)=>put(id,cx,cy,dd,dd);
+const LBL_U=[];                               // engraved section labels [text,cx,cy]
+
+// bands / zones  [x,y,w,h] (units)
+const MIX_X=736, MIX_W=670, DECK_W=700, D1_X=24, D2_X=W-24-DECK_W;   // 24 | 1418
+const TOP_Y=24, TOP_H=306, SIDE_Y=176, MAIN_Y=346, MAIN_H=H-24-MAIN_Y;
+const ZONE_U=[ [D1_X,SIDE_Y,DECK_W,TOP_Y+TOP_H-SIDE_Y], [D2_X,SIDE_Y,DECK_W,TOP_Y+TOP_H-SIDE_Y],
+  [D1_X,MAIN_Y,DECK_W,MAIN_H], [MIX_X,MAIN_Y,MIX_W,MAIN_H], [D2_X,MAIN_Y,DECK_W,MAIN_H] ];
+const DISP_U=[MIX_X,TOP_Y,MIX_W,TOP_H];
+const SCREEN_U=[W/2-220, TOP_Y+21, 440, 264];  // 800x480 aspect (5:3)
+
+// ---- display housing: source keys left, mode keys right, evenly spread over the screen height
+{ const lx=MIX_X+57, rx=MIX_X+MIX_W-57, y0=SCREEN_U[1]+22, y1=SCREEN_U[1]+SCREEN_U[3]-22;
+  ['src_rb','src_midi','src_usb1','src_usb2'].forEach((id,i)=>btn(id,lx,y0+i*(y1-y0)/3,86,42));
+  ['quant','deck12','timemd'].forEach((id,i)=>btn(id,rx,y0+i*(y1-y0)/2,86,42)); }
+
+// ---- side strips (mic / master)
+{ const yc=SIDE_Y+(TOP_Y+TOP_H-SIDE_Y)/2, ya=yc-25, yb=yc+25;
+  btn('usb1load',D1_X+52,ya,92,40); btn('usb1stop',D1_X+52,yb,92,40);
+  knob('mic1',D1_X+190,yc); knob('mic2',D1_X+282,yc); knob('miceqhi',D1_X+400,yc); knob('miceqlow',D1_X+492,yc);
+  btn('micsw',D1_X+612,yc,84,40);
+  knob('booth',D2_X+110,yc); knob('masterlvl',D2_X+210,yc);
+  btn('mrec',D2_X+400,ya,104,40); btn('tmark',D2_X+400,yb,104,40);
+  btn('usb2load',D2_X+DECK_W-52,ya,92,40); btn('usb2stop',D2_X+DECK_W-52,yb,92,40); }
+
+// ---- decks (one layout, two offsets)
+function deckLayout(n,x0){ const p='d'+n, X=v=>x0+v;
+  const LC=72, RC=622, R1=MAIN_Y+56, R2=R1+72;
+  const JX=345, JY=744, JD=400;              // jog platter
+  // row 1: loop / call / memory / vinyl adj
+  btn(p+'in',X(LC),R1); btn(p+'out',X(LC+88),R1); btn(p+'reloop',X(LC+176),R1);
+  btn(p+'_call_l',X(322),R1,46); btn(p+'_call_r',X(372),R1,46);
+  btn(p+'_delete',X(450),R1); btn(p+'_memory',X(536),R1);
+  knob(p+'_vinyladj',X(RC),R1);
+  // row 2
+  btn(p+'_rev',X(LC),R2); btn(p+'slip',X(LC+88),R2);
+  // left column: tempo-stretch / search pairs, CUE, PLAY
+  btn(p+'_tsL',X(LC-25),640,46); btn(p+'_tsR',X(LC+25),640,46);
+  btn(p+'_srchL',X(LC-25),700,46); btn(p+'_srchR',X(LC+25),700,46);
+  // jog + pads (pad row spans exactly the platter width)
+  put(p+'jog',X(JX),JY,JD,JD);
+  const PW=88, PG=(JD-4*PW)/3, PY=1086, MY=1004;
+  ['_hotcuemode','auto','_loopslice','shift'].forEach((s,i)=>btn(p+s,X(JX-JD/2+PW/2+i*(PW+PG)),MY,PW,38));
+  ['h1','h2','h3','h4'].forEach((s,i)=>btn(p+s,X(JX-JD/2+PW/2+i*(PW+PG)),PY,PW,72));
+  round(p+'play',X(LC),PY,100); round(p+'cue',X(LC),PY-116,100);
+  // right column: jog mode, sync/master, range, master tempo, tempo fader
+  btn(p+'_jogmode',X(RC),R2);
+  btn(p+'sync',X(RC-29),R2+72,54); btn(p+'_syncmaster',X(RC+29),R2+72,50);
+  btn(p+'trng',X(RC),R2+136); btn(p+'_mastertempo',X(RC),R2+200);
+  put(p+'tempo',X(RC),(712+1136)/2,64,1136-712);
+}
+deckLayout(1,D1_X); deckLayout(2,D2_X);
+
+// ---- mixer
+{ const FL=MIX_X+72, S1=MIX_X+182, CC=W/2, S2=MIX_X+MIX_W-182, FR=MIX_X+MIX_W-72, R1=MAIN_Y+56, R2=R1+74;
+  btn('browse',FL,R1,92); btn('taglist',S1,R1,92); btn('info',S2,R1,92); btn('menu',FR,R1,92);
+  // channel strips
+  [[S1,'1'],[S2,'2']].forEach(([x,n])=>{
+    ['trim','eq_hi','eq_mid','eq_low','color'].forEach((k,i)=>knob(k+n,x,R2+4+i*82,76,80));
+    put('ch'+n,x,978,64,252); });
+  btn('deck1src',FL,R2,72); btn('deck2src',FR,R2,72);
+  // centre: browse encoder, load, crossfader
+  btn('back',CC-41,R2,72,38); btn('tagtrk',CC+41,R2,72,38);
+  put('enc',CC,590,140,140);
+  btn('loadL',CC-49,700,88); btn('loadR',CC+49,700,88);
+  btn('xfcurve',CC,1072,96,34); put('xf',CC,1128,300,40);
+  // left: sound colour FX, headphones
+  ['scfx_noise','scfx_gate','scfx_crush','scfx_filter'].forEach((id,i)=>btn(id,FL,566+i*52,88));
+  knob('hp_mix',FL,812); knob('hp_lvl',FL,902);
+  btn('cue1',FL-31,994,56); btn('cue2',FL+31,994,56);
+  // right: beat FX
+  btn('beatL',FR-32,556,60); btn('beatR',FR+32,556,60);
+  round('fxtap',FR,630); put('fxsel',FR,726,88,96); round('fxch',FR,822);
+  knob('fxtime',FR,906,76,80); knob('fxlev',FR,990,76,80); round('fxon',FR,1080);
+  LBL_U.push(['COLOR FX',FL,533],['BEAT FX',FR,523],['HEADPHONES',FL,764]); }
+
+// convert to % of the stage
+const pct=([cx,cy,w,h])=>[cx/W*100,cy/H*100,w/W*100,h/H*100];
+const pctBox=([x,y,w,h])=>[x/W*100,y/H*100,w/W*100,h/H*100];
+const COORDS={}; for(const id in L) COORDS[id]=pct(L[id]);
+const ZONES=ZONE_U.map(pctBox), DISP=pctBox(DISP_U);
+const SCREEN0=(([x,y,w,h])=>({x,y,w,h}))(pctBox(SCREEN_U));
+const LABELS=LBL_U.map(([t,x,y])=>[t,x/W*100,y/H*100]);
 
 // ===== server I/O =========================================================
 const logbox=document.getElementById('logbox');
@@ -332,7 +397,7 @@ function knobCell(id){ const c=C[id]; const el=d('cell knob'); const m=d();
 function faderCell(id){ const c=C[id]; const center=c.t==='vfader-c'; const el=d('cell vfader');
   const track=d('vtrack'+(center?' ctr':'')); const thumb=d('vthumb'); track.appendChild(thumb);
   let val=c.v==null?(center?512:0):c.v;
-  const show=()=>{ thumb.style.bottom=(val/1023*100)+'%'; };
+  const show=()=>{ thumb.style.bottom=(5+val/1023*90)+'%'; };   // keep the thumb inside the track
   const emit=()=>{ if(center && c.specNeg && c.specPos){ const lo=Math.round(val),hi=1023-lo;
       sctrl(c.specNeg+' '+lo.toString(16)+'\n'+c.specPos+' '+hi.toString(16)); }
     else if(isAnalog(c.spec)) sctrl(c.spec+' '+Math.round(val).toString(16)); };
@@ -384,19 +449,22 @@ function encoderCell(id){ const c=C[id]; const el=d('cell enc'); const m=d(); le
   el.title='BROWSE — rotate to scroll, push to select'; return el;
 }
 function jogCell(id){ const c=C[id]; const el=d('cell jogcell'); const j=d('jog');
+  const spin=d('jogspin'); j.append(spin,d('jogshade'),d('jogcap'));
+  let rot=0; const turn=dd=>{ rot+=dd; spin.style.transform='rotate('+rot+'deg)'; };   // visual platter angle
   let dragging=false,lastA=null,acc=0,t=0; const STEP=12;
   const ang=e=>{ const r=j.getBoundingClientRect(); return Math.atan2(e.clientY-(r.top+r.height/2),e.clientX-(r.left+r.width/2))*180/Math.PI; };
   const det=s=>{ const sp=s>0?c.specUp:c.specDown; if(sp) sctrl(sp); };
-  j.addEventListener('pointerdown',e=>{ e.preventDefault(); dragging=true; lastA=ang(e); try{ j.setPointerCapture(e.pointerId); }catch(_){} });
+  j.addEventListener('pointerdown',e=>{ e.preventDefault(); dragging=true; lastA=ang(e); j.classList.add('touch');
+    try{ j.setPointerCapture(e.pointerId); }catch(_){} });
   j.addEventListener('pointermove',e=>{ if(!dragging) return; const a=ang(e); let dd=a-lastA;
-    if(dd>180)dd-=360; if(dd<-180)dd+=360; lastA=a; acc+=dd; const now=performance.now();
+    if(dd>180)dd-=360; if(dd<-180)dd+=360; lastA=a; turn(dd); acc+=dd; const now=performance.now();
     while(acc>=STEP){acc-=STEP; if(now-t>14){det(1);t=now;}} while(acc<=-STEP){acc+=STEP; if(now-t>14){det(-1);t=now;}} });
-  const end=()=>{ dragging=false; lastA=null; };
-  j.addEventListener('pointerup',end); j.addEventListener('pointercancel',end);
+  const end=()=>{ dragging=false; lastA=null; j.classList.remove('touch'); };
+  j.addEventListener('pointerup',end); j.addEventListener('pointercancel',end); j.addEventListener('lostpointercapture',end);
   let wa=0,wt=null; el.addEventListener('wheel',ev=>{ ev.preventDefault(); let dy=ev.deltaY;
     if(ev.deltaMode===1)dy*=16; else if(ev.deltaMode===2)dy*=400; wa+=dy;
     if(!wt) wt=setTimeout(()=>{ wt=null; let s=Math.max(-4,Math.min(4,Math.trunc(wa/60)));
-      if(s){ wa-=s*60; for(let i=0;i<Math.abs(s);i++) det(s>0?1:-1); } else if(Math.abs(wa)>240) wa=0; },60); },{passive:false});
+      if(s){ wa-=s*60; turn(s*STEP); for(let i=0;i<Math.abs(s);i++) det(s>0?1:-1); } else if(Math.abs(wa)>240) wa=0; },60); },{passive:false});
   el.append(j); el.title=(c.l||'JOG')+' — drag to scratch / pitch-bend'; return el;
 }
 function cell(id){ const c=C[id]; if(!c) return d();
@@ -408,14 +476,14 @@ function cell(id){ const c=C[id]; if(!c) return d();
 // ===== build (absolute placement) =========================================
 function build(){
   const stage=document.getElementById('stage');
-  for(const z of ZONES){ const p=d('pbg');
-    p.style.left=(z[0]+XOFF)+'%'; p.style.top=z[1]+'%'; p.style.width=z[2]+'%'; p.style.height=z[3]+'%'; stage.appendChild(p); }
+  const place=(el,x,y,w,h)=>{ Object.assign(el.style,{left:x+'%',top:y+'%',width:w+'%',height:h+'%'}); stage.appendChild(el); return el; };
+  for(const z of ZONES) place(d('pbg'),...z);
+  place(d('pbg disp'),...DISP);
+  place(d('bezel'),...pctBox([SCREEN_U[0]-8,SCREEN_U[1]-8,SCREEN_U[2]+16,SCREEN_U[3]+16]));
+  for(const [t,x,y] of LABELS){ const e=d('lbl'); e.textContent=t; e.style.left=x+'%'; e.style.top=y+'%'; stage.appendChild(e); }
   for(const id in COORDS){ const b=COORDS[id]; if(!C[id]) continue;
-    const box=d('hs'); box.style.left=(b[0]+XOFF)+'%'; box.style.top=b[1]+'%'; box.style.width=b[2]+'%'; box.style.height=b[3]+'%';
-    box.appendChild(cell(id)); stage.appendChild(box); }
-  const sc=d(''); sc.id='screen';
-  sc.style.left=(SCREEN0.x+XOFF)+'%'; sc.style.top=SCREEN0.y+'%'; sc.style.width=SCREEN0.w+'%'; sc.style.height=SCREEN0.h+'%';
-  stage.appendChild(sc);
+    const box=place(d('hs'),...b); box.appendChild(cell(id)); }
+  const sc=d(''); sc.id='screen'; place(sc,SCREEN0.x,SCREEN0.y,SCREEN0.w,SCREEN0.h);
 }
 
 // ===== live screen ========================================================
