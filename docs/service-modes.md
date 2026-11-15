@@ -11,7 +11,7 @@ Pioneer-owned. Page numbers below are the manual's printed numbers) cross-checke
 | **Test mode** (8 sub-modes) | DECK 1 **MEMORY** + DECK 1 **TEMPO RANGE** | rbp, first sub-ucom frame: `[0x12]&0x08` + `[0x13]&0x04` | ✅ hold `B 12 08` + `B 13 04` from boot |
 | **Factory reset** | DECK 1 **DELETE** + DECK 1 **TEMPO RANGE** | rbp, first frame: `[0x12]&0x08` + `[0x13]&0x08` | not tried (resets settings) |
 | test variant 2 | TEMPO RANGE + **RELOOP/EXIT** | rbp, first frame: `[0x12]&0x88` → `TestMode(…, 2)` | not tried; not in the manual |
-| **Firmware update** | DECK 1 **USB STOP** + DECK 1 **RELOOP/EXIT** | sub-ucom MCU raises **GPIO3_IO30** (gpio 94); initramfs `/init` reads it | ✅ `XDJ_BOOT_UPDATE=1` (QEMU patch 19) |
+| **Firmware update** | DECK 1 **USB STOP** + DECK 1 **RELOOP/EXIT** | sub-ucom MCU raises **GPIO3_IO30** (gpio 94); initramfs `/init` reads it | ✅ `XDJ_BOOT_UPDATE=1` (`xdj-board.c` (was patch 19)) |
 
 ## Test mode (manual §6.1, pp. 36–40)
 Eight sub-modes; **turn the rotary selector** (browse encoder) to change, **press** it to wrap
@@ -89,4 +89,4 @@ image is persistent.
 - **Auth chip** (E-7206): an Apple MFi authentication coprocessor on I2C4 (`/dev/i2c-3`, slave
   0x10). rbp's self-check (`FUN_00349294`) reads reg `0x00` (must be `0x05`) and `0x01` (must be
   `0x01`); register accessors at `0x349294…0x34a640`, open/`I2C_SLAVE` at `0x34ae5c`, reset via
-  `/dev/gpiodrv` at `0x34b02c`. QEMU patch 18 adds I2C4 + an identity-only responder.
+  `/dev/gpiodrv` at `0x34b02c`. `xdj-mfi.c` (was patch 18) adds I2C4 + an identity-only responder.

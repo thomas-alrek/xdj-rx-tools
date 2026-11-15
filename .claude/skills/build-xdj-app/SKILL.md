@@ -73,7 +73,7 @@ to update them.
 The shell launches `xdj-host` with `XDJ_AUTOSTART=0`: the sidecar, VNC bridge and panel come up, QEMU
 does not. `xdj-host` owns QEMU's lifecycle and listens on **`<runtime>/power.sock`** (line protocol:
 `on` | `on update` | `off` | `status` → one line `on` / `on update` / `off`). `on update` sets
-`XDJ_BOOT_UPDATE=1` for QEMU (patch 19, firmware-update boot). `off` kills QEMU instantly (a power
+`XDJ_BOOT_UPDATE=1` for QEMU (`xdj-board.c` (was patch 19), firmware-update boot). `off` kills QEMU instantly (a power
 cut — the app's nand image is persistent writeback, like the real unit's flash). Each power-on
 deletes the old sockets + `console.log`. QEMU exiting on its own = powered off; only the sidecar
 dying, SIGTERM, Ctrl-C or the shell vanishing end `xdj-host`. Without `XDJ_AUTOSTART=0` (CLI use)

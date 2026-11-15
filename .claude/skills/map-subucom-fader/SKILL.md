@@ -11,7 +11,7 @@ decoded into a `0x50xx`/`0x44xx`/`0x600f` control code, then applied by a C++ se
 ## Sub-ucom fundamentals (shared)
 - ONE 100-byte frame over `/dev/subucom_spi1.0`; parsed by `PanelComController` (`FUN_0021a4ac`),
   decoders at **~0x282000-0x28b000**.
-- **Inject harness** (QEMU patch 02/07) reads `/tmp/subucom_ctrl` each frame, rewrites the field,
+- **Inject harness** (`xdj-panel.c`, was patches 02/07) reads `/tmp/subucom_ctrl` each frame, rewrites the field,
   recomputes CRC. `A <off> <val16>` = hold a 16-bit analog (`0x3ff`≈full, `0x200`≈center, `0`=min);
   `a` = one-shot. Offsets are rbp frame offsets.
 - Tools: `tools/xdj-panel/debug/{inj.py,mon.py,rsp.py,tables.py,relaunch.sh}`. `inj.py pulse`

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Map panel LEDs: press controls one at a time and report which SubTxData bits change.
 
-Needs QEMU patch 15 in FILE mode (no XDJ_RUNTIME_DIR), so rbp's LED payload lands in
+Needs xdj-panel.c (was patch 15) in FILE mode (no XDJ_RUNTIME_DIR), so rbp's LED payload lands in
 /tmp/subucom_tx (or $XDJ_TX_PATH). For each spec the probe:
   1. samples the payload for 3 s (baseline),
   2. fires the control once (writes the spec, then rewrites the holds alone 0.5 s later;
@@ -65,7 +65,7 @@ def setctl(extra=""):
 
 def main():
     if not read_tx():
-        sys.exit("no LED payload at %s (QEMU patch 15, file mode?)" % TX)
+        sys.exit("no LED payload at %s (xdj-panel.c (was patch 15), file mode?)" % TX)
     setctl()
     for spec in sys.argv[1:]:
         base = classify(sample(3))

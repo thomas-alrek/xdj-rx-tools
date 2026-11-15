@@ -70,7 +70,7 @@ Keeping them separate means the emulator plumbing has no Tauri dependency and is
 | `tools/xdj-panel/` | `server.py` (panel sidecar) + `panel.html` (the control UI). See skill `xdj-virtual-panel`. |
 | `packaging/build-macos-app.sh` | Assembles `dist/XDJ-RX.app`. |
 | `xdjrx_upd.py`, `qemu_prepare.py`, `qemu/build-nand.py` | The firmware-prep pipeline the host drives. |
-| `qemu/` | The patched-QEMU build scripts + `patches/01..19`. |
+| `qemu/` | The patched-QEMU build scripts + `patches/01..05` + `qemu/xdj/`. |
 
 App-data (runtime, never in the repo): `~/Library/Application Support/XDJ-RX/` on macOS
 (`$XDG_DATA_HOME/xdj-rx` elsewhere). Contains `key/aes256.key`, per-firmware cache dirs keyed by
@@ -178,8 +178,8 @@ copyright-free design (the old device-photo background was removed). Full detail
 ## 8. USB media
 
 **At boot:** `maybe_insert_usb` (host) optionally inserts `XDJ_USB` on `XDJ_USB_SLOT` once `rbp` is
-polling (hub ports 1.2=usb1, 1.1=usb2). The attach alone wakes HOST1 (patch 10). It does **not**
-write `/tmp/usb_insert` / `/tmp/usb2_insert` (it clears them): patch 06's files drive rbp's
+polling (hub ports 1.2=usb1, 1.1=usb2). The attach alone wakes HOST1 (`xdj-usbnc.c` (was patch 10)). It does **not**
+write `/tmp/usb_insert` / `/tmp/usb2_insert` (it clears them): `xdj-panel.c` (was patch 06)'s files drive rbp's
 active-low USB fault flags, and asserting one causes "USB Error. Remove the device.". **At runtime:** the panel's USB LOAD buttons POST `/usb <slot> <path>`
 and the server does the same `drive_add`/`device_add` over QMP, **ejecting any previous insertion
 first** (USB STOP only unmounts in the firmware; the QEMU device stays plugged). Read-only

@@ -11,7 +11,7 @@ value — inject a ramp, one step per detent, with a dwell long enough that each
 
 ## Sub-ucom fundamentals (shared)
 - 100-byte frame over `/dev/subucom_spi1.0`; dispatcher for center codes = **`FUN_0026ae7c`**.
-- Inject (patch 02/07) via `/tmp/subucom_ctrl`. For a counter, write successive `A <off> <val>`
+- Inject (`xdj-panel.c`, was patches 02/07) via `/tmp/subucom_ctrl`. For a counter, write successive `A <off> <val>`
   holds (a ramp) with a dwell; the panel server's `/browse` endpoint already ramps the browse
   counter ±1 per detent. Tools: `tools/xdj-panel/debug/{inj.py,mon.py,rsp.py}`, `encoder_bridge.py`.
 

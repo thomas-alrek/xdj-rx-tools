@@ -22,7 +22,7 @@ each an unrolled `ldrb [cur,#OFF]; ldrb [prev,#OFF]; eor; tst #MASK; …` patter
 
 ## ✅ 2026-11-14 — RUNTIME-VERIFIED MAP (supersedes the tables below where they differ)
 
-Method: every frame bit / analog field was injected into a running rbp (patch 14 build) and the
+Method: every frame bit / analog field was injected into a running rbp (`xdj-panel.c` (was patch 14) build) and the
 event it produced was captured at the panel dispatcher **`0x2a47c0`** `(obj, code, state, deck, …)`
 (`state` 0 = press, 2 = release, 3 = relative, 4 = absolute value). Codes were then named with
 rbp's own debug-console vocabulary (`button`/`knob`/`rotary` handlers `FUN_0001ec50`/`0001e69c`/
@@ -59,7 +59,7 @@ SEARCH, CALL, EQ MID/LOW, MIC, HP, USB STOP, QUANTIZE, CUE1/2, BROWSE/INFO/TAG L
 | `0x5f` | .0 MENU (`20a`) · .1 INFO (`204`) · .2 TAG LIST (`209`) · .3 BROWSE (`208`) |
 
 Visually confirmed on the LCD: FX/CH SELECT names, TEMPO RANGE, QUANTIZE, MASTER.
-**Prerequisite:** QEMU patch 14 (the ECSPI burst hook) — without it the slave sends all-zero
+**Prerequisite:** `xdj-panel.c` (was patch 14) (the ECSPI burst hook) — without it the slave sends all-zero
 frames and *no* control reaches rbp.
 
 Confidence: ✅ = screen-verified; ◆ = firmware-decoded + code matches RX3 (strong); ○ =
@@ -314,7 +314,7 @@ re-route. Mixer gains must also be asserted in the boot frame (item 2).
 baked into the mixer channel objects (`obj+0x254` = LINE idx). It is NOT a sub-ucom frame control
 and NOT driven by the D1/D2 SRC keys (GPIO 119/120 — tested, no effect on `routed_src`). So the
 clean "no gdb" fix is emulator/firmware-side, not a panel operation:
-- **Recommended QEMU fix** (no rebuild of rbp, no per-boot step): the inject harness (patch 07)
+- **Recommended QEMU fix** (no rebuild of rbp, no per-boot step): the inject harness (`xdj-panel.c` (was patch 07))
   already rewrites guest memory each frame — have it also enforce the correct deck routing by
   writing the global channel table at fixed addresses: for the deck channels, `ch_n.buf =
   src[n].buf` and `ch_n.routed = n` (n=0 deck1, n=1 deck2), i.e. model INPUT SELECT = DECK. Pair

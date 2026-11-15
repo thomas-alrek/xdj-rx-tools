@@ -12,7 +12,7 @@ inject it.
 ## Sub-ucom fundamentals (shared)
 - ONE 100-byte frame over `/dev/subucom_spi1.0`; parsed by `PanelComController`
   (`FUN_0021a4ac`) and decoders at **~0x282000-0x28b000**.
-- **Inject harness** (QEMU patch 02/07) reads `/tmp/subucom_ctrl` each frame and rewrites
+- **Inject harness** (`xdj-panel.c`, was patches 02/07) reads `/tmp/subucom_ctrl` each frame and rewrites
   the named field + recomputes CRC. Spec lines (hex): `A <off> <val16>` = hold a 16-bit
   analog; `a` = one-shot; `B <off> <mask>` = hold a button bitmask; `b` = one-shot.
   Offsets are **rbp frame offsets** (same as the frame-map table).
@@ -60,7 +60,7 @@ TAGLIST, INFO, MENU, TAP, LOAD1/2). Mode 6 (SW TEST) shows switch positions. Ent
 
 ## The button's LED (other direction)
 Button LEDs are NOT in the RX frame: rbp drives them through the MOSI `SubTxData` payload (QEMU
-patch 15). After mapping the press, find its LED with `tools/xdj-panel/debug/ledprobe.py b_<off>_<mask>`
+`xdj-panel.c` (was patch 15)). After mapping the press, find its LED with `tools/xdj-panel/debug/ledprobe.py b_<off>_<mask>`
 (press twice: on + off), add `led:[byte,bit,low]` to the panel entry, and record it in
 `docs/subucom-led-map.md`.
 

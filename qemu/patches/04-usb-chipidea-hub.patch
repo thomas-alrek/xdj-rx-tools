@@ -1,0 +1,259 @@
+XDJ-RX: USB on the i.MX6 ChipIdea host controllers.
+
+  - dev-hub.c: a USB 2.0 (high-speed) hub descriptor, so the hub can sit on the
+    high-speed-only EHCI root port like the real HOST1 hub; report
+    PORT_STAT_HIGH_SPEED for high-speed devices.
+  - chipidea.c: OTG VBUS-valid; mark the controller TDI-style (tdi).
+  - hcd-ehci.c/.h, hcd-ehci-sysbus.c (TDI/ChipIdea only): PORTSC[27:26] PSPD port
+    speed (Linux reads it; without it everything enumerated at 12 Mbit/s);
+    USBSTS[7] SRI reads 1 (the i.MX6 BSP busy-waits on it for high-speed links);
+    re-poll the async schedule every microframe while busy (5 ms window).
+Result: the front slots run at 480 Mbit/s; with the macOS timer fix USB reads go
+from 1.3 to ~5.5 MB/s. (Replaces the old patches 08, 12 and 20.)
+
+--- a/hw/usb/dev-hub.c
++++ b/hw/usb/dev-hub.c
+@@ -140,6 +140,30 @@
+     },
+ };
+ 
++/*
++ * High-speed (USB 2.0) variant so the hub can attach to a high-speed-only
++ * EHCI root bus (the i.MX6 fsl-ehci / chipidea HOST controllers). The real
++ * XDJ-RX wires both front USB slots behind a 2.0 hub on USB HOST1; a USB 1.1
++ * (full-speed) hub is rejected by EHCI. A high-speed device behind this hub
++ * talks to EHCI directly (no transaction translator needed).
++ */
++static const USBDescDevice desc_device_hub_high = {
++    .bcdUSB                        = 0x0200,
++    .bDeviceClass                  = USB_CLASS_HUB,
++    .bMaxPacketSize0               = 64,
++    .bNumConfigurations            = 1,
++    .confs = (USBDescConfig[]) {
++        {
++            .bNumInterfaces        = 1,
++            .bConfigurationValue   = 1,
++            .bmAttributes          = USB_CFG_ATT_ONE | USB_CFG_ATT_SELFPOWER |
++                                     USB_CFG_ATT_WAKEUP,
++            .nif = 1,
++            .ifs = &desc_iface_hub,
++        },
++    },
++};
++
+ static const USBDesc desc_hub = {
+     .id = {
+         .idVendor          = 0x0409,
+@@ -150,6 +174,7 @@
+         .iSerialNumber     = STR_SERIALNUMBER,
+     },
+     .full = &desc_device_hub,
++    .high = &desc_device_hub_high,
+     .str  = desc_strings,
+ };
+ 
+@@ -206,6 +231,13 @@
+         } else {
+             usb_hub_port_clear(port, PORT_STAT_LOW_SPEED);
+         }
++        /* A high-speed device on a high-speed hub port (see desc_device_hub_high) must be reported
++         * as such, or the host treats it as full speed (12 Mbit/s) behind a TT. */
++        if (port->port.dev->speed == USB_SPEED_HIGH) {
++            usb_hub_port_set(port, PORT_STAT_HIGH_SPEED);
++        } else {
++            usb_hub_port_clear(port, PORT_STAT_HIGH_SPEED);
++        }
+     }
+     return notify;
+ }
+@@ -614,7 +646,8 @@
+         port = &s->ports[i];
+         usb_register_port(usb_bus_from_device(dev),
+                           &port->port, s, i, &usb_hub_port_ops,
+-                          USB_SPEED_MASK_LOW | USB_SPEED_MASK_FULL);
++                          USB_SPEED_MASK_LOW | USB_SPEED_MASK_FULL |
++                          USB_SPEED_MASK_HIGH);
+         usb_port_location(&port->port, dev->port, i+1);
+     }
+     usb_hub_handle_reset(dev);
+--- a/hw/usb/chipidea.c
++++ b/hw/usb/chipidea.c
+@@ -20,12 +20,40 @@
+     CHIPIDEA_USBx_DCCPARAMS_HC = BIT(8),
+ };
+ 
++/*
++ * OTGSC (OTG Status and Control) is the first register of the 0x1A4 block.
++ * The i.MX OTG driver, before bringing the controller up, waits for VBUS /
++ * session-valid to settle by polling these status bits, and gives up only at a
++ * timeout ("wait otg vbus change timeout!" -- a multi-second stall at the boot
++ * splash). We model no VBUS comparators (the USB PHY status register is stubbed
++ * to 0), so that condition could never become true and the wait always ran to
++ * the full timeout. Report a settled "A-device (host) with VBUS up" state --
++ * ID=0, A-VBUS-Valid, A- and B-Session-Valid -- so the driver sees a valid
++ * session immediately and skips the wait, then enumerates as host exactly as it
++ * did after the timeout. Only the status bits are reported; the write-one-to-
++ * clear interrupt-status bits (23:0 upper half) are left 0 so no spurious OTG
++ * interrupt is raised. OTGSC is region-relative offset 0 of the 0x1A4 block.
++ */
++#define CHIPIDEA_USBx_OTGSC        0x000      /* 0x1A4, region-relative */
++#define CHIPIDEA_OTGSC_AVV         BIT(9)     /* A VBUS valid */
++#define CHIPIDEA_OTGSC_ASV         BIT(10)    /* A session valid */
++#define CHIPIDEA_OTGSC_BSV         BIT(11)    /* B session valid */
++
+ static uint64_t chipidea_read(void *opaque, hwaddr offset,
+                                unsigned size)
+ {
+     return 0;
+ }
+ 
++static uint64_t chipidea_otg_read(void *opaque, hwaddr offset,
++                                  unsigned size)
++{
++    if (offset == CHIPIDEA_USBx_OTGSC) {
++        return CHIPIDEA_OTGSC_AVV | CHIPIDEA_OTGSC_ASV | CHIPIDEA_OTGSC_BSV;
++    }
++    return 0;
++}
++
+ static void chipidea_write(void *opaque, hwaddr offset,
+                             uint64_t value, unsigned size)
+ {
+@@ -48,6 +76,18 @@
+     },
+ };
+ 
++/* Same as chipidea_ops but with the OTGSC-aware read (the 0x1A4 block). */
++static const struct MemoryRegionOps chipidea_otg_ops = {
++    .read = chipidea_otg_read,
++    .write = chipidea_write,
++    .endianness = DEVICE_NATIVE_ENDIAN,
++    .impl = {
++        .min_access_size = 4,
++        .max_access_size = 4,
++        .unaligned = false,
++    },
++};
++
+ static uint64_t chipidea_dc_read(void *opaque, hwaddr offset,
+                                  unsigned size)
+ {
+@@ -112,13 +152,15 @@
+                 .ops    = &chipidea_ops,
+             },
+             /*
+-             * Registers located between offsets 0x1A4 and 0x1DC
++             * Registers located between offsets 0x1A4 and 0x1DC.
++             * OTGSC (0x1A4) reports a settled host VBUS/session via
++             * chipidea_otg_ops; the rest of the block reads back 0.
+              */
+             {
+                 .name   = TYPE_CHIPIDEA ".endpoints",
+                 .offset = 0x1A4,
+                 .size   = 0x1DC - 0x1A4 + 4,
+-                .ops    = &chipidea_ops,
++                .ops    = &chipidea_otg_ops,
+             },
+             /*
+              * USB_x_DCIVERSION and USB_x_DCCPARAMS
+@@ -156,6 +198,16 @@
+     sec->capsbase   = 0x100;
+     sec->opregbase  = 0x140;
+     sec->portnr     = 1;
++    /*
++     * ChipIdea is a TDI-style EHCI with an integrated transaction translator: it
++     * reports the attached device's speed in PORTSC[27:26] (PSPD), and Linux
++     * (ehci_port_speed() when ehci_is_TDI) takes the root-port speed from there.
++     * Without it every root-port device reads as full speed (12 Mbit/s).
++     * It also has USBSTS[7] SRI ("SOF received", set every (micro)frame): the
++     * i.MX6 BSP's fsl_platform_h1_set_usb_phy_dis() clears it and busy-waits for
++     * the next SOF when a high-speed device connects -- never set = khubd spins.
++     */
++    sec->tdi   = true;
+ 
+     set_bit(DEVICE_CATEGORY_USB, dc->categories);
+     dc->desc = "Chipidea USB Module";
+--- a/hw/usb/hcd-ehci.c
++++ b/hw/usb/hcd-ehci.c
+@@ -924,6 +924,9 @@
+         break;
+     default:
+         val = s->opreg[addr >> 2];
++    }
++    if (s->tdi && addr == USBSTS) {
++        val |= 1 << 7;      /* SRI: a SOF has always been received by the time we look */
+     }
+ 
+     trace_usb_ehci_opreg_read(addr + s->opregbase, addr2str(addr), val);
+@@ -1020,6 +1023,14 @@
+ 
+     *portsc &= ~PORTSC_RO_MASK;
+     *portsc |= val;
++    if (s->tdi) {
++        /* PSPD: 00 = full, 01 = low, 10 = high speed (valid while connected) */
++        uint32_t pspd = 0;
++        if (dev && dev->attached) {
++            pspd = dev->speed == USB_SPEED_HIGH ? 2 : dev->speed == USB_SPEED_LOW ? 1 : 0;
++        }
++        *portsc = (*portsc & ~(3u << 26)) | (pspd << 26);
++    }
+     trace_usb_ehci_portsc_change(addr + s->portscbase, addr >> 2, *portsc, old);
+ }
+ 
+@@ -2333,6 +2344,10 @@
+     if (ehci_async_enabled(ehci) || ehci->astate != EST_INACTIVE) {
+         need_timer++;
+         ehci_advance_async_state(ehci);
++        if (ehci->tdi && ehci->async_stepdown == 0) {
++            /* async work happened: keep microframe polling for a while */
++            ehci->tdi_busy_until = t_now + 5 * FRAME_TIMER_NS;
++        }
+     }
+ 
+     ehci_commit_irq(ehci);
+@@ -2353,6 +2368,16 @@
+         if (ehci->int_req_by_async && (ehci->usbsts & USBSTS_INT)) {
+             expire_time = t_now +
+                 NANOSECONDS_PER_SECOND / (FRAME_TIMER_FREQ * 4);
++            ehci->int_req_by_async = false;
++        } else if (ehci->tdi && t_now < ehci->tdi_busy_until) {
++            /*
++             * ChipIdea (i.MX6, see chipidea.c): while the async schedule is busy,
++             * look again every microframe. The guest links the next qTD of a
++             * transfer (mass-storage CBW -> data -> CSW) with plain memory writes we
++             * can't see, so waiting a whole frame per stage made every request
++             * ~5 ms. A real controller picks it up within a microframe.
++             */
++            expire_time = t_now + UFRAME_TIMER_NS;
+             ehci->int_req_by_async = false;
+         } else {
+             expire_time = t_now
+--- a/hw/usb/hcd-ehci.h
++++ b/hw/usb/hcd-ehci.h
+@@ -253,6 +253,8 @@
+     uint16_t opregbase;
+     uint16_t portscbase;
+     uint16_t portnr;
++    bool tdi;      /* TDI/ChipIdea: PORTSC[27:26] port speed + USBSTS[7] SRI */
++    int64_t tdi_busy_until;  /* ChipIdea: poll each microframe until then (async busy) */
+ 
+     /* properties */
+     uint32_t maxframes;
+@@ -358,6 +360,7 @@
+     uint16_t opregbase;
+     uint16_t portscbase;
+     uint16_t portnr;
++    bool tdi;      /* TDI/ARC/ChipIdea extensions: PORTSC[27:26] speed, USBSTS SRI */
+ };
+ 
+ OBJECT_DECLARE_SIMPLE_TYPE(FUSBH200EHCIState, FUSBH200_EHCI)
+--- a/hw/usb/hcd-ehci-sysbus.c
++++ b/hw/usb/hcd-ehci-sysbus.c
+@@ -66,6 +66,7 @@
+     s->opregbase = sec->opregbase;
+     s->portscbase = sec->portscbase;
+     s->portnr = sec->portnr;
++    s->tdi = sec->tdi;
+     s->as = &address_space_memory;
+ 
+     usb_ehci_init(s, DEVICE(obj));

@@ -134,7 +134,7 @@ of it on every write (`_compose_ctrl`):
 - browse counter (`0x54`) and INPUT SELECT holds, as before. One-shot `a`/`b` ride on top.
 Buttons are **held while pressed** (real-hardware semantics), not one-shots. The panel sends all
 analog/switch defaults once at load (`pushInitialState`) so the emulator matches the UI. Needs
-QEMU **patch 14** (frame hook + `MAXHOLD` 64). The control table `C` in `panel.html` is
+`xdj-panel.c` (was patch 14)** (frame hook + `MAXHOLD` 64). The control table `C` in `panel.html` is
 runtime-verified — see the top table in `docs/subucom-frame-map.md` before changing a spec.
 
 ## USB mount from the panel (`/usb`, LOAD buttons)
@@ -142,19 +142,19 @@ runtime-verified — see the top table in `docs/subucom-frame-map.md` before cha
 (in the app, via the Tauri dialog plugin — `window.__TAURI__.dialog.open`; dev browser falls back to
 a typed-path prompt), then POSTs `<slot> <path>` to `/usb`. `mount_usb()`:
 1. **Ejects first** (`device_del` + `drive_del` of the previous panel insert *and* the boot
-   auto-insert id) and removes any stale patch-06 fault file — USB STOP is only a firmware unmount, the QEMU
+   auto-insert id) and removes any stale `xdj-panel.c` (was patch 06) fault file — USB STOP is only a firmware unmount, the QEMU
    device stays plugged, so a second LOAD would hit "Duplicate ID" / port-in-use.
 2. Symlinks the image to a space-free path, `drive_add`+`device_add` on the hub (port **1.2** = usb1,
    **1.1** = usb2) with a **fresh unique id**, read-only (`snapshot=on`) by default.
 3. Does **not** write `/tmp/usb_insert` / `/tmp/usb2_insert` (it removes any stale one). Those
-   patch-06 files drive rbp's active-low USB **fault** flags — asserting one causes "USB Error.
-   Remove the device." The attach alone wakes HOST1 (patch 10). Mirrors the host's `maybe_insert_usb`
+   `xdj-panel.c` (was patch 06) files drive rbp's active-low USB **fault** flags — asserting one causes "USB Error.
+   Remove the device." The attach alone wakes HOST1 (`xdj-usbnc.c` (was patch 10)). Mirrors the host's `maybe_insert_usb`
    (docs/usb-mount-howto.md, usb-slot-topology.md). Monitor access: QMP `human-monitor-command`
    when `--qmp` is set, else raw HMP on `--mon`.
 
-## LEDs, meters, jog rings (`/leds`, QEMU patch 15)
+## LEDs, meters, jog rings (`/leds`, `xdj-panel.c` (was patch 15))
 rbp sends the panel MCU its LED state in the MOSI half of every sub-ucom burst (`SubTxData`).
-Patch 15 publishes each change as `T <40 hex>\n`: **socket mode** = back up the `xdjctrl`
+`xdj-panel.c` (was patch 15) publishes each change as `T <40 hex>\n`: **socket mode** = back up the `xdjctrl`
 connection (the server's `_leds_sock_loop` shares `_conn["ctrl"]` with `_sock_send`); **file
 mode** = `/tmp/subucom_tx` (`XDJ_TX_PATH`), polled by `_leds_file_loop`. The server fans it out
 over SSE; `panel.html` `startLeds()` → `applyLeds(hex)`:
@@ -167,7 +167,7 @@ over SSE; `panel.html` `startLeds()` → `applyLeds(hex)`:
 - `t:'meter'` cells (`meter:<byte>`) = 12-segment bars from a 16-bit LE bitmask (CH1 `0x0e`,
   CH2 `0x0c`, MASTER `0x08`). Grid rows, not flex (WKWebView flex-fill collapse).
 - jog cells get a `.jogled` ring: byte `0x00`/`0x04` = 1..36 position, 0 = full ring, else off.
-- **byte `0x14`** (QEMU patch 17, the 21st byte) = source-key LEDs from GPIO 162–165: bit0 rekordbox,
+- **byte `0x14`** (`xdj-board.c` (was patch 17), the 21st byte) = source-key LEDs from GPIO 162–165: bit0 rekordbox,
   bit1 MIDI, bit2 USB1, bit3 USB2 — the `src_*` keys use `led:[0x14,n]` like any other LED.
   `server.py` accepts 40 or 42 hex.
 Map + open items: `docs/subucom-led-map.md`. Map a new LED with `debug/ledprobe.py` (file mode).

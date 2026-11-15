@@ -12,7 +12,7 @@
 #     spi_board_info (see qemu_prepare.py).
 #   - console on ttymxc0 (sabresd's early-console UART) -> serial 0 here.
 #   - video=mxcfb0:dev=ldb (SABRE-SD panel is LVDS) so /dev/fb0 comes up.
-#   - the nand image is attached to uSDHC3 via -drive id=xdjsd (patch 03).
+#   - the nand image is attached to uSDHC3 via -drive id=xdjsd (03-sabresd-board (was patch 03)).
 #
 # The boot splash renders at 32bpp, then the app switches the framebuffer to
 # 16bpp RGB565 and the main deck UI comes up. The QEMU scanout
@@ -77,7 +77,7 @@ if [ -n "${XDJUSB:-}" ]; then
 fi
 
 # Audio: route the deck's master output to a host sink so you actually hear it.
-# The deck playhead (and the PCM) is slaved to the audio clock (patch 11), and the
+# The deck playhead (and the PCM) is slaved to the audio clock (xdj-audio.c (was patch 11)), and the
 # guest's ALSA ring is tiny (~2.9ms). QEMU's audio mixer polls voices on a timer
 # whose default period (10ms) is far too coarse to pace that ring -- the guest
 # then refills at ~27% of real time and the stream starves (very slow / silent).

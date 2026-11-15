@@ -1,12 +1,10 @@
-XDJ-RX patch 21: sub-millisecond main-loop timers on macOS (no ppoll).
+XDJ-RX: sub-millisecond main-loop timers on macOS (no ppoll).
 
-QEMU's qemu_poll_ns() falls back to g_poll() with the timeout rounded UP to whole
-milliseconds when ppoll is unavailable (macOS), so every sub-ms timer fired ~1 ms
-late. That is what kept EHCI microframe polling (patch 20) from helping: each USB
-transfer stage still cost ~1.5 ms. Now a timeout with a sub-ms part polls for the
-whole milliseconds, then nanosleeps the remainder and polls once more without
-blocking; an fd event during the remainder is noticed < 1 ms late (no worse than
-before). Linux hosts (ppoll) are unaffected. Guest audio and host CPU unchanged.
+qemu_poll_ns() rounded every timeout UP to whole milliseconds when ppoll is
+unavailable, so on macOS every sub-ms QEMU timer fired ~1 ms late (EHCI microframe
+polling, any other fine-grained device timer). Poll for the whole milliseconds,
+then nanosleep the remainder and poll once more without blocking. Linux hosts
+(ppoll) are unaffected. (Was patch 21.)
 
 --- a/util/qemu-timer.c
 +++ b/util/qemu-timer.c

@@ -660,7 +660,7 @@ async function startScreen(){
   }
 }
 
-// ===== LEDs / meters (rbp -> panel MCU SubTxData, QEMU patch 15) =========
+// ===== LEDs / meters (rbp -> panel MCU SubTxData, xdj-panel.c (was patch 15)) =========
 // The server streams rbp's 20-byte LED payload as hex over SSE (/leds). Map:
 // docs/subucom-led-map.md. Blinking is rbp's own doing (it toggles the bit), so we
 // just mirror the bits.

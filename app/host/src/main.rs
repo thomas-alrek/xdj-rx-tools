@@ -283,7 +283,7 @@ fn log_stdio(cfg: &Config, name: &str) -> (Stdio, Stdio) {
     (Stdio::inherit(), Stdio::inherit())
 }
 
-/// Start QEMU. `update` boots the firmware-update path (QEMU patch 19: the sub-ucom's
+/// Start QEMU. `update` boots the firmware-update path (xdj-board.c (was patch 19): the sub-ucom's
 /// update-request line GPIO3_IO30 held HIGH from reset).
 fn spawn_qemu(cfg: &Config, update: bool) -> std::io::Result<Child> {
     let args = qemu_args(cfg);
@@ -499,7 +499,7 @@ fn clean_stale(cfg: &Config) {
     for s in ["qmp.sock", "vnc.sock", "ctrl.sock", "key.sock", "power.sock", "usb_usb1.img", "usb_usb2.img"] {
         let _ = std::fs::remove_file(cfg.rt(s));
     }
-    // The patch-06 USB fault-flag hooks are still global /tmp paths (not yet
+    // The xdj-panel.c (was patch 06) USB fault-flag hooks are still global /tmp paths (not yet
     // per-instance) — clear them so a stale fault doesn't carry across runs.
     for f in ["/tmp/usb_insert", "/tmp/usb2_insert"] {
         let _ = std::fs::remove_file(f);
@@ -782,7 +782,7 @@ fn unmount_host_disk(dev: &str) {
 
 /// If XDJ_USB is set, mount it into the guest AFTER rbp is polling, reproducing the
 /// hardware insert choreography (hub-only boot -> post-boot device_add; no GPIO —
-/// the patch-06 lines are USB fault flags, see the note at the insert below).
+/// the xdj-panel.c (was patch 06) lines are USB fault flags, see the note at the insert below).
 ///   XDJ_USB=<image.img|/dev/diskN>   the backing: a disk image, or a host block device
 ///   XDJ_USB_SLOT=usb1|usb2           front slot (default usb2 = hub port 1.1)
 ///   XDJ_USB_WRITE=1                   persist writes (default: snapshot=on, discarded —
@@ -848,10 +848,10 @@ async fn maybe_insert_usb(runtime_dir: PathBuf) {
                     eprintln!("[usb] qmp: {t}");
                 }
             }
-            // Do NOT create the patch-06 file here: GPIO4_IO30 / GPIO7_IO12 are rbp's
+            // Do NOT create the xdj-panel.c (was patch 06) file here: GPIO4_IO30 / GPIO7_IO12 are rbp's
             // active-low USB *fault* flags, not insert-detect lines, and holding one low
             // raises "USB Error. Remove the device." once the slot mounts. The attach
-            // itself wakes HOST1 (patch 10, USBNC OWIR). Clear any stale fault file.
+            // itself wakes HOST1 (xdj-usbnc.c (was patch 10), USBNC OWIR). Clear any stale fault file.
             let _ = std::fs::remove_file(fault);
             eprintln!("[usb] attached; the slot should mount shortly");
         }

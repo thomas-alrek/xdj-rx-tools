@@ -6,7 +6,7 @@ state of every panel LED, the level meters and the jog-ring illumination.** The 
 just lights what it is told, and rbp produces blinking by toggling the bit itself.
 To light an LED, mirror the bit.
 
-QEMU **patch 15** captures this frame and publishes it (below). The web panel lights its
+`xdj-panel.c` (was patch 15)** captures this frame and publishes it (below). The web panel lights its
 buttons, meters and jog rings from it.
 
 ## Transport (verified live 2026-11-15)
@@ -19,7 +19,7 @@ buttons, meters and jog rings from it.
   is this payload plus the CRC.
 - rbp sends the frame from early boot; at idle it is constant. While a deck plays it changes about
   20×/s, because of the meters and the jog ring.
-- Patch 15 publishes each change as one line `T <40 hex>\n`. It goes up the `xdjctrl` chardev in
+- `xdj-panel.c` (was patch 15) publishes each change as one line `T <40 hex>\n`. It goes up the `xdjctrl` chardev in
   socket mode (the app), or atomically into `XDJ_TX_PATH` (default `/tmp/subucom_tx`) in file mode.
   Frames whose CRC doesn't match are dropped. `XDJ_TX_LOG=1` logs every changed burst to stderr
   as `SUBUCOM-TX <len> <hex>`.
@@ -82,7 +82,7 @@ The rekordbox / MIDI / USB1 / USB2 key that is the active source glows. rbp driv
 as **GPIO outputs 162–165** (GPIO6_IO02..05, `PanelComController` `FUN_0021a4ac`), **active-high,
 one-hot**: rekordbox = **162**, MIDI = **163**, USB1 = **164**, USB2 = **165**. Found by reading
 GPIO6 `DR` (`0x020B0000`; `GDIR` = `0x3c`) over the monitor while pressing each key.
-QEMU **patch 17** mirrors them and appends one byte to the LED line: `T <40 hex> <2 hex>` (bit0
+`xdj-board.c` (was patch 17)** mirrors them and appends one byte to the LED line: `T <40 hex> <2 hex>` (bit0
 rekordbox … bit3 USB2); `server.py` passes 42 hex through and the panel reads it as **byte `0x14`**.
 DECK 1/2 and TIME MODE showed no GPIO-output change (not checked further).
 

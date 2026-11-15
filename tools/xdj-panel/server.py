@@ -16,7 +16,7 @@ protocol, and streams the QEMU framebuffer to the browser as raw RGB (drawn on a
   POST /power  on|off|toggle [update] -> power the emulator (xdj-host); GET /power = state
   POST /log/note                 -> append a panel note to the sub-ucom log
   GET  /leds                     -> Server-Sent Events: one "data: <40|42 hex>" per change of
-                                    rbp's 20-byte LED/meter payload (SubTxData, QEMU patch 15;
+                                    rbp's 20-byte LED/meter payload (SubTxData, xdj-panel.c (was patch 15);
                                     layout docs/subucom-led-map.md). /leds?once=1 = current JSON.
 
 A QEMU `screendump` of the 800x480 surface takes ~18 ms, so /raw back-to-back gives
@@ -74,7 +74,7 @@ _CTYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
 
 _grab_lock = threading.Lock()
 
-# LED back-channel (QEMU patch 15). rbp streams its LED / level-meter state to the
+# LED back-channel (xdj-panel.c (was patch 15)). rbp streams its LED / level-meter state to the
 # panel MCU as a SubTxData frame; the harness forwards each change as "T <40 hex>\n" --
 # back up the xdjctrl socket in socket mode, or into TX_PATH in file mode. We keep the
 # latest payload here and fan it out to every /leds SSE client.
@@ -225,7 +225,7 @@ def _insert_pending(update):
 
 
 def _leds_update(hexstr):
-    # "<40 hex>" = SubTxData; QEMU (patch 17) appends " <2 hex>" = source-key LEDs
+    # "<40 hex>" = SubTxData; QEMU (xdj-board.c (was patch 17)) appends " <2 hex>" = source-key LEDs
     # (GPIO 162..165: bit0 rekordbox, bit1 MIDI, bit2 USB1, bit3 USB2). Served as one
     # string: byte 0x14 of the panel's LED array.
     hexstr = hexstr.strip().lower().replace(" ", "")
@@ -731,10 +731,10 @@ def mount_usb(slot, imgpath, write=False):
     if '"error"' in blob or "failed" in blob or "duplicate" in blob or "in use" in blob:
         raise RuntimeError("monitor rejected insert: %s" % outs)
     _usb_cur[slot] = (did, dev)
-    # Do NOT create the patch-06 file (/tmp/usb*_insert) here. Those GPIOs
+    # Do NOT create the xdj-panel.c (was patch 06) file (/tmp/usb*_insert) here. Those GPIOs
     # (GPIO4_IO30 / GPIO7_IO12) are rbp's active-low USB *fault* flags, not
     # insert-detect lines; holding one low raises "USB Error. Remove the device."
-    # once the slot mounts. Host1 resume on attach comes from patch 10 (USBNC OWIR).
+    # once the slot mounts. Host1 resume on attach comes from xdj-usbnc.c (was patch 10) (USBNC OWIR).
     # Clear a stale fault file left by an older build/tool so the flag stays OK.
     try:
         os.remove(fault)

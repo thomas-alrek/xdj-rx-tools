@@ -20,12 +20,12 @@ DirectFB gfxdriver removed so DirectFB software-renders). Committed.
 timeout!`, between `ehci_hcd` and `fsl-ehci.0`) was the i.MX6 OTG controller
 waiting for a VBUS/session-valid transition that QEMU's stubbed USB PHY + chipidea
 OTGSC (both read 0) could never deliver, so it only continued at the kernel
-timeout. Fixed by `qemu/patches/12-imx6-otg-vbus-valid.patch` (OTGSC reports a
+timeout. Fixed by the OTG VBUS change, now in `qemu/patches/04-usb-chipidea-hub.patch` (was patch 12; OTGSC reports a
 settled host VBUS/session); the OTG core now registers with no gap and USB still
 mounts. Firmware untouched.
 
 **Auto-level:** the mixer is auto-initialised to an audible default on boot
-(`qemu/patches/13-imx6-subucom-autolevel.patch`) so a loaded deck plays without a
+(auto-level, now in `qemu/xdj/xdj-panel.c`; was patch 13) so a loaded deck plays without a
 manual gain/routing inject. The sub-ucom harness uses the panel SPI poll itself as
 the "rbp is up" signal and, after a short settle, **merges** an audible default
 (both channels → DECK + unity-ish gains) into the frame per-control: a
@@ -37,18 +37,18 @@ hold present); deck plays to the host (master SDMA peak ~85% FS).
 
 ## ✅ A. galcore / Vivante GPU — fully initialises (default path)
 The built-in galcore (Vivante) driver now fully initialises on the default boot path:
-the QEMU GPU stub (patch 02) + GC355 VG core + DVFS GPT kick (patch 05) carry it through
+the QEMU GPU stub (`xdj-display.c` (was patch 02)) + GC355 VG core + DVFS GPT kick (`xdj-display.c` (was patch 05)) carry it through
 init, so `/dev/galcore` exists and boot reaches `#### Application Start!! ###` (details
 below). The rootfs is now byte-for-byte (the DirectFB GAL gfxdriver `libdirectfb_gal.so`
 is kept), and **the full live deck UI renders through galcore** (pixel-identical to
 software render, no `gui_task` crash). The last blocker — galcore's runtime 2D
-command-completion — is emulated in patch 02 (`xdj_gpu_cmd_event`): the stub parses each
+command-completion — is emulated in `xdj-display.c` (was patch 02) (`xdj_gpu_cmd_event`): the stub parses each
 submitted command's EVENT id (`LOAD_STATE 0x0E01`) from the command buffer and raises
 exactly that completion event, instead of a fixed mask, so rbp's per-commit blit stalls
 release. Full write-up in `docs/gpu2d-handover.md` ("Runtime 2D completion").
 
 **The full-galcore path is now the DEFAULT (and only) boot path.** Making galcore fully
-initialise needs patch 02's GC320 2D identity (so galcore derives `gcvHARDWARE_2D` and
+initialise needs `xdj-display.c` (was patch 02)'s GC320 2D identity (so galcore derives `gcvHARDWARE_2D` and
 clears `-22`) plus the mapped GC355 VG core and the DVFS GPT kick. That path is now
 **always on** and boots to the live UI on `-smp 1` (the launch default); the old
 software-render behaviour is reachable only as a regression escape hatch
@@ -63,9 +63,9 @@ cleared:
    masked then busy-polls `GICC_HPPIR` for a settling tick. Under emulation the
    one-shot GPT clockevent isn't reprogrammed in that masked window, so nothing goes
    pending and the poll spins forever (proved at the hang via gdb: no enabled IRQ
-   pending → HPPIR stays `0x3ff`). **Fix: `imx_gpt_kick()`** (patch 05) raises the GPT
-   OF1 interrupt (GIC ID 87) from the CCM clock-step register writes (patch 05 hooks
-   `imx6_ccm_write` on CCSR/CACRR/CGPR; patch 02 arms it on the full-galcore path,
+   pending → HPPIR stays `0x3ff`). **Fix: `imx_gpt_kick()`** (`xdj-display.c` (was patch 05)) raises the GPT
+   OF1 interrupt (GIC ID 87) from the CCM clock-step register writes (`xdj-display.c` (was patch 05) hooks
+   `imx6_ccm_write` on CCSR/CACRR/CGPR; `xdj-display.c` (was patch 02) arms it on the full-galcore path,
    now the default).
 2. **Idle-loop feedback (benign side-effect).** The GPT kick also wakes the CPU-idle
    WFI, whose `imx6q_enter_wait` runs its own bus-freq DVFS → a busy idle↔busfreq loop.
@@ -79,7 +79,7 @@ cleared:
    (`gckOS_ReadRegisterEx` core 2, regs 0x004/0x000) read the unmapped region, got 0,
    and spun forever (the "idle"/"clock-running" bits never set) — found by walking the
    blocked init thread's stack (PID 1, `tasks_off=0xb8`) to `gckOS_Delay` inside the
-   poll. **Fix: map a GC355 VG stub at `0x02204000`** (patch 02, on the default path),
+   poll. **Fix: map a GC355 VG stub at `0x02204000`** (`xdj-display.c` (was patch 02), on the default path),
    reusing the idle/clock-reporting stub ops. With it, galcore's core init completes and
    boot runs through to Application Start.
 
@@ -92,7 +92,7 @@ with Ghidra (on a sliced region ELF — the full 13 MB kernel times out Ghidra's
 and with gdb hardware breakpoints (which *do* work here — the old "breakpoints
 non-functional" note was wrong). `gckGALDEVICE_Construct` builds three cores (3D/2D/VG);
 the 2D-type check passes (GC320 derives type 2), and the real blockers were all in the
-**GC355 VG (OpenVG) core**, fixed in the GPU stub (patch 02):
+**GC355 VG (OpenVG) core**, fixed in the GPU stub (`xdj-display.c` (was patch 02)):
 - **VG construct `-13` (gcvSTATUS_NOT_SUPPORTED):** `FUN_806919a0` requires VG
   chipFeatures (0x01c) **bit 28** set (it derives `(chipFeatures & 0x1fffffff) >> 28`
   and rejects the core if zero). The stub now reports VG features with that bit.
@@ -145,10 +145,10 @@ note was from the pre-SABRE-SD wiring and is obsolete.
 
 **✅ FIXED (2026-11-15):** the `USB Error. Remove the device.` modal on a *correct*
 post-boot insert was self-inflicted. The insert recipe touched `/tmp/usb2_insert`
-(patch 06), which drives GPIO7_IO12 LOW. That line (and GPIO4_IO30 for USB1) is rbp's
+(`xdj-panel.c` (was patch 06)), which drives GPIO7_IO12 LOW. That line (and GPIO4_IO30 for USB1) is rbp's
 **active-low USB fault flag** (gpiodrv `0xcc`/`0x7e`; `UsbStorageManager` listener
 `0x250020`: LOW on a mounted slot → show caution, HIGH → clear after 500 ms). Insert
-with `device_add` only (patch 10 wakes HOST1) → mount + library accept, no modal.
+with `device_add` only (`xdj-usbnc.c` (was patch 10) wakes HOST1) → mount + library accept, no modal.
 Panel server + xdj-host fixed; see `docs/usb-mount-howto.md`. Don't `device_del` to retry (it tears down the
 `id=usbstick` drive backend); reboot + insert once instead.
 
@@ -178,13 +178,19 @@ advances in real time. A host sonifier pinned to SDMA **ch1 = MasterOut** emits 
 audio to the host** (both decks, user-confirmed). Gated on: routing = DECK (source switch
 `B 33 80`/`B 43 80`) + gains up (on-air gate `FUN_00065028`). See `docs/audio-handover.md`,
 `docs/audio-silence-handover.md`, memory `[[deck-playback-audio-gated]]`.
-**Stutter fixed (2026-11-15, patch 16):** periods were completed in bursts from the host audio
+**Stutter fixed (2026-11-15, `xdj-audio.c` (was patch 16)):** periods were completed in bursts from the host audio
 callback (~2 per call = the guest's whole ALSA ring), so rbp logged constant `ALSA: Resolve xrun`.
 A pacer thread now completes one period per 1.45 ms, rate-locked to the host via a PCM FIFO. Two
 decks + BEAT FX + Color FX + tempo: 378 → 2 guest xruns in 30 s, no host underruns.
 Cost: ~20 ms more output latency (`XDJ_AUDIO_LATENCY_MS`).
 
-**Track-load speed (2026-11-15, patches 20–21):** loads were ~4× slower than hardware. Causes found:
+**QEMU source consolidated (2026-11-16):** the 21 stacked patches became device models in
+`qemu/xdj/*.c` (board, display, audio, panel, MFi, USBNC; ~2.8k lines of real source) plus 5 small
+patches to stock QEMU files. Behaviour unchanged: a fresh extract + patches + sync builds and is
+byte-identical to the runtime-verified tree (boot/UI, audio, panel input + LEDs, auth chip, 480 Mbit/s
+USB, test and update modes re-checked). Old patch numbers → new homes: skill `qemu-imx6-patches`.
+
+**Track-load speed (2026-11-15, `04-usb-chipidea-hub` + `05-macos-submillisecond-poll` (was patches 20–21)):** loads were ~4× slower than hardware. Causes found:
 the USB hub + stick enumerated at **12 Mbit/s** (ChipIdea PORTSC speed bits not modelled; fixing that
 exposed a BSP busy-wait on USBSTS SRI that hung `khubd`), and on macOS every sub-ms QEMU timer fired
 ~1 ms late (no `ppoll`), so each 8 KB request (the firmware's own cap) cost ~4.6 ms. Now 480 Mbit/s,
@@ -193,15 +199,15 @@ turnaround per request; rbp's thread pinning matches the real dual-core unit.
 
 **Desktop app power control (2026-11-15):** the app starts **powered off**; the panel's POWER switch
 (red LED) / File menu powers QEMU on or cuts it (`xdj-host` `power.sock`). USB images loaded while off
-are inserted after boot; *Enter Firmware Update Mode* boots the update path (patch 19). The window is
+are inserted after boot; *Enter Firmware Update Mode* boots the update path (`xdj-board.c` (was patch 19)). The window is
 the deck only, aspect-locked.
 
-**Auth chip / service modes (2026-11-15, patches 18–19):** E-7206 AUTH CHIP ERROR fixed (I2C4 +
+**Auth chip / service modes (2026-11-15, `xdj-mfi.c` + `xdj-board.c` (was patches 18–19)):** E-7206 AUTH CHIP ERROR fixed (I2C4 +
 MFi coprocessor identity at 0x10); sub-ucom reports version 0.35; **test mode** (hold MEMORY + TEMPO
 RANGE from boot) and **firmware-update mode** (`XDJ_BOOT_UPDATE=1`, D001 screen) both reachable.
 Update past D001 (NAND write, sub-ucom reflash) not emulated. See `docs/service-modes.md`.
 
-**Source-key LEDs (2026-11-15, patch 17):** the active rekordbox/MIDI/USB1/USB2 key glows on the
+**Source-key LEDs (2026-11-15, `xdj-board.c` (was patch 17)):** the active rekordbox/MIDI/USB1/USB2 key glows on the
 panel, mirrored from rbp's GPIO outputs 162–165. The rear LINE/PHONO switch (GPIO 119/120) is not
 emulated (no external audio input).
 
@@ -221,7 +227,7 @@ root cause of "rbp never reads the panel" was *not* a disabled poll — it was a
 (triggered by a USB fault-flag GPIO reading 0 — originally thought to be USB-detect) via `peer->send()` *before* the panel
 poll thread exists, and spins forever. QEMU reset every GPIO input to 0 ("USB
 present"); on real hw these USB fault flags idle HIGH. **Fixed** by
-`qemu/patches/04-imx6-usb-detect-gpio.patch` (reset GPIO4_IO30 / GPIO7_IO12 high —
+the GPIO reset levels, now `qemu/xdj/xdj-board.c` (was patch 04) (reset GPIO4_IO30 / GPIO7_IO12 high —
 no firmware change). Verified on a stock boot: `/dev/subucom_spi1.0` open, the
 `UiMain` poll thread running + epoll up, and `SUBUCOM_TRACE=1` shows it clocking
 the SSI slave (~300k MOSI bytes). Full story + symbols:
@@ -238,7 +244,7 @@ byte-swapped) matches the LE halfword at `[0x62]`. Sections: `refFmtData` +0x04,
 `refCommonData` +0x14 (global buttons `[0x1a]/[0x1b]`), `tMixerData` +0x24/+0x34
 (per-deck analog), `refOtherData` +0x44. The `E-7206 AUTH CHIP ERROR` was a red
 herring *for panel decode* (it is the missing MFi auth chip on I2C4 — fixed 2026-11-15 by
-patch 18, see `docs/service-modes.md`), and the StaticInfomation handshake is a lazy
+`xdj-mfi.c` (was patch 18), see `docs/service-modes.md`), and the StaticInfomation handshake is a lazy
 version-screen cache (confirmed uninitialized in rbp's live memory), not on the
 button path. Full protocol: `docs/rbp-and-panel-protocol.md`.
 
@@ -248,7 +254,7 @@ a QEMU-slave byte-order bug: the ECSPI shifts each 32-bit word MSB-first, so
 `rbp_buf[j] = s->frame[(j&~3)+(3-(j&3))]` (a **per-word byte reversal, no linear
 shift**), but the slave used `memcpy(s->frame+3, …)` (bogus +3). That pushed the
 CRC off the 100-byte burst → rbp read CRC=0 → every frame rejected → **zero
-decode**. **Fixed in patch 02** (`s->frame[i]=rbp[(i&~3)+(3-(i&3))]`). Verified
+decode**. **Fixed in `xdj-display.c` (was patch 02)** (`s->frame[i]=rbp[(i&~3)+(3-(i&3))]`). Verified
 live (gdb): CRC matches, the handler runs the NORMAL decode path (`this+0x88`
 initialised, frames diffed), and a control change drives the section decoder →
 dispatch. Corrections to above: the "injecting a control crashes rbp" proof was a
@@ -285,8 +291,8 @@ the **working** gdbstub (`-gdb tcp::1234`, resume with gdb `c`), `scratchpad/lau
 
 **Control transport (standalone-app Phase 1, ✅ 2026-11-12).** Panel control input can now
 reach the harness over **per-instance QEMU chardevs** instead of the global `/tmp` files:
-`id=xdjctrl` carries the sub-ucom snapshot (patches 07/13), `id=xdjkey` the main-ucom key int
-(patch 09). QEMU is the socket server; the client writes the ENTIRE state as a NUL-terminated
+`id=xdjctrl` carries the sub-ucom snapshot (`xdj-panel.c` (was patches 07–13)), `id=xdjkey` the main-ucom key int
+(`xdj-panel.c` (was patch 09)). QEMU is the socket server; the client writes the ENTIRE state as a NUL-terminated
 record (one record == one atomic ctrl-file write; empty = release). The text spec and parsing
 are unchanged — only the byte source moved (shared `xdj_parse_ctrl`). Enable by launching with
 `XDJ_RUNTIME_DIR=<dir>` (sockets at `<dir>/ctrl.sock`,`key.sock`) and point the panel at them:
@@ -294,10 +300,10 @@ are unchanged — only the byte source moved (shared `xdj_parse_ctrl`). Enable b
 the old `/tmp`-file behavior (env override `XDJ_CTRL_PATH`/`XDJ_KEY_PATH`), so inj.py and the
 sweep tools are unchanged. See `docs/standalone-app-roadmap.md` §Phase 1.
 
-**✅ Panel LEDs, level meters, jog rings (2026-11-15, patch 15).** The other direction of the
+**✅ Panel LEDs, level meters, jog rings (2026-11-15, `xdj-panel.c` (was patch 15)).** The other direction of the
 sub-ucom burst: rbp's MOSI `SubTxData` carries every panel LED, the CH1/CH2/MASTER meters and
 the jog-ring position. It has a 20-byte payload with a CRC-16/X-25 at `[0x16]`, and deck 2 sits at
-deck 1 + 4 bytes. Patch 15 publishes each change (`T <hex>` up `xdjctrl`, or `/tmp/subucom_tx` in
+deck 1 + 4 bytes. `xdj-panel.c` (was patch 15) publishes each change (`T <hex>` up `xdjctrl`, or `/tmp/subucom_tx` in
 file mode). The panel server streams it at `GET /leds` (SSE), and the web panel lights PLAY, CUE,
 LOOP IN/OUT, RELOOP, REV, SLIP, SYNC, MASTER, M.T, VINYL, the pad modes and pads, CUE1/2,
 the four colour FX, BEAT FX ON, the meters and the jog rings. Verified live in file and socket

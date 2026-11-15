@@ -31,7 +31,7 @@ Run `procedure_callers(FUN_0002be28)` and read each caller's args. Baseline inve
 |---|---|---|---|
 | `FUN_00066688` (mixer master) | 117,118 | out | analog-mux command (NOT the switch input) |
 | `_INIT_72` | 134,135 | out | global control lines |
-| `FUN_0021a4ac` (PanelComController) | 162-165 | out | **source-key LEDs** rekordbox/MIDI/USB1/USB2 (active-high, one-hot; live-verified; QEMU patch 17 mirrors them) |
+| `FUN_0021a4ac` (PanelComController) | 162-165 | out | **source-key LEDs** rekordbox/MIDI/USB1/USB2 (active-high, one-hot; live-verified; `xdj-board.c` (was patch 17) mirrors them) |
 | `FUN_0024e834` (deck/Player ctor) | 126 / 204 | in | USB fault flag USB1/USB2, active-low (LOW on a mounted slot → "USB Error. Remove the device."; NOT insert-detect) |
 | `FUN_0023b5e8` (ISetting/SwitchTestMode) | 119,120 | in | **EXT TYPE (LINE/PHONO) rear switch** ch0/ch1: `+0xa0/+0xb0 = (level != 0)` (`0x23bd1c`), and SW TEST shows `0`→LINE, `≠0`→PHONO (`0x2409d0`) ⇒ **HIGH = PHONO, LOW = LINE** (static; runtime path is code `0x1013` `LinePhonoSW`, not traced). Not emulated — no external audio. |
 | `FUN_00274a38` | 119,120,146,149,158-161 | in | main-ucom top-panel keys |
@@ -52,9 +52,9 @@ is the one the SW TEST screen (`FUN_002404ac`) reads as `*(page+0x44)+0xNN`.
 If an input GPIO's observer is null and the owner never reads it, the level is sampled
 once (e.g. at init) — note that; a live drive then won't re-trigger.
 
-## 3. Drive it emulator-side (QEMU patch 09 mechanism)
+## 3. Drive it emulator-side (`xdj-panel.c` (was patch 09) mechanism)
 
-`qemu/patches/09-imx6-mainucom-keys.patch` already captures every i.MX6 GPIO bank in
+`qemu/xdj/xdj-board.c` (was patch 09) already captures every i.MX6 GPIO bank in
 `g_xdj_gpio[8]` and drives pins:
 ```c
 qemu_set_irq(qdev_get_gpio_in(g_xdj_gpio[gpio>>5], gpio & 31), level); // level 1=HIGH 0=LOW
@@ -72,7 +72,7 @@ Build-tree source: `build/qemu-src/qemu-11.1.0/hw/arm/fsl-imx6.c`. Rebuild with
 Read every bank's `DR`/`GDIR` over the monitor (`xp/1wx <base>` / `<base>+4`), perform the action
 (press a key, change a mode), read again, and diff the `GDIR`-set bits. That is how 162–165 were
 identified as the source-key LEDs. To expose an output to the panel, `qdev_connect_gpio_out()` the
-bank's pin to a `qemu_allocate_irq()` handler (see patch 17) — the i.MX GPIO model raises it on
+bank's pin to a `qemu_allocate_irq()` handler (see `xdj-board.c` (was patch 17)) — the i.MX GPIO model raises it on
 every `DR` write while `GDIR` is set.
 Static RE without REA: `pip install capstone pyelftools` in a venv and disassemble rbp (ARM mode,
 non-PIE); resolve `ldr rX, [pc, #imm]` literals to find string/object references.
@@ -98,6 +98,6 @@ status). `python3 mon.py "xp/1wx 0x020a8008"`.
 
 ## References
 - `docs/subucom-frame-map.md` (control map), `docs/deck-line-switch-handover.md`,
-  `docs/rbp-and-panel-protocol.md`, `qemu/patches/09-imx6-mainucom-keys.patch`.
+  `docs/rbp-and-panel-protocol.md`, `qemu/xdj/xdj-board.c` + `qemu/xdj/xdj-panel.c` (the `/tmp/mainkey` hook).
 - Tools: `tools/xdj-panel/debug/{mon.py,rsp.py,tables.py}`.
 - Sibling skills: [map-subucom-button], [map-subucom-fader], [map-subucom-knob], [map-subucom-rotary].

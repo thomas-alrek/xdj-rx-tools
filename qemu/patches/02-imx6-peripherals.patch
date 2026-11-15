@@ -1,0 +1,155 @@
+XDJ-RX: i.MX6 peripheral fixes the firmware needs.
+
+  - imx6_src.c: self-clearing GPU reset bits (galcore waits for them).
+  - imx_gpt.c/.h + imx6_ccm.c: imx_gpt_kick() and a DVFS clock-step hook
+    (xdj_dvfs_gpt_kick, hw/arm/xdj/xdj-display.c) so the bus-frequency settling
+    wait completes.
+  - imx_gpio.c/.h: "psr-reset" property -- per-bank pad levels at reset (keys and
+    fault lines idle HIGH, the update-mode strap).
+  - imx_spi.c: call xdj_subucom_frame_start() (weak) at the start of every ECSPI
+    burst so the front-panel MCU frame is presented byte-aligned.
+(Replaces the old patches 01, 04, 05 and the imx_spi.c part of 14.)
+
+--- a/hw/misc/imx6_src.c
++++ b/hw/misc/imx6_src.c
+@@ -239,6 +239,14 @@
+             /* We pretend the IPU1 is reset */
+             clear_bit(SW_IPU1_RST_SHIFT, &current_value);
+         }
++        /*
++         * No GPU is modelled.  The i.MX6 Vivante GPU driver resets the GPU by
++         * setting the SW_GPU3D_RST (bit 1) / SW_GPU2D_RST (bit 4) bits in
++         * SRC_SCR and then polling until they self-clear.  Pretend the reset
++         * completed immediately so the guest does not spin forever.
++         */
++        clear_bit(1, &current_value); /* SW_GPU3D_RST */
++        clear_bit(4, &current_value); /* SW_GPU2D_RST */
+         s->regs[index] = current_value;
+         break;
+     default:
+--- a/hw/timer/imx_gpt.c
++++ b/hw/timer/imx_gpt.c
+@@ -171,6 +171,18 @@
+     } else {
+         qemu_irq_lower(s->irq);
+     }
++}
++
++/*
++ * XDJ-RX: deliver an immediate output-compare-1 interrupt (a timer "tick") to
++ * unblock the i.MX6 bus-frequency DVFS settling wait.  Sets OF1 and raises the
++ * line exactly as the GPT does for a real compare; the kernel's handler clears
++ * SR, dropping the line.  See hw/arm/xdj/xdj-display.c (xdj_dvfs_gpt_kick).
++ */
++void imx_gpt_kick(IMXGPTState *s)
++{
++    s->sr |= GPT_SR_OF1;
++    imx_gpt_update_int(s);
+ }
+ 
+ static uint32_t imx_gpt_update_count(IMXGPTState *s)
+--- a/include/hw/timer/imx_gpt.h
++++ b/include/hw/timer/imx_gpt.h
+@@ -120,4 +120,7 @@
+     const IMXClk *clocks;
+ };
+ 
++/* XDJ-RX: deliver an immediate OF1 tick to unblock the bus-freq DVFS wait. */
++void imx_gpt_kick(IMXGPTState *s);
++
+ #endif /* IMX_GPT_H */
+--- a/hw/misc/imx6_ccm.c
++++ b/hw/misc/imx6_ccm.c
+@@ -499,6 +499,13 @@
+ 
+     return (uint64_t)value;
+ }
++
++/*
++ * XDJ-RX: hand the kernel a GPT timer tick to unblock the bus-frequency DVFS
++ * settling wait (see hw/arm/xdj/xdj-display.c).  A no-op unless the machine armed it
++ * on the full-galcore boot path (the default; disabled by XDJ_GPU2D_OFF=1).
++ */
++void xdj_dvfs_gpt_kick(void);
+ 
+ static void imx6_ccm_write(void *opaque, hwaddr offset, uint64_t value,
+                            unsigned size)
+@@ -513,6 +520,23 @@
+      * cannot be written to.
+      */
+     s->ccm[index] = (uint32_t)value;
++
++    /*
++     * The bus-frequency DVFS steps the ARM/AHB/DDR clocks by writing these
++     * registers with CPU interrupts masked, then busy-polls GICC_HPPIR for the
++     * next timer tick as a settling delay.  That poll deadlocks under emulation
++     * (the one-shot GPT is not reprogrammed in the masked window), so deliver
++     * the awaited tick on each clock-step write that precedes a settling wait.
++     */
++    switch (index) {
++    case CCM_CCSR:      /* clock switcher (step/pll2 bypass)       */
++    case CCM_CACRR:     /* ARM clock root divider                  */
++    case CCM_CGPR:      /* INT_MEM_CLK_LPM DDR handshake enable     */
++        xdj_dvfs_gpt_kick();
++        break;
++    default:
++        break;
++    }
+ }
+ 
+ static uint64_t imx6_analog_read(void *opaque, hwaddr offset, unsigned size)
+--- a/hw/gpio/imx_gpio.c
++++ b/hw/gpio/imx_gpio.c
+@@ -288,6 +288,12 @@
+     DEFINE_PROP_BOOL("has-edge-sel", IMXGPIOState, has_edge_sel, true),
+     DEFINE_PROP_BOOL("has-upper-pin-irq", IMXGPIOState, has_upper_pin_irq,
+                      false),
++    /*
++     * Reset value of the pad-status register (external input levels). Normally
++     * 0, but a board can set it so pins driven high by an external pull-up read
++     * high out of reset (e.g. the XDJ-RX USB "device present" detect lines).
++     */
++    DEFINE_PROP_UINT32("psr-reset", IMXGPIOState, psr_reset, 0),
+ };
+ 
+ static void imx_gpio_reset(DeviceState *dev)
+@@ -296,7 +302,7 @@
+ 
+     s->dr       = 0;
+     s->gdir     = 0;
+-    s->psr      = 0;
++    s->psr      = s->psr_reset;
+     s->icr      = 0;
+     s->imr      = 0;
+     s->isr      = 0;
+--- a/include/hw/gpio/imx_gpio.h
++++ b/include/hw/gpio/imx_gpio.h
+@@ -56,6 +56,7 @@
+     bool has_edge_sel;
+     uint32_t edge_sel;
+     bool has_upper_pin_irq;
++    uint32_t psr_reset;
+ 
+     qemu_irq irq[2];
+     qemu_irq output[IMX_GPIO_PIN_COUNT];
+--- a/hw/ssi/imx_spi.c
++++ b/hw/ssi/imx_spi.c
+@@ -166,6 +166,18 @@
+ 
+     DPRINTF("Begin: TX Fifo Size = %d, RX Fifo Size = %d\n",
+             fifo32_num_used(&s->tx_fifo), fifo32_num_used(&s->rx_fifo));
++
++    /*
++     * XDJ-RX: a new burst begins -- let the sub-ucom panel slave (hw/arm/xdj/xdj-panel.c)
++     * rebuild its 100-byte frame (operator holds, auto-level, CRC) and rewind
++     * its MISO position. Weak so this file still links without the slave.
++     */
++    {
++        extern void __attribute__((weak)) xdj_subucom_frame_start(void);
++        if (xdj_subucom_frame_start) {
++            xdj_subucom_frame_start();
++        }
++    }
+ 
+     while (!fifo32_is_empty(&s->tx_fifo)) {
+         int tx_burst = 0;

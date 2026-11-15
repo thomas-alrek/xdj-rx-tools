@@ -1,0 +1,131 @@
+/*
+ * Pioneer XDJ-RX emulation -- USBNC (USB non-core) wakeup-request registers
+ *
+ * Part of the XDJ-RX device models for the i.MX6 SoC (hw/arm/fsl-imx6.c calls
+ * into these from its realize; see xdj.h). Maintained in the xdj-rx-tools repo
+ * under qemu/xdj/ and copied into hw/arm/xdj/ by qemu/build-qemu.sh -- edit it
+ * there, not in the QEMU tree.
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+#include "qemu/osdep.h"
+#include "qapi/error.h"
+#include "qemu/timer.h"
+#include "qemu/audio.h"
+#include "hw/ssi/ssi.h"
+#include "hw/i2c/i2c.h"
+#include "hw/arm/fsl-imx6.h"
+#include "xdj.h"
+#include "hw/misc/unimp.h"
+#include "hw/usb/imx-usb-phy.h"
+#include "hw/usb/chipidea.h"
+#include "hw/usb/ehci-regs.h"
+#include "hw/core/boards.h"
+#include "hw/core/qdev-properties.h"
+#include "system/system.h"
+#include "chardev/char.h"
+#include "chardev/char-fe.h"
+#include "qemu/error-report.h"
+#include "qemu/module.h"
+#include "target/arm/cpu-qom.h"
+#include "ui/console.h"
+#include "system/address-spaces.h"
+#include "system/runstate.h"
+#include "qemu/main-loop.h"
+#include "qemu/thread.h"
+#include "qemu/rcu.h"
+#ifdef __APPLE__
+#include <pthread/qos.h>
+#endif
+
+/*
+ * i.MX6 USBNC (USB non-core) wakeup-request model.
+ *
+ * The stock firmware validates a USB remote-wakeup before resuming a
+ * suspended host controller: _is_usbh1_wakeup() (and the h2/h3 variants)
+ * read the controller's USBNC CTRL register (USBOH3 + 0x800 + 4*n) and
+ * require bit 31 (OWIR, the wakeup-interrupt-request status) to be set.
+ * QEMU does not model the USBNC block, so that read returned 0 and the
+ * guest looped printing "host1, _is_usbh1_wakeup, invalid wake up" and
+ * never resumed Host1 -- so a USB stick inserted (or re-enumerated) AFTER
+ * the controller had bus-suspended never enumerated. Real hardware inserts
+ * the stick after boot, which is exactly this path.
+ *
+ * Model the four CTRL registers and derive OWIR live from the matching
+ * EHCI root port's Force-Port-Resume bit: when a device remote-wakes a
+ * suspended controller, ehci_wakeup() sets PORTSC_FPRES and we surface that
+ * as OWIR=1 so the firmware treats it as a valid wakeup and resumes. FPRES
+ * is transient -- the guest clears it once the resume completes -- so OWIR
+ * self-clears and the controller can suspend again and STAY suspended.
+ * (An earlier version also OR'd in PORTSC_CSC, but CSC latches on every
+ * connect/DISconnect until the guest clears it, so after the first churn it
+ * kept OWIR asserted and the guest resumed -> re-enumerated -> disconnected
+ * -> resumed ... forever; FPRES-only breaks that loop.) OWIR is read-only
+ * (never stored); other CTRL bits are stored so guest read-modify-write
+ * behaves. The region sits in the unused tail of USBOH3 (the four chipidea
+ * cores occupy 0x000/0x200/0x400/0x600; USBNC is at +0x800), so it cannot
+ * perturb the existing enumeration path.
+ */
+#define FSL_IMX6_USBNC_OFFSET 0x800
+#define USBNC_CTRL_OWIR       (1u << 31)
+
+typedef struct XdjUsbnc {
+    MemoryRegion mem;
+    EHCIState   *ehci[FSL_IMX6_NUM_USBS];
+    uint32_t     ctrl[FSL_IMX6_NUM_USBS];
+} XdjUsbnc;
+
+static XdjUsbnc g_xdj_usbnc;
+
+static uint64_t xdj_usbnc_read(void *opaque, hwaddr offset, unsigned size)
+{
+    XdjUsbnc *u = opaque;
+
+    if ((offset & 3) == 0 && offset < FSL_IMX6_NUM_USBS * 4) {
+        unsigned n = offset / 4;
+        uint32_t val = u->ctrl[n];
+        EHCIState *e = u->ehci[n];
+
+        if (e && (e->portsc[0] & PORTSC_FPRES)) {
+            val |= USBNC_CTRL_OWIR;
+        }
+        return val;
+    }
+    return 0;
+}
+
+static void xdj_usbnc_write(void *opaque, hwaddr offset,
+                            uint64_t value, unsigned size)
+{
+    XdjUsbnc *u = opaque;
+
+    if ((offset & 3) == 0 && offset < FSL_IMX6_NUM_USBS * 4) {
+        /* OWIR is read-only wakeup status; never let the guest store it. */
+        u->ctrl[offset / 4] = (uint32_t)value & ~USBNC_CTRL_OWIR;
+    }
+}
+
+static const MemoryRegionOps xdj_usbnc_ops = {
+    .read = xdj_usbnc_read,
+    .write = xdj_usbnc_write,
+    .endianness = DEVICE_NATIVE_ENDIAN,
+    .impl = { .min_access_size = 4, .max_access_size = 4 },
+};
+
+/* realize: USBNC wakeup registers, after the ChipIdea cores exist */
+void xdj_usbnc_realize(FslIMX6State *s, DeviceState *dev)
+{
+    uint16_t i;
+
+    /* USBNC (USB non-core) wakeup registers -- see XdjUsbnc above. */
+    for (i = 0; i < FSL_IMX6_NUM_USBS; i++) {
+        g_xdj_usbnc.ehci[i] = &SYS_BUS_EHCI(&s->usb[i])->ehci;
+        g_xdj_usbnc.ctrl[i] = 0;
+    }
+    memory_region_init_io(&g_xdj_usbnc.mem, OBJECT(dev), &xdj_usbnc_ops,
+                          &g_xdj_usbnc, "xdj-usbnc", 0x100);
+    memory_region_add_subregion(get_system_memory(),
+                                FSL_IMX6_USBOH3_USB_ADDR + FSL_IMX6_USBNC_OFFSET,
+                                &g_xdj_usbnc.mem);
+
+}
