@@ -938,7 +938,7 @@ dependencies = [
 
 [[package]]
 name = "xdj-fw"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "aes",
  "cbc",
@@ -951,7 +951,7 @@ dependencies = [
 
 [[package]]
 name = "xdj-host"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "axum",
  "crc32fast",
