@@ -474,6 +474,8 @@ void xdj_srcled_set(void *opaque, int n, int level)
  * the command prefix, so rbp_buf[j] == slave frame[j+3]).
  * `touch /tmp/subucom_menu` injects one menu-button press.
  */
+static int xdj_subucom_version(void);   /* SUB bootloader block, below */
+
 void xdj_subucom_frame_start(void)
 {
     XdjSubucom *s = g_xdj_subucom;
@@ -665,16 +667,12 @@ void xdj_subucom_frame_start(void)
     memset(rbp, 0, sizeof(rbp));
     /* Bytes 2-3 = the panel MCU's firmware version word (LE). rbp keeps it from
      * the first frame (boot-key handler FUN_00282630 -> +0x94) and shows it as
-     * "SUB Ver." in test mode ("%x.%02x" of hi, lo). The real MCU reports the version
-     * of the firmware in its flash; where PANELCOM keeps it is not located yet, so we
-     * report 0 ("0.00", what the harness always sent) rather than invent one -- rbp
-     * only rejects 0xffff. XDJ_SUBUCOM_VER=<hex> sets it (e.g. 35 = 0.35, update 2.21). */
+     * "SUB Ver." in test mode ("%x.%02x" of hi, lo). Like the real MCU we report the
+     * version of the firmware in its flash (xdj_bl_scan_version, $XDJ_PANELCOM_IMG);
+     * with no firmware installed, 0 ("0.00") -- rbp only rejects 0xffff.
+     * XDJ_SUBUCOM_VER=<hex> overrides. */
     {
-        static int ver = -1;
-        if (ver < 0) {
-            const char *e = getenv("XDJ_SUBUCOM_VER");
-            ver = e ? (int)(strtoul(e, NULL, 16) & 0xffff) : 0x0000;
-        }
+        int ver = xdj_subucom_version();
         rbp[2] = ver & 0xff;
         rbp[3] = (ver >> 8) & 0xff;
     }
@@ -823,6 +821,69 @@ static void xdj_bl_flash_io(bool save)
     }
 }
 
+/*
+ * The version word the MCU reports in normal-mode frame bytes 2-3, read from the
+ * firmware in its flash. PANELCOM (M16C/60 code) builds the first word of its SPI TX
+ * frame with four byte-immediate stores and then copies the frame body:
+ *     mov.b:z #0,0x1328 ; mov.b:s #0x35,0x1329 ; mov.b:z #0,0x132a ; mov.b:z #0,0x132b
+ *     mov.b:g 0x117b,0x132c ...                       (update 2.21, at 0xC9CEB)
+ * The wire word [hi, lo, 0, 0] reaches rbp word-reversed as bytes 2-3 = lo, hi.
+ * We match that shape (stores to A..A+3, then 72 ff <src> <A+4>) in the APL area,
+ * so it doesn't depend on one build's addresses. Returns -1 if none/ambiguous.
+ */
+static int xdj_bl_scan_version(const uint8_t *f)
+{
+    uint32_t p, found = 0;
+    int ver = -1;
+    for (p = 0xc0000; p + 24 < 0xf0000; p++) {
+        uint32_t q = p, a = 0;
+        int k, imm[4];
+        for (k = 0; k < 4; k++) {
+            uint32_t ad;
+            if (f[q] == 0xb7) {              /* mov.b:z #0,abs16 */
+                imm[k] = 0; ad = f[q + 1] | (f[q + 2] << 8); q += 3;
+            } else if (f[q] == 0xc7) {       /* mov.b:s #imm8,abs16 */
+                imm[k] = f[q + 1]; ad = f[q + 2] | (f[q + 3] << 8); q += 4;
+            } else {
+                break;
+            }
+            if (k == 0) {
+                a = ad;
+            } else if (ad != a + k) {
+                break;
+            }
+        }
+        if (k == 4 && f[q] == 0x72 && f[q + 1] == 0xff &&
+            (uint32_t)(f[q + 4] | (f[q + 5] << 8)) == a + 4) {
+            ver = (imm[0] << 8) | imm[1];
+            found++;
+        }
+    }
+    return found == 1 ? ver : -1;
+}
+
+static int xdj_sub_version = -1;   /* -1 = (re)compute on the next frame */
+
+static int xdj_subucom_version(void)
+{
+    if (xdj_sub_version < 0) {
+        const char *e = getenv("XDJ_SUBUCOM_VER");
+        int v = -1;
+        if (e) {
+            v = (int)(strtoul(e, NULL, 16) & 0xffff);
+        } else if (xdj_bl_flash || getenv("XDJ_PANELCOM_IMG")) {
+            xdj_bl_flash_io(false);          /* load the installed flash image */
+            v = xdj_bl_scan_version(xdj_bl_flash);
+        }
+        xdj_sub_version = v < 0 ? 0 : v;     /* nothing installed / not found: 0 */
+        if (getenv("XDJ_BL_LOG")) {
+            fprintf(stderr, "SUB version word %04x (%s)\n", xdj_sub_version,
+                    e ? "XDJ_SUBUCOM_VER" : v < 0 ? "no firmware found" : "from flash");
+        }
+    }
+    return xdj_sub_version;
+}
+
 static void xdj_bl_respond(XdjSubucom *s, uint8_t cmd, uint8_t status)
 {
     uint16_t c;
@@ -883,6 +944,7 @@ static void xdj_bl_command(XdjSubucom *s)
     } else if (cmd == 0xf9) {               /* reset: back to the application */
         s->bl_exit = true;
         xdj_bl_flash_io(true);
+        xdj_sub_version = -1;                /* rebooted MCU reports the new firmware */
     }                                        /* 0xf1 init: just OK */
     if (getenv("XDJ_BL_LOG")) {
         fprintf(stderr, "SUB-BL cmd=%02x sub=%02x len=%u addr=%06x -> %s\n",

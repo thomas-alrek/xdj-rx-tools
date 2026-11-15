@@ -91,7 +91,14 @@ flashed `0xC0000-0xEFFFF` equals the `.mot` byte for byte. Sequence: `FA`, `F1`,
 `.bot`/`.fix`. MAIN then fails at `/dev/mtd4` (no NAND) → "MAIN firmware update failed" /
 "UPDATE: ERROR Linux Kernel Bank B." — phase 2.
 The "current SUB version" `????` is the u-boot env `rev_subucom` (main `0xb680`; likewise `rev_kernel`, `rev_pioneer`, `release`), unset in the SD env — not the MCU.
-Open: where PANELCOM.mot keeps the version the MCU reports in frame bytes 2–3 (M16C-family image: fixed vectors at `0xFFFDC`, reset → `0x12C5A` in `.bot`; no ASCII/word `0x0035` constant found by search — needs an M16C disassembler, e.g. binutils `m32c-elf-objdump`).
+**SUB version word** (frame bytes 2–3): PANELCOM is M16C/60 code (fixed vectors `0xFFFDC`, reset →
+`0x12C5A` in `.bot`). The APL builds its SPI TX frame at RAM `0x1328`; the first word is four
+byte-immediate stores (`b7 28 13` / `c7 35 29 13` / `b7 2a 13` / `b7 2b 13` at `0xC9CEB` = 0x00,
+0x35, 0, 0) followed by `72 ff <src> 2c 13` copying the body. `xdj_bl_scan_version()` matches that
+shape (unique in 2.21) in the flash → version 0x0035 → test mode "SUB Ver.0.35" (verified); no
+flash / no match → 0. Disassembler: binutils 2.42 `--target=m32c-elf --with-system-zlib`,
+`make MAKEINFO=true all-binutils`, `objdump -b binary -m m16c` (it shows some valid opcodes as
+`*unknown*`, e.g. `e7` = `cmp.b:s #imm,abs16`).
 
 ## Status
 - [x] 0 references  - [x] 1 SUB  - [ ] 2 NAND  - [ ] 3 MAIN  - [ ] 4 NAND boot  - [ ] 5 provisioning/app

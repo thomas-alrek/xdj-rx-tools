@@ -20,7 +20,7 @@ ON/OFF is pressed.
 
 | mode | content | use for us |
 |---|---|---|
-| 1 | VERSION INFORMATION: SYSTEM / SUB / APL / KERNEL, language, MAC, JOG uCom status | shows our sub-ucom version word (`0.00` by default; `XDJ_SUBUCOM_VER=35` → 0.35) |
+| 1 | VERSION INFORMATION: SYSTEM / SUB / APL / KERNEL, language, MAC, JOG uCom status | shows the version of the firmware in the emulated MCU flash (`XDJ_PANELCOM_IMG`; `0.00` if none; `XDJ_SUBUCOM_VER` overrides) |
 | 2 / 3 | all LEDs + LCDs off / on | LED-bit oracle (everything set) |
 | 4 | LCD patterns (push = colour/black/white, BACK = back) | — |
 | 5 | **KEY/LED TEST**: each key lights its LED | **LED-map oracle**: the manual's key→LED table names LEDs we haven't mapped (USB1/2 STOP, MASTER REC, BROWSE, TAGLIST, INFO, MENU, TAP, LOAD1/2) |

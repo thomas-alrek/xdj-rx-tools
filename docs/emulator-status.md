@@ -203,7 +203,7 @@ are inserted after boot; *Enter Firmware Update Mode* boots the update path (`xd
 the deck only, aspect-locked.
 
 **Auth chip / service modes (2026-11-15, `xdj-mfi.c` + `xdj-board.c` (was patches 18–19)):** E-7206 AUTH CHIP ERROR fixed (I2C4 +
-MFi coprocessor identity at 0x10); sub-ucom reports version 0 (`XDJ_SUBUCOM_VER` sets it; where PANELCOM stores its version is not yet located); **test mode** (hold MEMORY + TEMPO
+MFi coprocessor identity at 0x10); sub-ucom reports the version of the PANELCOM firmware in its emulated flash (0 if none); **test mode** (hold MEMORY + TEMPO
 RANGE from boot) and **firmware-update mode** (`XDJ_BOOT_UPDATE=1`, D001 screen) both reachable.
 Update past D001 (NAND write, sub-ucom reflash) not emulated. See `docs/service-modes.md`.
 
