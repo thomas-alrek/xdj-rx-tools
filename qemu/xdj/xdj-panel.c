@@ -716,6 +716,20 @@ void xdj_subucom_frame_start(void)
     rbp[0x62] = crc & 0xff;
     rbp[0x63] = (crc >> 8) & 0xff;
 
+    /* XDJ_FRAME_LOG=1: trace the first frames (boot-key checks read only the first). */
+    {
+        static int flog = -1, nlog = 0;
+        if (flog < 0) {
+            const char *e = getenv("XDJ_FRAME_LOG");
+            flog = (e && e[0] && e[0] != '0') ? 1 : 0;
+        }
+        if (flog && nlog < 12) {
+            fprintf(stderr, "XDJ-FRAME %d t=%" PRId64 "ms snap=%d [12]=%02x [13]=%02x [33]=%02x\n",
+                    nlog++, qemu_clock_get_ms(QEMU_CLOCK_REALTIME),
+                    (int)strlen(xdj_ctrl_chan.cur), rbp[0x12], rbp[0x13], rbp[0x33]);
+        }
+    }
+
     /*
      * Present the frame on MISO.  The ECSPI shifts each 32-bit word MSB-first,
      * so the wire byte at position p lands in rbp's logical read buffer B at
@@ -1074,6 +1088,16 @@ static uint32_t xdj_subucom_transfer(SSIPeripheral *dev, uint32_t val)
 static void xdj_subucom_realize(SSIPeripheral *dev, Error **errp)
 {
     g_xdj_subucom = XDJ_SUBUCOM(dev);
+    /*
+     * Attach the control chardevs now, not lazily on the first SPI frame: the frontend
+     * handlers only start draining the socket once attached, so a snapshot the panel
+     * sent right after QEMU started was read *after* the frame that bound it was built
+     * -- rbp's first frame came up empty and anything held from boot (test mode's
+     * MEMORY + TEMPO RANGE, read on the first frame only) was missed about half the
+     * time. Bound here, the snapshot is in xdj_ctrl_chan.cur long before rbp polls.
+     */
+    xdj_ctrl_bind(&xdj_ctrl_chan);
+    xdj_ctrl_bind(&xdj_key_chan);
 }
 
 static void xdj_subucom_class_init(ObjectClass *klass, const void *data)
