@@ -7,8 +7,8 @@
 //!     dir: `-qmp unix:qmp.sock` (lifecycle), `-vnc unix:vnc.sock` (the host-side
 //!     scanout surface -- the same surface cocoa/screendump draw, so zero guest
 //!     changes), and the Phase-1 control chardevs `id=xdjctrl` / `id=xdjkey`.
-//!   * **The panel sidecar** (`tools/xdj-panel/server.py`) run as a child, pointed
-//!     at `ctrl.sock`/`key.sock` -- the roadmap's "run server.py as a sidecar first,
+//!   * **The virtual panel** (src/panel.rs, in-process; port of tools/xdj-panel/server.py)
+//!     serving panel.html and driving `ctrl.sock`/`key.sock` -- was the roadmap's "run server.py as a sidecar first,
 //!     port to Rust later" path. It still serves panel.html + composes controls.
 //!   * **A WebSocket<->VNC bridge**: noVNC speaks RFB-over-WebSocket while QEMU
 //!     `-vnc` is raw RFB over the unix socket, so we accept WS clients and pump bytes
@@ -19,6 +19,10 @@
 //! browser tab). For now, open the printed URL in a browser to drive the emulator.
 //!
 //! Firmware is never touched -- everything here is host-side orchestration.
+
+mod firmware;
+mod nand;
+mod panel;
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -35,16 +39,14 @@ use tokio_tungstenite::tungstenite::Message;
 struct Config {
     repo: PathBuf,
     runtime_dir: PathBuf,
-    fw_dir: PathBuf, // prepared firmware dir (boot blobs + nand.img)
+    fw_dir: PathBuf, // prepared firmware dir (see FW_* below)
     qemu: PathBuf,
-    nand: PathBuf,
-    python: String,                // sidecar (server.py) interpreter
-    python_bin: Option<PathBuf>,   // bundled python with the prep deps, if packaged
-    server_py: PathBuf,
-    scripts_dir: PathBuf,          // dir holding xdjrx_upd.py / qemu_prepare.py / build-nand.py
-    e2fsprogs_dir: Option<PathBuf>, // bundled mke2fs/debugfs dir, prepended to PATH for prep
-    novnc_dir: Option<PathBuf>,    // bundled noVNC dir, passed to the sidecar
-    knobs_dir: Option<PathBuf>,    // bundled Knobs (audio-knobs) dist, passed to the sidecar
+    nand: PathBuf,      // the unit's NAND flash (raw pages + OOB, qemu/xdj/xdj-nand.c)
+    panelcom: PathBuf,  // the panel MCU's flash (qemu/xdj/xdj-panel.c bootloader)
+    panel_dir: PathBuf,            // panel.html / logs.html / assets
+    scripts_dir: PathBuf,          // dir holding xdjrx_upd.py / qemu_prepare.py / qemu/xdj_*.py
+    novnc_dir: PathBuf,            // noVNC (served at /novnc/)
+    knobs_dir: PathBuf,            // Knobs (audio-knobs) dist (served at /knobs/)
     qemu_data: Option<PathBuf>,    // bundled qemu data dir (keymaps); passed via -L when packaged
     panel_port: u16,
     vnc_ws_port: u16,
@@ -100,7 +102,7 @@ impl Config {
                     repo.join("build/run")
                 }
             });
-        // The prepared firmware (boot blobs + nand.img). Phase 3 sets XDJ_FW_DIR to a
+        // The prepared firmware + the unit's flash. The shell sets XDJ_FW_DIR to a
         // per-firmware app-data dir; the dev default is the build/qemu layout.
         let fw_dir = std::env::var_os("XDJ_FW_DIR")
             .map(PathBuf::from)
@@ -115,26 +117,16 @@ impl Config {
             });
         let nand = std::env::var_os("XDJ_NAND")
             .map(PathBuf::from)
-            .unwrap_or_else(|| fw_dir.join("nand.img"));
-        let python_bin = res
-            .as_ref()
-            .map(|r| r.join("python/bin/python3"))
-            .filter(|p| p.exists());
-        let python = std::env::var("XDJ_PYTHON").unwrap_or_else(|_| {
-            python_bin
-                .as_ref()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "python3".into())
-        });
-        let server_py = pick("panel/server.py", "tools/xdj-panel/server.py");
+            .unwrap_or_else(|| fw_dir.join(FW_NAND));
+        let panelcom = fw_dir.join(FW_PANELCOM);
+        let panel_dir = pick("panel", "tools/xdj-panel");
         let scripts_dir = res
             .as_ref()
             .map(|r| r.join("scripts"))
             .filter(|p| p.is_dir())
             .unwrap_or_else(|| repo.clone());
-        let e2fsprogs_dir = res.as_ref().map(|r| r.join("e2fsprogs")).filter(|p| p.is_dir());
-        let novnc_dir = res.as_ref().map(|r| r.join("ui/novnc")).filter(|p| p.is_dir());
-        let knobs_dir = res.as_ref().map(|r| r.join("ui/knobs")).filter(|p| p.is_dir());
+        let novnc_dir = pick("ui/novnc", "app/ui/novnc");
+        let knobs_dir = pick("ui/knobs", "app/ui/node_modules/audio-knobs/dist");
         let qemu_data = res.as_ref().map(|r| r.join("qemu-bios")).filter(|p| p.is_dir());
         let panel_port = env_u16("XDJ_PANEL_PORT", 8765);
         let vnc_ws_port = env_u16("XDJ_VNC_WS_PORT", 6080);
@@ -146,11 +138,9 @@ impl Config {
             fw_dir,
             qemu,
             nand,
-            python,
-            python_bin,
-            server_py,
+            panelcom,
+            panel_dir,
             scripts_dir,
-            e2fsprogs_dir,
             novnc_dir,
             knobs_dir,
             qemu_data,
@@ -165,20 +155,40 @@ impl Config {
         self.runtime_dir.join(name)
     }
 
-    /// Python for the prep scripts: the bundled interpreter (deps installed) if
-    /// packaged, else the dev venv / uv / system python.
-    fn prep_python(&self) -> (String, Vec<String>) {
-        if let Some(p) = &self.python_bin {
-            (p.to_string_lossy().into_owned(), vec![])
-        } else {
-            python_cmd(&self.repo)
+
+
+    /// Is firmware installed on the unit's NAND? `provisioned.stamp` caches the answer;
+    /// without it, ask the NAND itself, as the real unit's u-boot would: the ALL update's
+    /// last step (the updater's finEnv) writes `release=` into the u-boot env, which the
+    /// factory env (fw_env.txt) lacks. That catches a provisioning whose console success
+    /// line never came: the updater sits on "Firmware update is complete. Turn off the
+    /// power" until the user does, and the power cut ends the init script before
+    /// it prints "### USB update success.".
+    fn provisioned(&self) -> bool {
+        let stamp = self.fw_dir.join(FW_PROVISIONED);
+        if stamp.exists() {
+            return true;
         }
+        let installed = nand::installed(&self.nand);
+        if installed {
+            eprintln!("[host] NAND holds an installed firmware (env has release=); marking provisioned");
+            let _ = std::fs::write(&stamp, b"");
+        }
+        installed
     }
 
-    fn script(&self, name: &str) -> PathBuf {
-        self.scripts_dir.join(name)
-    }
 }
+
+// ---- The prepared firmware dir (app-data/<hash>/) ----
+// prep writes the first four; the host creates the rest when it provisions/boots.
+const FW_ISO: &str = "fw.iso";                 // the decrypted firmware (fw_env.txt for init)
+const FW_STICK: &str = "update-stick.img";     // FAT16 stick with XDJRX.UPD (provisioning)
+// + vmlinux.bin / tramp.bin / atags.bin: the firmware's own kernel, host-loaded to
+//   provision (update mode needs no SD card and no installed kernel)
+const FW_NAND: &str = "nand-flash.img";        // the unit's NAND (XDJ_NAND_IMG)
+const FW_PANELCOM: &str = "panelcom-flash.bin"; // the panel MCU flash (XDJ_PANELCOM_IMG)
+const FW_PROVISIONED: &str = "provisioned.stamp"; // the ALL update completed
+const FW_NAND_BOOT: &str = "nand-boot";        // per-power-on blobs from the NAND kernel
 
 fn default_qemu(repo: &Path) -> PathBuf {
     // Prefer the patched build; fall back to PATH's qemu-system-arm.
@@ -226,8 +236,8 @@ fn env_u16(key: &str, default: u16) -> u16 {
         .unwrap_or(default)
 }
 
-fn qemu_args(cfg: &Config) -> Vec<String> {
-    let q = cfg.fw_dir.clone();
+fn qemu_args(cfg: &Config, boot_dir: &Path) -> Vec<String> {
+    let q = boot_dir.to_path_buf();
     let s = |p: PathBuf| p.to_string_lossy().into_owned();
     let mut a: Vec<String> = vec![
         "-M".into(), "sabrelite".into(),
@@ -252,7 +262,7 @@ fn qemu_args(cfg: &Config) -> Vec<String> {
         "-device".into(), format!("loader,file={},addr=0x10008000,force-raw=on", s(q.join("vmlinux.bin"))),
         "-device".into(), format!("loader,file={},addr=0x10000100,force-raw=on", s(q.join("atags.bin"))),
         "-device".into(), format!("loader,file={},addr=0x10000000,cpu-num=0", s(q.join("tramp.bin"))),
-        "-drive".into(), format!("if=none,id=xdjsd,file={},format=raw", s(cfg.nand.clone())),
+        // No SD card: like the real unit, everything lives in NAND (XDJ_NAND_IMG).
         "-nic".into(), "user".into(),
         // USB-2.0 hub on HOST1 (guest bus 2 = usb-bus.1), hub-only boot: the front
         // slots live behind this hub at devpaths 2-1.1 (USB2) / 2-1.2 (USB1). Storage
@@ -283,12 +293,49 @@ fn log_stdio(cfg: &Config, name: &str) -> (Stdio, Stdio) {
     (Stdio::inherit(), Stdio::inherit())
 }
 
-/// Start QEMU. `update` boots the firmware-update path (xdj-board.c (was patch 19): the sub-ucom's
-/// update-request line GPIO3_IO30 held HIGH from reset).
-fn spawn_qemu(cfg: &Config, update: bool) -> std::io::Result<Child> {
-    let args = qemu_args(cfg);
-    eprintln!("[host] qemu{}: {} {}", if update { " (update mode)" } else { "" },
-              cfg.qemu.display(), args.join(" "));
+/// What a power-on boots. The unit always boots from NAND (`XDJ_BOOT_MEDIA=nand`, the
+/// SBMR1 straps); a blank unit is first provisioned with the firmware's own ALL update.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum BootKind {
+    /// Blank unit: erase the NAND (+ seed the factory u-boot env), boot the firmware's
+    /// kernel host-loaded in update mode with the MCU reporting ALL, insert the update
+    /// stick -> the updater installs u-boot/kernel/rootfs/data/gui/PANELCOM + its env.
+    Provision,
+    /// Normal boot of what is installed (u-boot's bootcmd_nand, done host-side).
+    Normal,
+    /// Firmware-update mode on an installed unit (File > Enter Firmware Update Mode).
+    Update,
+}
+
+/// Prepare the flash + boot blobs for `kind` (blocking; well under a second).
+fn prepare_boot(cfg: &Config, kind: BootKind) -> Result<PathBuf, String> {
+    match kind {
+        BootKind::Provision => {
+            // A factory-fresh unit: erased NAND with u-boot's default env, erased MCU flash.
+            let _ = std::fs::remove_file(cfg.fw_dir.join(FW_PROVISIONED));
+            let _ = std::fs::remove_file(&cfg.panelcom);
+            let iso = std::fs::read(cfg.fw_dir.join(FW_ISO)).map_err(|e| format!("{FW_ISO}: {e}"))?;
+            let fw_env = firmware::env_lines(&firmware::iso_read(&iso, "/images/fw_env.txt")?);
+            nand::init(&cfg.nand, &fw_env)?;
+            eprintln!("[host] NAND erased, factory env ({} vars) written", fw_env.len());
+            Ok(cfg.fw_dir.clone())
+        }
+        BootKind::Normal | BootKind::Update => {
+            // Every power-on re-reads kernel_bank + that bank's uImage, so a firmware
+            // update done inside the emulator boots the new kernel, as on the unit.
+            let dir = cfg.fw_dir.join(FW_NAND_BOOT);
+            nand::boot(&cfg.nand, &dir)?;
+            Ok(dir)
+        }
+    }
+}
+
+/// Start QEMU for `kind` (see BootKind). Update/Provision hold the sub-ucom's
+/// update-request line GPIO3_IO30 HIGH from reset (xdj-board.c).
+fn spawn_qemu(cfg: &Config, kind: BootKind) -> Result<Child, String> {
+    let boot_dir = prepare_boot(cfg, kind)?;
+    let args = qemu_args(cfg, &boot_dir);
+    eprintln!("[host] qemu ({kind:?}): {} {}", cfg.qemu.display(), args.join(" "));
     // A fresh console.log per power-on (the sidecar's System log and the USB-insert
     // wait both read it), and no stale sockets from the previous run.
     for s in ["qmp.sock", "vnc.sock", "ctrl.sock", "key.sock", "console.log"] {
@@ -297,12 +344,23 @@ fn spawn_qemu(cfg: &Config, update: bool) -> std::io::Result<Child> {
     let (out, err) = log_stdio(cfg, "qemu.log");
     let mut c = Command::new(&cfg.qemu);
     c.args(&args).current_dir(&cfg.repo).stdout(out).stderr(err).kill_on_drop(true);
-    if update {
-        c.env("XDJ_BOOT_UPDATE", "1");
-    } else {
-        c.env_remove("XDJ_BOOT_UPDATE");
+    c.env("XDJ_BOOT_MEDIA", "nand")
+        .env("XDJ_NAND_IMG", &cfg.nand)
+        .env("XDJ_PANELCOM_IMG", &cfg.panelcom)
+        .env_remove("XDJ_BOOT_UPDATE")
+        .env_remove("XDJ_UPDATE_TYPE");
+    match kind {
+        BootKind::Provision => {
+            // 0x20 = ALL: the factory install (writes u-boot and creates the data volume;
+            // a user update 0x10 would leave rbp hanging on the splash).
+            c.env("XDJ_BOOT_UPDATE", "1").env("XDJ_UPDATE_TYPE", "20");
+        }
+        BootKind::Update => {
+            c.env("XDJ_BOOT_UPDATE", "1");
+        }
+        BootKind::Normal => {}
     }
-    c.spawn()
+    c.spawn().map_err(|e| format!("spawn {}: {e}", cfg.qemu.display()))
 }
 
 /// Power control channel: a line protocol on `<runtime>/power.sock` used by the panel
@@ -355,31 +413,6 @@ async fn wait_opt(c: &mut Option<Child>) -> std::io::Result<std::process::ExitSt
         Some(ch) => ch.wait().await,
         None => std::future::pending().await,
     }
-}
-
-fn spawn_sidecar(cfg: &Config) -> std::io::Result<Child> {
-    let args = vec![
-        cfg.server_py.to_string_lossy().into_owned(),
-        "--port".into(), cfg.panel_port.to_string(),
-        "--ctrl-sock".into(), cfg.rt("ctrl.sock").to_string_lossy().into_owned(),
-        "--key-sock".into(), cfg.rt("key.sock").to_string_lossy().into_owned(),
-        // QMP socket so the panel's USB LOAD buttons can drive_add/device_add on the hub
-        // (the .app exposes no HMP monitor; QMP accepts our short-lived connections too).
-        "--qmp".into(), cfg.rt("qmp.sock").to_string_lossy().into_owned(),
-    ];
-    eprintln!("[host] sidecar: {} {}", cfg.python, args.join(" "));
-    let (out, err) = log_stdio(cfg, "sidecar.log");
-    let mut c = Command::new(&cfg.python);
-    c.args(&args).current_dir(&cfg.repo).stdout(out).stderr(err).kill_on_drop(true);
-    // Packaged: tell the sidecar where the bundled noVNC lives (its default is a
-    // repo-relative path that doesn't exist in the .app).
-    if let Some(n) = &cfg.novnc_dir {
-        c.env("XDJ_NOVNC_DIR", n);
-    }
-    if let Some(k) = &cfg.knobs_dir {
-        c.env("XDJ_KNOBS_DIR", k);
-    }
-    c.spawn()
 }
 
 /// Accept WS clients and bridge each to QEMU's VNC unix socket (byte-transparent:
@@ -496,8 +529,11 @@ async fn parent_gone() {
 }
 
 fn clean_stale(cfg: &Config) {
-    for s in ["qmp.sock", "vnc.sock", "ctrl.sock", "key.sock", "power.sock", "usb_usb1.img", "usb_usb2.img"] {
+    for s in ["qmp.sock", "vnc.sock", "ctrl.sock", "key.sock", "power.sock"] {
         let _ = std::fs::remove_file(cfg.rt(s));
+    }
+    for slot in ["usb1", "usb2"] {
+        let _ = std::fs::remove_file(usb_link(slot));
     }
     // The xdj-panel.c (was patch 06) USB fault-flag hooks are still global /tmp paths (not yet
     // per-instance) — clear them so a stale fault doesn't carry across runs.
@@ -510,8 +546,18 @@ fn preflight(cfg: &Config) -> Result<(), String> {
     if !cfg.qemu.exists() && cfg.qemu.is_absolute() {
         return Err(format!("qemu not found: {} (build it with qemu/build-qemu.sh, or set XDJ_QEMU)", cfg.qemu.display()));
     }
-    if !cfg.nand.exists() {
-        return Err(format!("nand image not found: {} (build it with qemu/build-nand.sh, or set XDJ_NAND)", cfg.nand.display()));
+    // Provisioning needs the firmware's kernel blobs, the ISO and the update stick; an
+    // installed unit boots from its NAND alone.
+    if !cfg.provisioned() {
+        for f in [FW_ISO, FW_STICK] {
+            let p = cfg.fw_dir.join(f);
+            if !p.exists() {
+                return Err(format!(
+                    "{} missing (prepare a firmware first: `xdj-host prep <firmware.UPD|.zip>`)",
+                    p.display()
+                ));
+            }
+        }
     }
     for b in ["vmlinux.bin", "tramp.bin", "atags.bin"] {
         let p = cfg.fw_dir.join(b);
@@ -522,8 +568,8 @@ fn preflight(cfg: &Config) -> Result<(), String> {
             ));
         }
     }
-    if !cfg.server_py.exists() {
-        return Err(format!("panel sidecar missing: {}", cfg.server_py.display()));
+    if !cfg.panel_dir.join("panel.html").exists() {
+        return Err(format!("panel page missing: {}", cfg.panel_dir.join("panel.html").display()));
     }
     Ok(())
 }
@@ -554,25 +600,33 @@ fn firmware_key_dir() -> PathBuf {
     app_data_root().join("key")
 }
 
-fn is_hex_key(s: &str) -> bool {
-    let t = s.trim();
-    t.len() == 64 && t.bytes().all(|b| b.is_ascii_hexdigit())
-}
 
 /// Resolve the firmware decryption key for the decrypt step: returns extra
 /// xdjrx_upd.py args + env. Prefers the app-data key; falls back to the dev .env that
 /// xdjrx_upd reads; errors only if no key is available anywhere.
-fn resolve_firmware_key(cfg: &Config) -> Result<(Vec<String>, Vec<(&'static str, String)>), String> {
+fn resolve_firmware_key(cfg: &Config) -> Result<[u8; 32], String> {
+    let bad = |p: &Path| format!("{}: not a usable key (64 hex chars, or a passphrase file)", p.display());
     let kf = firmware_key_dir().join("aes256.key");
     if kf.exists() {
-        let content = std::fs::read_to_string(&kf).unwrap_or_default();
-        if is_hex_key(&content) {
-            return Ok((vec![], vec![("XDJRX_AES_KEY", content.trim().to_string())]));
-        }
-        return Ok((vec!["--key-file".into(), kf.to_string_lossy().into_owned()], vec![]));
+        let raw = std::fs::read(&kf).map_err(|e| format!("{}: {e}", kf.display()))?;
+        return Ok(firmware::key_from_hex(&String::from_utf8_lossy(&raw))
+            .unwrap_or_else(|| firmware::key_from_passphrase(&raw)));
     }
-    if cfg.repo.join(".env").exists() || cfg.scripts_dir.join(".env").exists() {
-        return Ok((vec![], vec![])); // dev: xdjrx_upd reads .env
+    // dev: XDJRX_AES_KEY in the environment or a repo .env (as xdjrx_upd.py reads it)
+    if let Ok(v) = std::env::var("XDJRX_AES_KEY") {
+        return firmware::key_from_hex(&v).ok_or_else(|| bad(Path::new("$XDJRX_AES_KEY")));
+    }
+    for envf in [cfg.repo.join(".env"), cfg.scripts_dir.join(".env")] {
+        if let Ok(t) = std::fs::read_to_string(&envf) {
+            for l in t.lines() {
+                if let Some((k, v)) = l.trim().split_once('=') {
+                    if k.trim() == "XDJRX_AES_KEY" {
+                        let v = v.trim().trim_matches('"').trim_matches('\'');
+                        return firmware::key_from_hex(v).ok_or_else(|| bad(&envf));
+                    }
+                }
+            }
+        }
     }
     Err("firmware decryption key required — add your aes256.key in the app first".into())
 }
@@ -593,29 +647,15 @@ fn firmware_hash(path: &Path) -> std::io::Result<String> {
     Ok(hasher.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect())
 }
 
-fn which(bin: &str) -> bool {
-    std::process::Command::new("sh")
-        .arg("-c")
-        .arg(format!("command -v {bin}"))
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
 
-/// A Python with the firmware-tool deps (pycdlib/pycryptodome): the repo venv that
-/// run.sh builds, else `uv run`, else system python3. Returns (program, prefix-args).
-fn python_cmd(repo: &Path) -> (String, Vec<String>) {
-    let venv = repo.join("build/.venv/bin/python3");
-    if venv.exists() {
-        (venv.to_string_lossy().into_owned(), vec![])
-    } else if which("uv") {
-        ("uv".into(), vec!["run".into()])
-    } else {
-        ("python3".into(), vec![])
-    }
-}
 
-/// Prepare (or reuse a cached) firmware: decrypt -> boot blobs -> nand.img into
+/// Marks a firmware dir prepared by the current prep pipeline. Bump it when the
+/// prepared output changes so caches from an older build are rebuilt (keep in sync
+/// with the shell's `fw_complete`). v3: NAND unit -- an update stick instead of the
+/// SD image; the host provisions the NAND with the firmware's own ALL update.
+const PREP_STAMP: &str = "prep-v3.stamp";
+
+/// Prepare (or reuse a cached) firmware: decrypt -> boot blobs -> update stick into
 /// app-data/<hash>/. Idempotent — a complete cache dir is reused instantly. Returns
 /// the prepared dir (pass it back as XDJ_FW_DIR to run).
 fn prep_firmware(cfg: &Config, upd: &Path) -> Result<PathBuf, String> {
@@ -624,76 +664,32 @@ fn prep_firmware(cfg: &Config, upd: &Path) -> Result<PathBuf, String> {
         .map_err(|e| format!("firmware not found: {} ({e})", upd.display()))?;
     let hash = firmware_hash(&upd).map_err(|e| format!("cannot hash firmware: {e}"))?;
     let dir = app_data_root().join(&hash);
-    let needed = ["vmlinux.bin", "tramp.bin", "atags.bin", "nand.img"];
+    let needed = ["vmlinux.bin", "tramp.bin", "atags.bin", FW_ISO, FW_STICK, PREP_STAMP];
     if needed.iter().all(|f| dir.join(f).exists()) {
         eprintln!("[prep] cache hit: {}", dir.display());
         return Ok(dir);
     }
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
 
-    let (py, pre) = cfg.prep_python();
-    // Prepend the bundled e2fsprogs (if packaged) so build-nand.py finds mke2fs/debugfs.
-    let path_env = cfg.e2fsprogs_dir.as_ref().map(|d| {
-        let cur = std::env::var("PATH").unwrap_or_default();
-        format!("{}:{}", d.to_string_lossy(), cur)
-    });
-    let iso = dir.join("fw.iso");
-    let dirs = dir.to_string_lossy().into_owned();
-    let run = |desc: &str, args: Vec<String>, envs: Vec<(&str, String)>| -> Result<(), String> {
-        eprintln!("[prep] {desc}…");
-        let mut c = std::process::Command::new(&py);
-        c.args(&pre).args(&args).current_dir(&cfg.repo);
-        // Keep `xdj-host prep`'s STDOUT clean — only the final dir path is printed there
-        // (the shell reads stdout as that path). Send the child scripts' stdout to our
-        // stderr so their build chatter can't pollute it.
-        #[cfg(unix)]
-        {
-            use std::os::unix::io::FromRawFd;
-            let fd = unsafe { libc::dup(2) };
-            if fd >= 0 {
-                c.stdout(unsafe { std::process::Stdio::from_raw_fd(fd) });
-            }
-        }
-        if let Some(p) = &path_env {
-            c.env("PATH", p);
-        }
-        for (k, v) in &envs {
-            c.env(k, v);
-        }
-        let st = c.status().map_err(|e| format!("{desc}: spawn failed: {e}"))?;
-        if !st.success() {
-            return Err(format!("{desc}: exited with {st}"));
-        }
-        Ok(())
-    };
-    let script = |rel: &str| cfg.script(rel).to_string_lossy().into_owned();
-
     // 1. decrypt the .UPD/.zip -> ISO. The AES key is USER-SUPPLIED, never bundled
-    // (§5bis-A): prefer the key saved in app-data (the shell's key prompt stores it
-    // there), else fall back to the dev .env that xdjrx_upd reads. No key anywhere ->
-    // a clear error the shell turns into "add your firmware key".
-    let (key_args, key_env) = resolve_firmware_key(cfg)?;
-    let mut dargs = vec![script("xdjrx_upd.py")];
-    dargs.extend(key_args);
-    dargs.extend([
-        "decrypt".into(),
-        upd.to_string_lossy().into_owned(),
-        "-o".into(),
-        iso.to_string_lossy().into_owned(),
-    ]);
-    run("decrypt firmware", dargs, key_env)?;
-    // 2. kernel + SABRE-SD boot blobs -> dir
-    run(
-        "build boot blobs",
-        vec![script("qemu_prepare.py"), iso.to_string_lossy().into_owned()],
-        vec![("XDJ_OUT", dirs.clone())],
-    )?;
-    // 3. nand.img (rootfs + GUI + env + MBR) -> dir
-    run(
-        "build nand image",
-        vec![script("qemu/build-nand.py")],
-        vec![("XDJ_OUT", dirs.clone()), ("XDJ_ISO", iso.to_string_lossy().into_owned())],
-    )?;
+    // (§5bis-A): the key saved in app-data (the shell's key prompt stores it there),
+    // else the dev .env. No key anywhere -> a clear error the shell turns into "add
+    // your firmware key".
+    let key = resolve_firmware_key(cfg)?;
+    eprintln!("[prep] decrypt firmware…");
+    let (iso, model) = firmware::decrypt_firmware(&upd, &key)?;
+    let w = |n: &str, b: &[u8]| std::fs::write(dir.join(n), b).map_err(|e| format!("{n}: {e}"));
+    w(FW_ISO, &iso)?;
+    eprintln!("[prep] model {model:?}: {} bytes, ISO9660 verified", iso.len());
+    // 2. the firmware's kernel + SABRE-SD boot blobs (what provisioning boots)
+    eprintln!("[prep] build boot blobs…");
+    firmware::write_boot_blobs(&iso, &dir)?;
+    // 3. the USB stick the provisioning update boots from (XDJRX.UPD on FAT16)
+    eprintln!("[prep] build update stick…");
+    let upd_bytes = firmware::read_upd_bytes(&upd)?;
+    w(FW_STICK, &firmware::update_stick(&upd_bytes, std::time::SystemTime::now())?)?;
+    std::fs::write(dir.join(PREP_STAMP), b"")
+        .map_err(|e| format!("cannot write {}: {e}", dir.join(PREP_STAMP).display()))?;
     eprintln!("[prep] done: {}", dir.display());
     Ok(dir)
 }
@@ -811,19 +807,32 @@ async fn maybe_insert_usb(runtime_dir: PathBuf) {
     let settle = std::env::var("XDJ_USB_DELAY").ok().and_then(|v| v.parse().ok()).unwrap_or(6);
     tokio::time::sleep(Duration::from_secs(settle)).await;
 
+    if let Err(e) = insert_usb(&runtime_dir, &src, &slot, write).await {
+        eprintln!("[usb] insert failed: {e}");
+    }
+}
+
+/// Space-free staging path for a slot's backing (see insert_usb).
+fn usb_link(slot: &str) -> PathBuf {
+    PathBuf::from(format!("/tmp/xdjhost_{slot}.img"))
+}
+
+/// Hot-plug a disk image / host device into a front USB slot via QMP (snapshot unless
+/// `write`). See maybe_insert_usb for the timing rules.
+async fn insert_usb(runtime_dir: &Path, src: &str, slot: &str, write: bool) -> Result<(), String> {
+    let rt = |n: &str| runtime_dir.join(n);
     let is_dev = src.starts_with("/dev/");
     if is_dev {
         eprintln!("[usb] unmounting host disk {src} (snapshot keeps it read-only)");
-        unmount_host_disk(&src);
+        unmount_host_disk(src);
     }
-    // HMP drive_add doesn't quote paths; symlink to a space-free path in the runtime dir.
-    let link = rt(&format!("usb_{slot}.img"));
+    // HMP drive_add doesn't quote paths, and the packaged runtime dir is under
+    // "Application Support": stage a symlink at a space-free /tmp path (as the sidecar's
+    // USB LOAD does, with its own name).
+    let link = usb_link(slot);
     let _ = std::fs::remove_file(&link);
     #[cfg(unix)]
-    if let Err(e) = std::os::unix::fs::symlink(&src, &link) {
-        eprintln!("[usb] cannot stage backing symlink: {e}");
-        return;
-    }
+    std::os::unix::fs::symlink(src, &link).map_err(|e| format!("cannot stage backing symlink: {e}"))?;
 
     let (port, fault) = if slot == "usb1" {
         ("1.2", "/tmp/usb_insert")
@@ -840,23 +849,59 @@ async fn maybe_insert_usb(runtime_dir: PathBuf) {
         "[usb] inserting {src} at {slot} (hub port {port}, {})",
         if write { "writable" } else { "snapshot" }
     );
-    match qmp_hmp(&rt("qmp.sock"), &cmds).await {
-        Ok(outs) => {
-            for o in outs {
-                let t = o.trim();
-                if !t.is_empty() && t != "{\"return\": \"\"}" {
-                    eprintln!("[usb] qmp: {t}");
-                }
+    // HMP reports its errors as text inside a successful QMP "return": check it.
+    let outs = qmp_hmp(&rt("qmp.sock"), &cmds).await?;
+    for o in &outs {
+        let t = o.trim();
+        if !t.is_empty() && t != "{\"return\": \"\"}" {
+            eprintln!("[usb] qmp: {t}");
+            let l = t.to_ascii_lowercase();
+            if ["error", "extraneous", "failed", "duplicate", "in use", "can't find"]
+                .iter()
+                .any(|e| l.contains(e))
+            {
+                return Err(format!("the monitor rejected the insert: {t}"));
             }
-            // Do NOT create the xdj-panel.c (was patch 06) file here: GPIO4_IO30 / GPIO7_IO12 are rbp's
-            // active-low USB *fault* flags, not insert-detect lines, and holding one low
-            // raises "USB Error. Remove the device." once the slot mounts. The attach
-            // itself wakes HOST1 (xdj-usbnc.c (was patch 10), USBNC OWIR). Clear any stale fault file.
-            let _ = std::fs::remove_file(fault);
-            eprintln!("[usb] attached; the slot should mount shortly");
         }
-        Err(e) => eprintln!("[usb] insert failed: {e}"),
     }
+    // Do NOT create the xdj-panel.c (was patch 06) file here: GPIO4_IO30 / GPIO7_IO12 are rbp's
+    // active-low USB *fault* flags, not insert-detect lines, and holding one low
+    // raises "USB Error. Remove the device." once the slot mounts. The attach
+    // itself wakes HOST1 (xdj-usbnc.c (was patch 10), USBNC OWIR). Clear any stale fault file.
+    let _ = std::fs::remove_file(fault);
+    eprintln!("[usb] attached; the slot should mount shortly");
+    Ok(())
+}
+
+/// Drive a provisioning boot (BootKind::Provision): insert the update stick when the
+/// initramfs asks for it, then report how the updater ended. The console lines are the
+/// update initramfs' own (`/init`): "### USB update mount. ###" (it now loops mounting
+/// /dev/sd[a-e]{1,} until XDJRX.UPD shows up), then "### USB update success. (...) ###"
+/// or "### USB update error. (...) error_code = N ###".
+async fn provision_watch(runtime_dir: PathBuf, stick: PathBuf) -> Result<(), String> {
+    let console = runtime_dir.join("console.log");
+    if !wait_console_marker(&console, "### USB update mount.", Duration::from_secs(300)).await {
+        return Err("the update initramfs never asked for the USB stick".into());
+    }
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    // USB1 = the top-panel slot the update screen asks for (hub port 1.2).
+    insert_usb(&runtime_dir, &stick.to_string_lossy(), "usb1", false).await?;
+    // The ALL update writes ~150 MiB of NAND + the MCU flash under TCG: allow plenty.
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(3600) {
+        if let Ok(b) = std::fs::read(&console) {
+            let t = String::from_utf8_lossy(&b);
+            if t.contains("### USB update success.") {
+                return Ok(());
+            }
+            if let Some(i) = t.find("### USB update error.") {
+                let line = t[i..].lines().next().unwrap_or("").trim().to_string();
+                return Err(format!("the firmware updater failed: {line}"));
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    Err("the firmware update did not finish within an hour".into())
 }
 
 #[tokio::main]
@@ -880,6 +925,40 @@ async fn main() {
         return;
     }
 
+    // Dev subcommands: run one prep/NAND step on its own (parity checks against the
+    // Python tools: qemu/test_rust_parity.sh).
+    if let Some(cmd) = argv.get(1).filter(|c| c.starts_with("dev-")) {
+        let a = |i: usize| PathBuf::from(argv.get(i).cloned().unwrap_or_default());
+        let r: Result<(), String> = (|| match cmd.as_str() {
+            "dev-decrypt" => {
+                let cfg = Config::from_env().map_err(|e| e.to_string())?;
+                let (iso, _) = firmware::decrypt_firmware(&a(2), &resolve_firmware_key(&cfg)?)?;
+                std::fs::write(a(3), iso).map_err(|e| e.to_string())
+            }
+            "dev-blobs" => firmware::write_boot_blobs(&std::fs::read(a(2)).map_err(|e| e.to_string())?, &a(3)),
+            "dev-stick" => {
+                let upd = firmware::read_upd_bytes(&a(2))?;
+                let t = std::fs::metadata(a(4)).and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::now());
+                std::fs::write(a(3), firmware::update_stick(&upd, t)?).map_err(|e| e.to_string())
+            }
+            "dev-nand-init" => {
+                let iso = std::fs::read(a(3)).map_err(|e| e.to_string())?;
+                nand::init(&a(2), &firmware::env_lines(&firmware::iso_read(&iso, "/images/fw_env.txt")?))
+            }
+            "dev-nand-boot" => nand::boot(&a(2), &a(3)),
+            "dev-nand-installed" => {
+                println!("{}", nand::installed(&a(2)));
+                Ok(())
+            }
+            _ => Err(format!("unknown {cmd}")),
+        })();
+        if let Err(e) = r {
+            eprintln!("{cmd}: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let cfg = match Config::from_env() {
         Ok(c) => c,
         Err(e) => {
@@ -898,33 +977,44 @@ async fn main() {
     clean_stale(&cfg);
 
     // Power: the emulator starts powered off when XDJ_AUTOSTART=0 (the desktop app:
-    // the panel's power button / File > Power turns it on); otherwise on, as before.
+    // the panel's power button / File > Power, or its Power On at Launch pref, turns it
+    // on); otherwise on, as before. A blank unit (a firmware just dropped) is powered on
+    // into provisioning straight away either way, and boots normally once it's done.
     let autostart = std::env::var("XDJ_AUTOSTART").map(|v| v != "0").unwrap_or(true);
     let mut qemu: Option<Child> = None;
-    let mut update_mode = false;
+    let mut kind = BootKind::Normal;
     let mut usb: Option<tokio::task::JoinHandle<()>> = None;
-    if autostart {
-        match spawn_qemu(&cfg, false) {
+    let (prov_tx, mut prov_rx) = tokio::sync::mpsc::channel::<Result<(), String>>(1);
+    let mut prov: Option<tokio::task::JoinHandle<()>> = None;
+    // Power on for `k`: spawn QEMU and the task that goes with that boot.
+    let power_on = |k: BootKind,
+                    usb: &mut Option<tokio::task::JoinHandle<()>>,
+                    prov: &mut Option<tokio::task::JoinHandle<()>>|
+     -> Result<Child, String> {
+        let c = spawn_qemu(&cfg, k)?;
+        match k {
+            BootKind::Provision => {
+                let (rt, stick, tx) = (cfg.runtime_dir.clone(), cfg.fw_dir.join(FW_STICK), prov_tx.clone());
+                *prov = Some(tokio::spawn(async move {
+                    let _ = tx.send(provision_watch(rt, stick).await).await;
+                }));
+            }
+            // Phase 3b: if XDJ_USB is set, mount it (disk image or host device) once rbp polls.
+            BootKind::Normal => *usb = Some(tokio::spawn(maybe_insert_usb(cfg.runtime_dir.clone()))),
+            BootKind::Update => {}
+        }
+        Ok(c)
+    };
+    if !cfg.provisioned() || autostart {
+        kind = if cfg.provisioned() { BootKind::Normal } else { BootKind::Provision };
+        match power_on(kind, &mut usb, &mut prov) {
             Ok(c) => qemu = Some(c),
             Err(e) => {
                 eprintln!("[host] failed to start qemu: {e}");
                 std::process::exit(1);
             }
         }
-        // Phase 3b: if XDJ_USB is set, mount it (disk image or host device) once rbp polls.
-        usb = Some(tokio::spawn(maybe_insert_usb(cfg.runtime_dir.clone())));
     }
-    let mut sidecar = match spawn_sidecar(&cfg) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("[host] failed to start panel sidecar: {e}");
-            if let Some(q) = qemu.as_mut() {
-                let _ = q.kill().await;
-            }
-            std::process::exit(1);
-        }
-    };
-
     // VNC bridge in the background (connects to vnc.sock per client, so it survives
     // power cycles; noVNC just reconnects).
     let vnc_sock = cfg.rt("vnc.sock");
@@ -932,24 +1022,44 @@ async fn main() {
     let bridge = tokio::spawn(run_vnc_ws_bridge(vnc_sock, ws_port));
 
     let (ptx, mut prx) = tokio::sync::mpsc::channel(8);
-    let power = tokio::spawn(power_listener(cfg.rt("power.sock"), ptx));
+    let power = tokio::spawn(power_listener(cfg.rt("power.sock"), ptx.clone()));
+
+    // The virtual panel (in-process). Bind failure (port taken) ends the host: the shell
+    // reports "panel didn't come up" rather than talking to someone else's server.
+    let panel = panel::Panel::new(
+        panel::PanelConfig {
+            port: cfg.panel_port,
+            panel_dir: cfg.panel_dir.clone(),
+            novnc_dir: cfg.novnc_dir.clone(),
+            knobs_dir: cfg.knobs_dir.clone(),
+            ctrl_sock: cfg.rt("ctrl.sock"),
+            key_sock: cfg.rt("key.sock"),
+            qmp_sock: cfg.rt("qmp.sock"),
+            console: cfg.rt("console.log"),
+        },
+        ptx,
+    );
+    let mut panel_srv = tokio::spawn(panel::serve(panel));
 
     println!(
-        "\n  XDJ-RX emulator {}.\n  Open:  http://127.0.0.1:{}/?vnc=ws://127.0.0.1:{}/\n  (panel = sidecar :{}, screen = noVNC via the WS bridge :{})\n  Ctrl-C to stop.\n",
-        if autostart { "up" } else { "ready (powered off — use the panel's power button)" },
+        "\n  XDJ-RX emulator {}.\n  Open:  http://127.0.0.1:{}/?vnc=ws://127.0.0.1:{}/\n  (panel :{}, screen = noVNC via the WS bridge :{})\n  Ctrl-C to stop.\n",
+        if qemu.is_some() { "up" } else { "ready (powered off — use the panel's power button)" },
         cfg.panel_port, cfg.vnc_ws_port, cfg.panel_port, cfg.vnc_ws_port
     );
 
     // Supervise: power commands; QEMU exiting = powered off (the guest shut down or
-    // crashed); the sidecar dying, Ctrl-C, SIGTERM or the shell vanishing end it all.
+    // crashed); the panel server failing, Ctrl-C, SIGTERM or the shell vanishing end it all.
     loop {
         tokio::select! {
             Some((cmd, reply)) = prx.recv() => {
                 match cmd {
                     PowerCmd::On(upd) => {
                         if qemu.is_none() {
-                            match spawn_qemu(&cfg, upd) {
-                                Ok(c) => { qemu = Some(c); update_mode = upd; }
+                            // Not installed yet (or a provisioning was cut short): provision.
+                            let k = if !cfg.provisioned() { BootKind::Provision }
+                                    else if upd { BootKind::Update } else { BootKind::Normal };
+                            match power_on(k, &mut usb, &mut prov) {
+                                Ok(c) => { qemu = Some(c); kind = k; }
                                 Err(e) => eprintln!("[host] power on failed: {e}"),
                             }
                         }
@@ -960,37 +1070,55 @@ async fn main() {
                             let _ = q.kill().await;   // instant power cut, like the switch
                         }
                         if let Some(u) = usb.take() { u.abort(); }
+                        if let Some(p) = prov.take() { p.abort(); }
                     }
                     PowerCmd::Status => {}
                 }
-                let state = match (&qemu, update_mode) {
-                    (Some(_), true) => "on update",
-                    (Some(_), false) => "on",
+                let state = match (&qemu, kind) {
+                    (Some(_), BootKind::Normal) => "on",
+                    (Some(_), _) => "on update",
                     (None, _) => "off",
                 };
                 let _ = reply.send(state.into());
             }
+            Some(res) = prov_rx.recv() => {
+                prov = None;
+                match res {
+                    Ok(()) => {
+                        // Installed. Cut power (the updater is done; the initramfs has
+                        // nothing left to run) and boot the unit from NAND.
+                        eprintln!("[host] provisioning complete; booting from NAND");
+                        if let Some(mut q) = qemu.take() { let _ = q.kill().await; }
+                        let _ = std::fs::write(cfg.fw_dir.join(FW_PROVISIONED), b"");
+                        match power_on(BootKind::Normal, &mut usb, &mut prov) {
+                            Ok(c) => { qemu = Some(c); kind = BootKind::Normal; }
+                            Err(e) => eprintln!("[host] power on after provisioning failed: {e}"),
+                        }
+                    }
+                    // Leave it running: the screen shows the updater's own error. The
+                    // next power on starts the provisioning over.
+                    Err(e) => eprintln!("[host] provisioning failed: {e}"),
+                }
+            }
             status = wait_opt(&mut qemu) => {
                 eprintln!("[host] qemu exited: {status:?} (powered off)");
                 qemu = None;
+                if let Some(p) = prov.take() { p.abort(); }
             }
-            status = sidecar.wait() => {
-                eprintln!("[host] panel sidecar exited: {status:?}");
+            r = &mut panel_srv => {
+                eprintln!("[host] panel server ended: {r:?}");
                 break;
             }
             _ = tokio::signal::ctrl_c() => {
                 eprintln!("[host] shutting down (Ctrl-C)");
-                let _ = sidecar.kill().await;
                 break;
             }
             _ = terminated() => {
                 eprintln!("[host] shutting down (SIGTERM)");
-                let _ = sidecar.kill().await;
                 break;
             }
             _ = parent_gone() => {
                 eprintln!("[host] parent (shell) exited; shutting down");
-                let _ = sidecar.kill().await;
                 break;
             }
         }
@@ -1000,6 +1128,7 @@ async fn main() {
     }
     power.abort();
     if let Some(u) = usb.take() { u.abort(); }
+    if let Some(p) = prov.take() { p.abort(); }
     bridge.abort();
     clean_stale(&cfg);
 }

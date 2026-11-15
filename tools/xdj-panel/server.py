@@ -13,7 +13,8 @@ protocol, and streams the QEMU framebuffer to the browser as raw RGB (drawn on a
   GET  /raw                      -> latest framebuffer as raw RGB
                                     (headers X-Width / X-Height; body w*h*3 bytes)
   GET  /logs.html?src=subucom|console -> log window page; GET /log/<src> = its SSE stream
-  POST /power  on|off|toggle [update] -> power the emulator (xdj-host); GET /power = state
+  POST /power  on|off|toggle [update|test] -> power the emulator (xdj-host); GET /power = state
+                 (test = boot into the service manual's test mode, see _test_mode_boot)
   POST /log/note                 -> append a panel note to the sub-ucom log
   GET  /leds                     -> Server-Sent Events: one "data: <40|42 hex>" per change of
                                     rbp's 20-byte LED/meter payload (SubTxData, xdj-panel.c (was patch 15);
@@ -79,7 +80,7 @@ _grab_lock = threading.Lock()
 # back up the xdjctrl socket in socket mode, or into TX_PATH in file mode. We keep the
 # latest payload here and fan it out to every /leds SSE client.
 TX_PATH = os.environ.get("XDJ_TX_PATH") or "/tmp/subucom_tx"
-_leds = {"hex": "", "seq": 0}
+_leds = {"hex": "", "seq": 0, "t": 0.0}
 _leds_cv = threading.Condition()
 
 
@@ -190,6 +191,37 @@ def _leds_off():
         _leds_cv.notify_all()
 
 
+# Test mode (service manual 6.1; docs/service-modes.md): rbp's boot-key handler looks at
+# the FIRST sub-ucom frame only -- DECK 1 MEMORY [0x13]&04 + TEMPO RANGE [0x12]&08 held
+# then = TestMode. The holds go into _held before power on, so the ctrl-socket connect to
+# the fresh QEMU (_repush) delivers them before rbp's first read.
+TEST_MODE_KEYS = ("B 12 08", "B 13 04")
+
+
+def _test_mode_boot(t0):
+    """Let go of the test-mode keys once rbp is certainly past its first-frame check.
+    Started AFTER the power on. Neither rbp's startup line nor its first LED frame is
+    late enough: rbp starts streaming SubTxData before its panel thread parses the
+    first input frame, and releasing on those raced (boots came up normal about half
+    the time). "ALSA: Resolve xrun" only prints once rbp is fully up (in test mode
+    and normal boot alike), long after the boot-key check; holding the keys until
+    then is harmless (test mode 1 ignores them). Fallback: release after 3 min, or
+    once powered off."""
+    while time.time() - t0 < 180:
+        if time.time() - t0 > 5 and _power_cmd("status") in (None, "off"):
+            break
+        if _console_has("Resolve xrun"):
+            time.sleep(2)
+            break
+        time.sleep(0.5)
+    with _browse_lock:
+        for ln in TEST_MODE_KEYS:
+            _, off, mask = ln.split()
+            _held.pop((int(off, 16), int(mask, 16)), None)
+        _push()
+    _logline("subucom", "·  test mode: released MEMORY + TEMPO RANGE")
+
+
 def _console_has(marker):
     try:
         with open(CONSOLE, "rb") as f:
@@ -237,6 +269,7 @@ def _leds_update(hexstr):
                 _log_led_diff(_leds["hex"], hexstr)
             _leds["hex"] = hexstr
             _leds["seq"] += 1
+            _leds["t"] = time.time()
             _leds_cv.notify_all()
 
 
@@ -887,19 +920,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/jog" and "touch" in body:
             _logline("subucom", "-> jog              " + body.strip())
         if path == "/power":
-            # Body: "on" | "on update" | "off" | "toggle" | "toggle update".
+            # Body: "on" | "on update" | "on test" | "off" | "toggle" | "toggle update".
             w = body.split()
             cur = _power_cmd("status")
             if cur is None:
                 self._send(503, "text/plain", b"power control unavailable (not run by xdj-host)"); return
             want = w[0] if w else "toggle"
             upd = "update" in w[1:]
+            test = "test" in w[1:] and not upd
             if want == "toggle":
                 want = "off" if cur.startswith("on") else "on"
             if want == "on":
+                if test:
+                    # The keys must be down at rbp's first frame: cold boot with them held.
+                    if cur.startswith("on"):
+                        _power_cmd("off")
+                        _leds_off()
+                    with _browse_lock:
+                        _apply_lines(list(TEST_MODE_KEYS))
+                        _push()
                 st = _power_cmd("on update" if upd else "on")
-                _logline("subucom", "·  POWER ON" + (" (firmware update mode)" if upd else ""))
-                _logline("console", "──────── power on%s ────────" % (" (update mode)" if upd else ""))
+                if test:
+                    threading.Thread(target=_test_mode_boot, args=(time.time(),), daemon=True).start()
+                mode = " (firmware update mode)" if upd else " (test mode)" if test else ""
+                _logline("subucom", "·  POWER ON" + mode)
+                _logline("console", "──────── power on%s ────────" % mode)
                 with _power_lock:
                     has_pending = bool(_pending_usb)
                 if has_pending:

@@ -769,8 +769,9 @@ Read the StaticInfomation struct at `0x0123e050` in the live `rbp_solo` (pid 232
 **never initialized** — it is a *lazy* cache built only when the VERSION-INFO screen
 or the debug console is opened (both read `/tmp/smdj.rev`). It is not on the panel
 read/decode path. So a missing StaticInfomation is **not** why buttons don't work.
-(`/tmp/smdj.rev` = `--.--`, `/tmp/smdj2.rev` = `--.-- [4206:4195:]` — placeholder
-system/sub firmware revision strings rbp writes; `smdj` = the board code.)
+(`/tmp/smdj.rev` = `--.--`, `/tmp/smdj2.rev` = `--.-- [4206:4195:]` — written by
+apl_start from the u-boot env `release` (unset → `--.--`) + rbp/system svn revs, not by
+rbp; see `version-display-and-override.md`. `smdj` = the board code.)
 
 ### The MISO frame format is class `ui::SubRxFormat`
 RTTI + assertion strings (`0x427328`+) name its accessors, which map 1:1 to the

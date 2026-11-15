@@ -117,7 +117,7 @@ rotate/push, BACK, LOAD, PLAY/CUE, tempo. Map each to its frame offset/bit from
   "JogCom" ready-line protocol (undecoded even in RX3) — lowest priority.
 - **Track load without manual steps:** browse/load currently done by hand in the UI. For a
   scripted/panel flow, map LOAD (`0x5d` bit6/bit5 per RX3, verify) + the browse path.
-- **Version display** (`Ver --.--`): cosmetic; see `docs/version-display-and-override.md`.
+- **Version display** (`Ver --.--`): was the missing u-boot env `release` on SD boot; fixed in `build-nand.py`, see `docs/version-display-and-override.md`.
 
 ## Tools & method (all proven this project)
 - **gdb RSP** on `tcp::1234` (raw packets; helpers in the session scratchpad). Break at a

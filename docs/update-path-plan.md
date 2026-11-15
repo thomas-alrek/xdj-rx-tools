@@ -148,4 +148,4 @@ Boot strap: `SRC_SBMR1` BOOT_CFG1 = 0x80 (`XDJ_BOOT_MEDIA=nand`, weak hook in pa
 u-boot itself (mtd0) is not executed -- the boot ROM/u-boot path would need real BCH parity.
 
 ## Status
-- [x] 0 references  - [x] 1 SUB  - [x] 2 NAND  - [x] 3 MAIN  - [x] 4 NAND boot  - [~] 5 provisioning (scripted, verified) / app (todo)
+- [x] 0 references  - [x] 1 SUB  - [x] 2 NAND  - [x] 3 MAIN  - [x] 4 NAND boot  - [~] 5 provisioning (scripted, verified) / app (implemented: `standalone-app.md` §4a — no SD card, host-loaded kernel + FAT16 stick)

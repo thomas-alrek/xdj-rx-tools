@@ -11,6 +11,21 @@ planned separately — see [standalone-app-roadmap.md](standalone-app-roadmap.md
 
 Legend: ✅ done · 🔶 partial/diagnosed · ⬜ investigated, not started · ❌ blocked
 
+## ✅ Firmware update, NAND unit, desktop app (2026-11-15)
+- **Full firmware update** (SUB + MAIN) runs Pioneer's own updater to completion: panel-MCU flash
+  bootloader + APBH-DMA/GPMI/BCH + 256 MiB NAND (`docs/update-path-plan.md`).
+- **The desktop app is a NAND unit** (no SD card): a dropped firmware provisions a blank unit with the
+  firmware's ALL update (stick inserted automatically), then boots from NAND; later updates done in the
+  emulator boot the new kernel bank. "Installed" = `release=` in the NAND env
+  (`docs/standalone-app.md` §4a).
+- **UTILITY → VERSION No.** shows `Ver 2.21` (it is the u-boot env `release`, written by the updater;
+  `docs/version-display-and-override.md`).
+- **Test mode** from the app (File > Power On in Test Mode): reliable after binding the `xdjctrl`
+  chardev at realize (`docs/service-modes.md`).
+- **No Python in the app**: prep, NAND and the panel server are Rust in `xdj-host`, each checked
+  byte-for-byte against the Python dev tools (`qemu/test_rust_parity.sh`,
+  `tools/xdj-panel/test_panel_parity.py`).
+
 ## ✅ Boot to the live UI (unmodified firmware)
 Splash (32bpp) + main UI (16bpp RGB565) render; dynamic bpp scanout reads the IPU
 display stride. Launch: `qemu/watch.sh`. Uses `nand.img` (the GAL

@@ -160,7 +160,7 @@
 
   /* screen */
   #screen{position:absolute;background:#000;border-radius:.2cqw;overflow:hidden;display:flex;align-items:center;justify-content:center}
-  #screen canvas{width:100%!important;height:100%!important;display:block}
+  #screen canvas{width:100%!important;height:100%!important;display:block;image-rendering:pixelated}
   /* noVNC hides the local cursor and draws the remote one; the firmware has no cursor,
      so force our normal pointer over the display area instead of an invisible one. */
   #screen,#screen *{cursor:default!important}
@@ -179,6 +179,8 @@
   body.screenonly>*:not(#screen){display:none!important}
   body.screenonly #screen{position:fixed;inset:0;border-radius:0}
   body.screenonly #screen canvas{object-fit:contain}
+  /* view-only: a transparent overlay takes every pointer event, so the whole window drags it */
+  body.screenonly #dragpad{position:fixed;inset:0;z-index:10;cursor:default}
 
 </style>
 </head>
@@ -736,6 +738,9 @@ async function popScreen(){
 const SCREEN_FB=[800,480];   // the LCD framebuffer; the app locks the window to this natively
 function initScreenOnly(){ document.title='XDJ-RX Screen'; document.body.classList.add('screenonly');
   const sc=d(''); sc.id='screen'; document.body.appendChild(sc); startScreen();
+  // The pop-out takes no input: cover it with a drag region, so the window moves from anywhere
+  // (Tauri: data-tauri-drag-region, needs core:window:allow-start-dragging; double-click zooms).
+  const pad=d(''); pad.id='dragpad'; pad.setAttribute('data-tauri-drag-region',''); document.body.appendChild(pad);
   // Browser pop-up: browsers can't lock the aspect during a drag, so snap the height to the
   // framebuffer aspect once a resize settles (resizeBy is allowed on script-opened pop-ups).
   if(!window.__TAURI__ && window.opener){ let t=null;
@@ -786,6 +791,7 @@ const stripReset=n=>()=>['trim','eq_hi','eq_mid','eq_low','color'].forEach(k=>se
 const MENU=[
   ['File',[
     ['Power On / Off',()=>powerToggle()],
+    ['Power On in Test Mode',()=>powerTest()],
     {check:'updateMode',text:'Enter Firmware Update Mode (at next power on)'},
     {check:'powerOnLaunch',text:'Power On at Launch'}, '-',
     ['Load USB1 Image…',()=>mountUsb('usb1')], ['Load USB2 Image…',()=>mountUsb('usb2')], '-',
@@ -828,6 +834,9 @@ const MENU=[
 // ---- power (xdj-host owns QEMU; GET/POST /power on the sidecar) ----------------------
 const PREF={ get:(k,d)=>{ try{ const v=localStorage.getItem('xdj.'+k); return v==null?d:v==='1'; }catch(_){ return d; } },
   set:(k,v)=>{ try{ localStorage.setItem('xdj.'+k,v?'1':'0'); }catch(_){} } };
+// Defaults until the user flips them: power on at launch (a blank unit is powered on
+// into provisioning by xdj-host regardless).
+const PREF_DEFAULT={powerOnLaunch:true};
 let POWER={available:false,state:'off',update:false};
 function powerUI(){ const b=EL.power; if(!b) return;
   b.style.visibility=POWER.available?'visible':'hidden';
@@ -844,15 +853,21 @@ async function powerSet(on){ if(!POWER.available) return; const b=EL.power; if(b
   else ledsOff();
   await powerPoll(); if(b) b.classList.remove('busy'); }
 const powerToggle=()=>powerSet(POWER.state!=='on');
+// Service-manual test mode: the sidecar cold-boots with DECK 1 MEMORY + TEMPO RANGE held
+// (power-cycling first if on) and lets go once rbp has read them.
+async function powerTest(){ if(!POWER.available) return; const b=EL.power; if(b) b.classList.add('busy');
+  try{ await fetch('/power',{method:'POST',body:'on test'}); }catch(_){}
+  setTimeout(pushInitialState,400);
+  await powerPoll(); if(b) b.classList.remove('busy'); log('power on: test mode'); }
 async function startPower(){ await powerPoll(); setInterval(powerPoll,1500);
-  if(POWER.available && POWER.state!=='on' && PREF.get('powerOnLaunch',false)) powerSet(true); }
+  if(POWER.available && POWER.state!=='on' && PREF.get('powerOnLaunch',PREF_DEFAULT.powerOnLaunch)) powerSet(true); }
 
 async function buildAppMenu(){
   const M=window.__TAURI__ && window.__TAURI__.menu; if(!M) return;   // plain browser: no menu
   const {Menu,Submenu,MenuItem,CheckMenuItem,PredefinedMenuItem}=M;
   const mk=async it=>{ if(it==='-') return PredefinedMenuItem.new({item:'Separator'});
     if(it && it.check){ const key=it.check; let item=null;   // persisted preference checkbox
-      item=await CheckMenuItem.new({text:it.text,checked:PREF.get(key,false),
+      item=await CheckMenuItem.new({text:it.text,checked:PREF.get(key,PREF_DEFAULT[key]||false),
         action:async()=>{ const v=await item.isChecked(); PREF.set(key,v); powerUI(); log(it.text+': '+(v?'on':'off')); }});
       return item; }
     const [text,v]=it; if(Array.isArray(v)) return Submenu.new({text,items:await Promise.all(v.map(mk))});

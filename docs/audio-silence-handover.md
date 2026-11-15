@@ -263,7 +263,8 @@ ADC path", docs/xdj-rx-control-map.md ~L103), which QEMU does not model → read
 >
 > RX3 also independently confirms our CRC (poly `0x8408`, init `0xffff`, **per-32-bit-word
 > byte reversal before CRC16** — our patch 02) and notes frame **bytes 2–3 feed the
-> `tStaticPanelInfo` version slots** (a likely fix for our stuck `Ver --.--` SUB word
+> `tStaticPanelInfo` version slots** (the SUB word; `Ver --.--` itself turned out to be the u-boot env `release`, see `version-display-and-override.md`)
+> (originally: a likely fix for our stuck `Ver --.--` SUB word
 > `DAT_0123e054`). See memory `[[rx3-emu-crossref]]`. RX3's own *audio transport* is
 > **not** applicable (virtio-snd dummy card, not real SSI/SDMA) and is itself not working
 > (XRUN recovery, no continuous app audio) — our patch-11 real-codec path is further along.

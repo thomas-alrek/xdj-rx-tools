@@ -24,7 +24,11 @@ interoperability/preservation on owned hardware.
 - `qemu/` — `build-qemu.sh`, `patches/01..05` + `qemu/xdj/`, `watch.sh`, `build-nand.sh`, `cramfs_extract.py`.
 - `qemu_prepare.py` — kernel boot blobs (trampoline/atags/vmlinux). `run.sh` — from-scratch build+boot.
 - `build/` (git-ignored) — `qemu-src/` (patched QEMU), `extract/rbp` (the analyzed binary), `qemu/` (boot blobs, nand.img).
-- `tools/xdj-panel/` — the virtual web panel (`server.py`, `panel.html`, `logs.html`) + `debug/` (RE launcher & helpers: `relaunch.sh`, `rsp.py`, `tables.py`, `mon.py`, `ser.py`, `inj.py`, `sweep_*.py`).
+- `app/` — the desktop app: `shell/` (Tauri) + `host/` (`xdj-host`: QEMU supervisor, firmware prep
+  `src/firmware.rs`, NAND `src/nand.rs`, the in-process panel server `src/panel.rs`). **No Python in the
+  packaged app**; the Python scripts are dev tools, kept byte-identical by `qemu/test_rust_parity.sh`
+  and `tools/xdj-panel/test_panel_parity.py` (run them after touching either side) → skill `build-xdj-app`.
+- `tools/xdj-panel/` — the virtual web panel (`panel.html`, `logs.html`; `server.py` = the dev server) + `debug/` (RE launcher & helpers: `relaunch.sh`, `rsp.py`, `tables.py`, `mon.py`, `ser.py`, `inj.py`, `sweep_*.py`).
 - `docs/` — handovers + the authoritative `subucom-frame-map.md` (control map), `subucom-led-map.md`
   (LED/meter map), `service-modes.md` (test/update/factory-reset modes, auth chip) and
   `emulator-status.md` (feature board). The XDJ-RX **service manual** (manualslib 1307531) is the
@@ -62,6 +66,11 @@ interoperability/preservation on owned hardware.
   `/tmp/subucom_tx`); the panel lights from `GET /leds`. Map: `docs/subucom-led-map.md`.
 - A one-shot `b`/`a` left in `/tmp/subucom_ctrl` **next to holds re-fires every 30 frames** (file
   mode) — rewrite the holds alone right after (`inj.py pulse`), or toggles flip back and forth.
+- **`Ver --.--`** in UTILITY → VERSION No. = no `release` in the u-boot env (written by the updater's
+  `finEnv`, read by apl_start into `/tmp/smdj2.rev`) — not a panel/rbp issue.
+- **Control chardevs bind at realize** (`xdj_subucom_realize`): bound lazily on the first SPI frame, a
+  snapshot sent at QEMU start missed rbp's first frame (test mode failed ~half the time).
+  `XDJ_FRAME_LOG=1` traces the first frames.
 - **Service modes** (`docs/service-modes.md`, from the service manual + RE): **test mode** = hold
   `B 13 04`+`B 12 08` (MEMORY+TEMPO RANGE) in `/tmp/subucom_ctrl` *before* boot (rbp checks only
   the first frame; Mode 5/6/7 = LED/switch/pot oracles); **update mode** = `XDJ_BOOT_UPDATE=1`
@@ -75,6 +84,8 @@ interoperability/preservation on owned hardware.
   (`xdj-panel.c`) and APBH-DMA/GPMI/BCH + a 256 MiB NAND (`xdj-nand.c`, `$XDJ_NAND_IMG`) are
   emulated. Provision a unit = `qemu/xdj_nand.py init` + an **ALL** update (`XDJ_UPDATE_TYPE=20`)
   from USB; boot it = `qemu/xdj_nand.py boot` + `XDJ_BOOT_MEDIA=nand XDJ_SD=none XDJ_SMP=2`
+  (the **app does all of this itself**: blank unit → provision → NAND boot; installed = `release=` in
+  the NAND env, since the updater ends on "turn off the power" before its success line)
   (single-core needs `rbp_solo`, absent on a stock install). **For a root shell, boot SD** (it
   blanks root's password; a NAND unit keeps the stock, unrecovered root hash) — same `rbp`/kernel.
 - **Audio** works (`xdj-audio.c` (was patch 11), SDMA/SSI/AUDMUX; sonifier → SDMA ch1 = MasterOut). Audible needs

@@ -7,7 +7,7 @@ description: Work on the XDJ-RX virtual web panel (tools/xdj-panel/) - the brows
 
 A local web app that **shows the live device screen** and **operates the emulator**. It's the
 human-facing counterpart to the `map-*` skills: once a control's frame spec is known, expose it
-here. Runs two ways: standalone in a browser (dev), and inside the Tauri desktop app as a sidecar
+here. Runs two ways: standalone in a browser (dev, `server.py`), and inside the Tauri desktop app (served by `xdj-host`'s in-process `panel.rs`)
 (see skill [build-xdj-app]).
 
 ## Design (post-rebuild, late 2026-11)
@@ -70,14 +70,14 @@ device **photo** as its background; that photo was deleted and must never ship a
   system log tails the guest console (`--console`; default `console.log` beside `--ctrl-sock` = the
   app's runtime dir, else `/tmp/xdj_console.log`, which `relaunch.sh` writes via chardev `logfile=`).
 - **POWER switch** (top-left, `t:'power'`, red LED = on; hidden unless `GET /power` says
-  `available`, i.e. run by `xdj-host`). Click = `POST /power on[ update]|off` (sidecar → host
+  `available`, i.e. run by `xdj-host`). Click = `POST /power on[ update|test]|off` (panel → host
   `power.sock`, see [build-xdj-app]). File menu: *Power On / Off*, check items *Enter Firmware Update
   Mode (at next power on)* and *Power On at Launch* (both `localStorage` prefs `xdj.updateMode` /
   `xdj.powerOnLaunch`). Powered off: LED stream sends `off` (panel darkens everything) and `#screen`
   gets a black `.off` overlay. **USB LOAD while off is queued** (`/usb` → `_pending_usb`) and inserted
   after power on once the guest is ready: normal boot = console `Resolve xrun` + 6 s, update mode =
   `USB update mount` + 2 s (same choreography as `maybe_insert_usb`). On ctrl-socket reconnect (a fresh
-  QEMU) the sidecar re-sends the full panel state (`_repush`).
+  QEMU) the panel re-sends the full panel state (`_repush` / `ctrl_conn`).
 - **The deck is the root**: `.stagewrap` has a 1rem padding (the only margin) and `#stage` no border/radius/shadow; the
   visible canvas is the design canvas cropped by `CROP`=16 units per side (`VW`x`VH` = 2110x1152, via
   CSS vars `--vw/--vh`), and the app window is aspect-locked to exactly that (`DECK_AR` in the shell).
@@ -101,11 +101,15 @@ Serve with `python3 tools/xdj-panel/server.py --port 8799` and screenshot headle
 WebKit (the app's engine) — a tiny Swift `WKWebView.takeSnapshot` tool works. The old `?cal=` photo
 overlay (`XDJ_CAL_REF`, `/cal-ref`, 404s if unset) still exists but no longer matches the grid layout.
 
-## server.py
-HTTP bridge. Serves `panel.html` + `/knobs/*` + `/novnc/*`, streams the framebuffer, and turns
-panel POSTs into control writes. Run (dev): `python3 tools/xdj-panel/server.py --port 8765 --mon
-/tmp/d_mon4.sock`. In the app the sidecar gets `--ctrl-sock/--key-sock` (Phase-1 chardevs) and
-`--qmp qmp.sock` (for USB mount — there's no HMP monitor in the .app).
+## The panel server: two implementations, kept identical
+- **In the app: `app/host/src/panel.rs`**, in-process in `xdj-host` (axum, :8765): socket mode only
+  (`xdjctrl`/`xdjkey` chardevs, QMP for USB, power through the host's channel).
+- **Dev / debug launcher: `tools/xdj-panel/server.py`**: the same routes plus `/tmp`-file mode, the HMP
+  screendump (`/raw`) and calibration. Run: `python3 tools/xdj-panel/server.py --port 8765 --mon
+  /tmp/d_mon4.sock`.
+- **Change both, then run `tools/xdj-panel/test_panel_parity.py`**: it plays one scripted session
+  against each (fake chardev sockets record every snapshot) and diffs snapshots, HTTP replies, LEDs and
+  the control log. Byte-for-byte quirks matter (e.g. `%02x` of negatives, unknown `/jog` verbs = ok).
 
 | route | body | effect |
 |---|---|---|

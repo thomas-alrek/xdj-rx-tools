@@ -6,7 +6,8 @@
 //!   recorded in app-data, or the dev build/qemu layout) it boots straight into it.
 //!   Otherwise it shows a drop target.
 //! * Drag-drop a `.UPD`/`.zip` onto the window -> the host prepares it (decrypt ->
-//!   boot blobs -> nand.img, cached in app-data by firmware hash; `xdj-host prep`)
+//!   boot blobs + update stick, cached in app-data by firmware hash; `xdj-host prep`;
+//!   xdj-host then provisions the emulated NAND with the firmware's own ALL update)
 //!   with progress, remembers it as last-used, then boots it.
 //! * On exit it SIGTERMs `xdj-host` so QEMU + the sidecar + sockets tear down.
 //!
@@ -53,9 +54,13 @@ fn last_fw_file() -> PathBuf {
     app_data_root().join("last-firmware.txt")
 }
 
-/// A firmware dir is usable if it has the boot blobs + nand.img.
+/// A firmware dir is usable if it holds what `xdj-host prep` writes (boot blobs, the
+/// decrypted ISO, the update stick) and comes from the current prep pipeline
+/// (`prep-vN.stamp` = xdj-host's PREP_STAMP). An older cache fails this, so the drop
+/// screen comes back and re-dropping the firmware rebuilds it. Whether the unit's NAND
+/// is installed yet is xdj-host's business (it provisions a blank unit on its own).
 fn fw_complete(dir: &Path) -> bool {
-    ["vmlinux.bin", "tramp.bin", "atags.bin", "nand.img"]
+    ["vmlinux.bin", "tramp.bin", "atags.bin", "fw.iso", "update-stick.img", "prep-v3.stamp"]
         .iter()
         .all(|f| dir.join(f).exists())
 }

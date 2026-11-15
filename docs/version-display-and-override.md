@@ -1,122 +1,93 @@
-# UTILITY → VERSION No. shows `Ver --.--` — where it comes from, and how to override it
+# UTILITY → VERSION No. shows `Ver --.--` — where it comes from, and the fix
 
 ## Symptom
 
-In the on-device menu **UTILITY → VERSION INFORMATION** (bottom row), the
-emulator shows:
+In the on-device menu **UTILITY → VERSION No.**, the SD-boot emulator (the
+standalone app before it moved to NAND, and `qemu/watch.sh`) showed:
 
 ```
 Ver --.--
 ```
 
-A real XDJ-RX shows something like `Ver 1.xx` (main) / a sub version. This is a
-**cosmetic emulation gap**, not a fault — nothing depends on it. This note
-records exactly what produces the string so that a future *custom firmware*
-(a patched `rbp`, or a boot-time seed) can override the displayed version
-**without patching any MCU/panel code**.
+A real XDJ-RX on firmware 2.21 shows `Ver 2.21`.
 
-## Where the string is built
+## Cause: no `release` in the u-boot env
 
-Handler: **`FUN_00223140`** in `rbp` (the "VERSION INFORMATION / Welcome
-message" state machine; the retry string it uses is at `0x420dd4`, and this is
-reached as **case 5** of that handler).
+The version is **not** reported by rbp or the panel MCU. It comes from the u-boot
+env, which the **firmware updater** writes. The chain:
 
-Case 5 formats a single display line:
+1. **apl_start** (rootfs init script) at boot:
+   ```sh
+   release=`fw_printenv -n release`
+   if [ "$release" = "" ]; then release="--.--"; fi
+   ...
+   echo "$release" > /tmp/smdj.rev
+   echo "$release [$rev_string]" > /tmp/smdj2.rev
+   ```
+   On an SD boot, `$rev_string` is `<rbp.rev LCR>:<system.rev LCR>:<sub rev>`
+   ("Last Changed Rev" from `/root/pioneer/rbp.rev` and `/etc/system.rev`; the
+   sub rev from `fw_printenv -nn rev_panelcom`/`rev_dispcom`). On a NAND boot it is
+   built from the env `rev_*` variables instead.
+2. **rbp** reads `/tmp/smdj2.rev` when the VERSION screen opens
+   (`FUN_00223140` case 5; `/tmp/smdj2.rev` literal @ `0x418dbc`) and shows the
+   part before `[`. rbp only reads these files and never writes them.
+3. **`fw_printenv`** picks its env device from **SRC_SBMR1** (`0x020D8004`)
+   BOOT_CFG1[7:4]: ≥ 8 → `NAND /dev/mtd2 0x0` (size `0x20000`), otherwise
+   `SD /dev/mmcblk0 0xC0000` (size `0x2000`) (`/etc/fw_env.config`, `get_boot()`
+   in fw_printenv). QEMU sets the straps from `XDJ_BOOT_MEDIA` (`xdj-board.c`,
+   `xdj_src_sbmr1`).
+4. The SD image's env (`qemu/build-nand.py`) originally held only the SD-boot
+   selectors (`rootfs=sd`, `mmcdev`, …). With no `release`, the script fell back to
+   `--.--`. The rendezvous file held `--.-- [4206:4195:]`: rbp.rev LCR 4206,
+   system.rev LCR 4195, and an empty sub rev.
 
-```
-snprintf(buf, "M:%s S:%x.%x", <main_ver_string>, <sub_ver>>>8, <sub_ver>&0xff)
-```
+### Who writes `release` on a real unit: the updater's `finEnv()`
 
-so the full field is `M:<main> S:<sub>`. The LCD's **`Ver --.--`** is the
-**M:** (main) half — i.e. the main-version *string* is literally `--.--`.
+The updater (`/update` in the UPD) runs `getRevision(sys, apl, sub)` then
+`finEnv(release, sys, apl, sub, …)`:
 
-### MAIN version (`M:`) — read from a file
+| env var | value | source in the UPD |
+|---|---|---|
+| `release` | `2.21` | `head -n 1 images/release.txt` |
+| `rev_boot`, `rev_kernel`, `rev_rootfs`, `rev_data`, `rev_user` | `4195` | `images/system.rev` "Last Changed Rev" |
+| `rev_pioneer` | `4206` | `images/rbp.rev` "Last Changed Rev" |
+| `rev_panelcom` (ALL) / `rev_subucom` (user update) | `0.35` | `images/subucom.rev`, newlines stripped |
 
-The main version string is read at display time from the guest files:
+- **ALL update** (storage arg = NAND): `cp images/fw_env.txt /tmp/fw_env.txt`,
+  appends `echo <k>=<v>` lines, then `fw_initenv /tmp/fw_env.txt NAND`. This path
+  names the sub version **`rev_panelcom`**.
+- **User update**: `Shell::setEnv` (fw_setenv) for each variable. This path names
+  the sub version **`rev_subucom`**, which is what the updater's "current SUB
+  version" (`????` when unset) reads.
 
-| Guest path       | Role                                             |
-|------------------|--------------------------------------------------|
-| `/tmp/smdj2.rev` | main revision record → the `M:` string           |
-| `/tmp/smdj.rev`  | companion rev buffer; empty → `"Can't get version."` fallback |
+`getRevision()` falls back to `????` for a missing or unparsable file.
 
-On the running emulator `/tmp/smdj2.rev` literally contains:
+## Fix (emulator side, no rbp/rootfs patch)
 
-```
---.-- [4206:4195:]
-```
+- **NAND boot** (the standalone app, and `qemu/xdj_nand.py` provisioning +
+  `XDJ_BOOT_MEDIA=nand`): the real updater's `finEnv` writes these variables into
+  mtd2 during the ALL update that provisions the unit (`standalone-app.md` §4a).
+  Nothing extra is needed.
+- **SD test bed** (dev only: `qemu/watch.sh`, `relaunch.sh`; the app no longer
+  uses it): `qemu/build-nand.py` (`rev_env_entries`) derives the same variables
+  an ALL update writes from the ISO's `images/{release.txt,system.rev,rbp.rev,
+  subucom.rev}` and adds them to the SD env at `0xC0000`. Expected
+  `/tmp/smdj2.rev`: `2.21 [4206:4195:0.35]`, screen `Ver 2.21`.
 
-The `4206:4195` are the panel-MCU **model / ID** numbers (these *did* come
-through), but the **version fields after the `:` are blank**, so the parsed
-version string is `--.--`. That blank-but-present record is exactly why the
-screen reads `Ver --.--` instead of the "retry"/"Can't get version" fallbacks.
+## Overriding the displayed version (custom firmware)
 
-`rbp` only ever **reads** these paths in the version handler. (The one other
-reference to the `/tmp/smdj2.rev` string literal, in `FUN_001aefac`, is a
-config-schema/path-table *registration*, not a writer.) Whatever seeds the file
-at boot with the `--.-- [4206:4195:]` content comes from the panel-MCU
-StaticInfomation handshake path, which the emulator does not fully service.
+Set `release` in the u-boot env: `fw_setenv release X.YY` on a running guest, or
+edit `rev_env_entries` / the NAND env. It takes effect on the next boot, because
+apl_start writes `/tmp/smdj2.rev` once. For a one-off without rebooting, rewrite
+`/tmp/smdj2.rev`; rbp reads it each time the screen opens.
 
-### SUB version (`S:`) — from the StaticInfomation handshake
+The sub version shown in **test mode** ("SUB Ver.") is separate. It comes from
+frame bytes 2–3, which the harness parses from the emulated MCU flash
+(`XDJ_PANELCOM_IMG`); see `update-path-plan.md`.
 
-The sub version is the 16-bit word **`DAT_0123e054`** (init `0xffff`). It is
-filled by the **sub-ucom `StaticInfomation` handshake** (RTTI
-`N2ui16StaticInfomationE`) — a query/response the panel MCU answers on the SPI
-link. While it is still `0xffff`, case 5 prints the retry form
-(`"...StaticInfomation is not completed. retry..."` → `S:Read Again`).
+## History
 
-**The QEMU sub-ucom harness is a control-input stub only.** It injects the
-100-byte button/analog frame (see [subucom-frame-map.md](subucom-frame-map.md))
-but does **not** answer the StaticInfomation/version query, so `DAT_0123e054`
-stays `0xffff` and the file keeps its blank version. That is the root of the
-`--.--`.
-
-## Overriding the version WITHOUT patching MCU code (future custom firmware)
-
-Goal: when we ship a patched-`rbp` "custom firmware", be able to set the
-displayed version freely, without touching any MCU/panel-MCU microcode and
-without reverse-patching the StaticInfomation protocol. Three routes, cheapest
-first:
-
-1. **Seed the rev files (no code at all).** Write a proper record to
-   `/tmp/smdj.rev` and `/tmp/smdj2.rev` on the guest before the VERSION screen
-   is opened (a boot hook / init snippet / the QEMU harness dropping the file).
-   Case 5 reads `/tmp/smdj2.rev` at display time, so a line of the form
-   `<ver> [<model>:<id>:]` (e.g. `2.21 [4206:4195:]`) makes `M:` show `2.21`.
-   - This is the **recommended** override: pure userspace, no `rbp` patch, no
-     MCU code. It controls the **MAIN** (`M:`) half.
-   - Caveat to verify when implemented: confirm nothing rewrites the file back
-     to `--.--` after the seed (the original seeder lives on the
-     StaticInfomation path, which the harness doesn't run — so in the emulator
-     the seed should stick; on real hardware the MCU would re-seed it).
-
-2. **Answer StaticInfomation in the QEMU harness.** Implement the
-   StaticInfomation query/response in the sub-ucom harness so `DAT_0123e054`
-   becomes a real value. This lights up the **SUB** (`S:`) half (and is what a
-   real panel does). More work; only needed if we want `S:` correct too. Still
-   **no `rbp`/MCU patch** — it's harness code.
-
-3. **Patch `rbp` directly (custom-firmware route).** In a patched `rbp`, seed
-   `DAT_0123e054` to a constant and/or short-circuit the `M:`/`S:` formatting
-   in `FUN_00223140` case 5. Fully under our control, but this *is* patching the
-   main binary — use only if we want the version baked into the firmware image
-   itself rather than supplied at runtime.
-
-### Summary
-
-| Want to control | Source                      | No-MCU-patch override            |
-|-----------------|-----------------------------|----------------------------------|
-| `M:` (main)     | `/tmp/smdj2.rev` file        | **Seed the file** (route 1)      |
-| `S:` (sub)      | `DAT_0123e054` (StaticInfo)  | Harness StaticInfomation (route 2) |
-| both, baked in  | `FUN_00223140` case 5        | patched `rbp` (route 3)          |
-
-## References
-
-- `rbp` `FUN_00223140` — version/welcome state machine, case 5 = VERSION INFORMATION.
-- `rbp` `FUN_001aefac` @ `0x1aefcc` — the only *other* ref to the
-  `/tmp/smdj2.rev` literal; a config-table registration, not a writer.
-- String literals: `/tmp/smdj.rev` @ file off `0x416388`,
-  `/tmp/smdj2.rev` @ `0x418dbc`.
-- StaticInfomation RTTI: `N2ui16StaticInfomationE`; sub-version word
-  `DAT_0123e054` (init `0xffff`).
-- Panel frame / harness: [subucom-frame-map.md](subucom-frame-map.md),
-  [rbp-and-panel-protocol.md](rbp-and-panel-protocol.md).
+An earlier version of this note blamed the missing sub-ucom StaticInfomation
+handshake and described the `[4206:4195:]` numbers as panel-MCU model/ID. Both
+were wrong: the handshake object is only a lazy cache, and those numbers are the
+svn "Last Changed Rev" values of rbp and the system.

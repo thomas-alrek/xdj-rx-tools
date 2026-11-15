@@ -143,12 +143,16 @@ switch is held to DECK.
   `printf 'B 13 04\nB 12 08\n' > /tmp/subucom_ctrl` before `relaunch.sh` (file mode), remove the
   file once Mode 1 shows, then turn/push the browse encoder to change mode. rbp only checks the
   **first** frame it parses, so the holds must already be there at boot. Modes 5/6/7 are oracles
-  for mapping LEDs, switches and pots. Occasionally comes up in the normal UI or crashes the
-  `TestModeView` thread — just reboot.
+  for mapping LEDs, switches and pots. In the desktop app: **File > Power On in Test Mode** (panel
+  `POST /power on test`; holds, cold-boots, releases after `Resolve xrun`). It used to come up in
+  the normal UI about half the time — the harness bound its `xdjctrl` chardev lazily on the first
+  SPI frame, so a boot-time snapshot missed rbp's first frame; now bound at realize.
+  `XDJ_FRAME_LOG=1` prints the first 12 frames' `[12]/[13]` bytes to check what rbp saw.
 - **Firmware-update mode**: `XDJ_BOOT_UPDATE=1 ./tools/xdj-panel/debug/relaunch.sh` (QEMU patch
   19) → the initramfs "Connect USB storage device into top USB1 port." screen. Going further needs a
-  USB image with `XDJRX.UPD`, and the updater then wants NAND MTDs + the sub-ucom update protocol
-  (not emulated). Debug launcher only (`snapshot=on`); never the app image or a real stick.
+  USB image with `XDJRX.UPD` (`qemu/xdj_update_stick.py` builds one); with `XDJ_NAND_IMG` +
+  `XDJ_PANELCOM_IMG` the full update completes (`docs/update-path-plan.md`). The desktop app
+  provisions and boots its NAND unit this way by itself (`docs/standalone-app.md` §4a).
 - **Factory reset**: DELETE + TEMPO RANGE (`B 13 08` + `B 12 08`) — untested.
 
 ## Gotchas

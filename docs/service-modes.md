@@ -28,6 +28,16 @@ ON/OFF is pressed.
 | 7 | every pot/fader value as `000–3FF` hex (TRIM, EQ, COLOR, FADER, TEMPO, TOUCH/RELEASE, MIC EQ, HP, XF, LEVEL/DEPTH, BOOTH, MASTER) | **analog-map oracle**: reads back exactly what our frame sends |
 | 8 | SELECTOR / TIME rotary counters `00–FF` | encoder oracle |
 
+**From the app**: File > *Power On in Test Mode* (`POST /power on test`): the panel holds
+`B 12 08` + `B 13 04`, cold-boots (power-cycling first if on), and releases them once rbp is fully
+up (`ALSA: Resolve xrun`). Two races used to make it boot normally about half the time; both fixed
+(2026-11-15): the harness bound its `xdjctrl` chardev lazily *on the first SPI frame*, so a snapshot
+sent at QEMU start was read only after that frame was built — now bound at realize
+(`xdj_subucom_realize`); and the keys were released on rbp's first LED frame, which can precede its
+first parsed input frame. `XDJ_FRAME_LOG=1` traces the first 12 frames (`XDJ-FRAME n t= snap=
+[12]= [13]= [33]=` on QEMU's stderr): frames 0–2 come from the kernel driver at probe, rbp's first
+poll ~20 s later.
+
 **How rbp enters it** (static + live, rbp sha `4f62aa71…`):
 - `Base::setBinaryData()` (`0x284d48`) parses each sub-ucom frame. When there is **no previous
   frame** (index `0xffff`, i.e. the first frame after start) it calls the **boot-key handler
