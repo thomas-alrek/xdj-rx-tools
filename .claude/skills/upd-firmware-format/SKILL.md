@@ -6,8 +6,8 @@ description: Decrypt, inspect, extract, and repack Pioneer XDJ-RX (.UPD) firmwar
 # XDJ-RX `.UPD` firmware format
 
 The XDJ-RX (XDJAERO / i.MX6 platform) ships firmware as an **encrypted ISO9660** image.
-Tool: **`xdj`** (Rust, `crates/xdj-fw`; `cargo build --release` there → `crates/xdj-fw/target/release/xdj`).
-The older `xdjrx_upd.py` does decrypt/extract/pack only. Key fetch: **`fetch_key.py`**.
+Tool: **`xdj`** (Rust, `crates/xdj-fw`; `cargo build --release` there → `crates/xdj-fw/target/release/xdj`;
+the same library backs the desktop app's `xdj-host`). Key fetch: **`tools/fetch_key.py`** (Python).
 
 ## Container layout
 ```
@@ -28,10 +28,13 @@ The older `xdjrx_upd.py` does decrypt/extract/pack only. Key fetch: **`fetch_key
 ## The AES key (not in this repo)
 Ships inside Pioneer's own **GPL/LGPL source release**:
 `pioneer_xdj_rx.tar.gz → initramfs.tar.gz → initramfs/usr/local/pioneer/aes256.key`.
-- `python3 fetch_key.py` resolves it: uses `./aes256.key` if present, else downloads the GPL
-  source parts (deflate64 zips, ~280 MB), streams the nested tars, pulls `aes256.key`, derives
-  the 32-byte key, and writes `./.env` as `XDJRX_AES_KEY=<64 hex>`. `--version 1.50|1.40|1.00`.
-- `xdjrx_upd.py` reads the key from `--key-file`, then `$XDJRX_AES_KEY`, then `.env`.
+- `python3 tools/fetch_key.py` resolves it: uses `build/aes256.key` if present, else downloads the
+  GPL source parts (deflate64 zips, ~280 MB; needs `inflate64`, `tools/requirements.txt`), streams
+  the nested tars, pulls `aes256.key` (cached as `build/aes256.key`), derives the 32-byte key, and
+  writes the repo-root `.env` as `XDJRX_AES_KEY=<64 hex>`. `--version 1.50|1.40|1.00`, `--force`.
+- `xdj` reads the key from `--key-file` (64 hex or a losetup passphrase file), then
+  `$XDJRX_AES_KEY`, then `XDJRX_AES_KEY=` in a `.env` in the cwd or a parent, then the desktop
+  app's saved key (`~/Library/Application Support/XDJ-RX/key/aes256.key`).
 - **Both `.env` and `aes256.key` are git-ignored** — never commit Pioneer-owned material.
   This is interoperability/preservation on owned hardware.
 
@@ -47,7 +50,13 @@ xdj fw pack    modified.iso -o NEW.UPD --model XDJAERO2.21          # raw re-enc
 xdj fw stick   NEW.UPD stick.img               # FAT16 USB stick with XDJRX.UPD (to install)
 ```
 Accepts a `.UPD` directly or a Pioneer `.zip` containing one (handles deflate64 members).
-Output defaults land in `build/` (git-ignored).
+Output defaults land in `build/` (git-ignored). Same binary, emulator side:
+```
+xdj prepare    <ISO|UPD> [--out DIR]           # uImage/vmlinux.bin/tramp.bin/atags.bin (default build/qemu)
+xdj nand init  <IMG> (--iso ISO | --upd UPD | --env fw_env.txt)   # blank emulated NAND + factory env
+xdj nand env|info <IMG>                        # u-boot env / partitions, release, kernel banks
+xdj nand boot  <IMG> <DIR>                     # u-boot's bootcmd_nand -> QEMU loader blobs
+```
 
 ## What's inside (for the emulator)
 The ISO holds the device rootfs/update payload — the Linux kernel, the initramfs, and the
@@ -63,7 +72,7 @@ GPIO3_IO30 HIGH (sub-ucom update request, USB STOP + RELOOP at power-on) or `boo
 D001 screen → `mount_nandupdate` (USB1, `XDJRX.UPD`) → `check_sig` → `decrypt_update` → `update`
 (writes NAND MTDs, reflashes the sub-ucom over `/dev/subucom_spi1.0`). Emulator: `XDJ_BOOT_UPDATE=1`.
 
-## Building a custom firmware (`xdj fw build`) — verified end to end 2026-11-15
+## Building a custom firmware (`xdj fw build`)
 How-to: skill **[custom-firmware]**; full write-up: `docs/custom-firmware.md`.
 **There is no cryptographic signature.** The update's `check_sig` (initramfs, `check_sig.c` +
 `CommonCrc32.c`) only checks the footer CRC32 and that the model string starts with `XDJAERO`;
@@ -95,6 +104,7 @@ runnable (see the project's standing constraint).
   decrypting body sector **64** (0x8000/512) with `IV=LE32(64)`.
 
 ## References
-`crates/xdj-fw` (`xdj` CLI + library, also used by `xdj-host`), `tools/fw/make-test-upd.sh`,
-`xdjrx_upd.py`, `fetch_key.py` (repo root), `README.md`, `QEMU.md`. Related skills:
-[rbp-binary-internals], [run-xdj-emulator].
+`crates/xdj-fw` (`xdj` CLI + library, also used by `xdj-host`; `crates/xdj-fw/README.md`),
+`tools/fw/make-test-upd.sh`, `tools/fetch_key.py`, `docs/custom-firmware.md`,
+`docs/firmware-update-and-nand.md`, `docs/service-modes.md`. Related skills: [custom-firmware],
+[build-xdj-sd-image], [rbp-binary-internals], [run-xdj-emulator].

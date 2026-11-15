@@ -47,23 +47,27 @@ else
     echo "==> creating python venv ($VENV) with firmware-tool deps"
     asuser python3 -m venv "$VENV"
     asuser "$VENV/bin/pip" install -q --upgrade pip
-    asuser "$VENV/bin/pip" install -q pycdlib pycryptodome inflate64
+    asuser "$VENV/bin/pip" install -q -r tools/requirements.txt
   fi
   PY() { asuser "$VENV/bin/python3" "$@"; }
 fi
+
+# The firmware toolkit (`xdj` CLI, crates/xdj-fw): decrypt + boot blobs.
+XDJ=crates/xdj-fw/target/release/xdj
+[ -x "$XDJ" ] || { echo "==> building the xdj firmware tool"; ( cd crates/xdj-fw && asuser cargo build --release -q ); }
 
 # 1. Firmware update package (encrypted .UPD inside a .zip)
 [ -f "$FW_ZIP" ] || { echo "==> downloading firmware ($FW_URL)"; asuser curl -fSL -o "$FW_ZIP" "$FW_URL"; }
 
 # 2. AES-256 key -> .env.  Uses ./aes256.key if present, else pulls it from
 #    Pioneer's own published GPL source (~280 MB, cached). Nothing secret is committed.
-[ -f .env ] || { echo "==> resolving firmware AES key"; PY fetch_key.py; }
+[ -f .env ] || { echo "==> resolving firmware AES key"; PY tools/fetch_key.py; }
 
 # 3. Decrypt the cryptoloop firmware -> ISO9660 image
-[ -f "$ISO" ] || { echo "==> decrypting firmware -> $ISO"; PY xdjrx_upd.py decrypt "$FW_ZIP" -o "$ISO"; }
+[ -f "$ISO" ] || { echo "==> decrypting firmware -> $ISO"; asuser "$XDJ" fw decrypt "$FW_ZIP" -o "$ISO"; }
 
 # 4. Extract/decompress the kernel and build the SABRE-SD boot blobs
-[ -f "$Q/vmlinux.bin" ] || { echo "==> preparing boot blobs"; PY qemu_prepare.py "$ISO"; }
+[ -f "$Q/vmlinux.bin" ] || { echo "==> preparing boot blobs"; asuser "$XDJ" prepare "$ISO" --out "$Q"; }
 
 # 5. Build the patched QEMU (GPU stub + framebuffer scanout + SABRE-SD board)
 ls "$Q"/../qemu-src/*/build/qemu-system-arm >/dev/null 2>&1 || { echo "==> building QEMU"; asuser qemu/build-qemu.sh; }

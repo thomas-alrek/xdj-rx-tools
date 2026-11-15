@@ -1,333 +1,184 @@
-# XDJ-RX emulator — feature status & findings
+# XDJ-RX emulator — feature status (1.0)
 
-Status of the standalone-emulator effort (QEMU `-M sabrelite` patched to the
-XDJ-RX's real SABRE-SD board). The goal: a packaged emulator that takes only the
-**unmodified** `.UPD` firmware, used to develop device features (exFAT, FLAC, …).
-Prefer QEMU-side changes over firmware edits; exFAT/FLAC are device features that
-will modify the firmware (the emulator is the dev/test vehicle).
+The emulator runs the **unmodified** XDJ-RX firmware on a patched QEMU (`-M sabrelite`, wired as the
+XDJ-RX's real board, a Freescale i.MX6Q SABRE-SD). Everything that makes the firmware happy is done
+QEMU-side: device models in `qemu/xdj/*.c` plus five small patches to stock QEMU files in
+`qemu/patches/` (skill `qemu-imx6-patches`). `rbp`, the kernel and the root filesystem are never
+patched in the emulator workflow, so custom firmware can be tested by installing and booting it.
 
-Packaging the above into a self-contained, drag-drop-firmware desktop app is
-planned separately — see [standalone-app-roadmap.md](standalone-app-roadmap.md).
+Legend: ✅ works · 🔶 partial · ⬜ not started
 
-Legend: ✅ done · 🔶 partial/diagnosed · ⬜ investigated, not started · ❌ blocked
+| area | status |
+|---|---|
+| [Boot, display, GPU](#boot-display-gpu) | ✅ |
+| [Panel controls and LEDs](#panel-controls-and-leds) | ✅ |
+| [Audio](#audio) | ✅ |
+| [USB](#usb) | ✅ |
+| [Network](#network) | 🔶 |
+| [Firmware update, NAND unit, desktop app](#firmware-update-nand-unit-desktop-app) | ✅ |
+| [Custom firmware](#custom-firmware) | ✅ |
+| [Service modes and auth chip](#service-modes-and-auth-chip) | ✅ |
+| [Device features (exFAT, FLAC)](#device-features-exfat-flac) | ⬜ |
+| [Known limitations and open items](#known-limitations-and-open-items) | — |
 
-## ✅ Firmware update, NAND unit, desktop app (2026-11-15)
-- **Full firmware update** (SUB + MAIN) runs Pioneer's own updater to completion: panel-MCU flash
-  bootloader + APBH-DMA/GPMI/BCH + 256 MiB NAND (`docs/update-path-plan.md`).
-- **The desktop app is a NAND unit** (no SD card): a dropped firmware provisions a blank unit with the
-  firmware's ALL update (stick inserted automatically), then boots from NAND; later updates done in the
-  emulator boot the new kernel bank. "Installed" = `release=` in the NAND env
-  (`docs/standalone-app.md` §4a).
-- **UTILITY → VERSION No.** shows `Ver 2.21` (it is the u-boot env `release`, written by the updater;
-  `docs/version-display-and-override.md`).
-- **Test mode** from the app (File > Power On in Test Mode): reliable after binding the `xdjctrl`
-  chardev at realize (`docs/service-modes.md`).
-- **Custom firmware**: `xdj fw build` (base image + overlay + release) produces a `.UPD` that Pioneer's
-  updater installs; TEST.UPD 2.30 installed and booted (`docs/custom-firmware.md`).
-- **No Python in the app**: prep, NAND and the panel server are Rust in `xdj-host`, each checked
-  byte-for-byte against the Python dev tools (`qemu/test_rust_parity.sh`,
-  `tools/xdj-panel/test_panel_parity.py`).
+## Boot, display, GPU
+✅ Boots to the live rekordbox deck UI, dual-core (`-smp 2`, the real configuration) by default.
+- **Display** (`xdj-display.c`): the splash renders at 32 bpp, the deck UI at 16 bpp RGB565; the
+  scanout reads the live IPU display-channel stride and decodes whichever depth is active.
+- **Vivante GPU** (`xdj-display.c`): the stock `galcore` driver fully initialises (`/dev/galcore`
+  exists) and the deck UI renders through it via DirectFB's GAL driver. The stub provides:
+  - the GC2000 3D core, a GC320 2D identity (so galcore derives `gcvHARDWARE_2D`) and the GC355
+    OpenVG core at `0x02204000` (core index 2) with VG chipFeatures bit 28 set and its own IRQ
+    (`V2D_IRQ`, GIC 43);
+  - command completion: each submitted command's EVENT id (`LOAD_STATE 0x0E01`) is parsed from the
+    command buffer and exactly that event is raised (`xdj_gpu_cmd_event`); AXI-error/MMU bits
+    (31/30) of `AQIntrAcknowledge` are never reported;
+  - the DVFS settling tick: CCM clock-step writes (CCSR/CACRR/CGPR) raise the GPT OF1 interrupt
+    (GIC 87, `imx_gpt_kick()`), which ends the kernel's `set_high_bus_freq` `GICC_HPPIR` poll. Side
+    effect: the tick also wakes the idle WFI, so the idle loop re-runs its own bus-freq step; this
+    costs host CPU but does not block anything.
+- **USB OTG**: the controller's VBUS/session-valid change is modelled (`04-usb-chipidea-hub.patch`),
+  so boot doesn't stall at `wait otg vbus change timeout!`.
+- **GPIO straps** (`xdj-board.c`): the USB fault flags GPIO4_IO30 / GPIO7_IO12 reset HIGH as on
+  hardware (reading 0 deadlocks rbp's panel init); `SRC_SBMR1` boot straps follow `XDJ_BOOT_MEDIA`.
+- Knobs: `XDJ_GPU2D_OFF=1` reports a GC2000 in the 2D slot so galcore fails `-22` and DirectFB
+  software-renders (regression comparison only); `XDJSMP=1` boots single-core (the init script then
+  launches `rbp_solo`, which only the SD test bed provides). Traces: `IMX6_GPU_TRACE`, `IPU_TRACE`,
+  `XDJ_FB_TRACE`.
 
-## ✅ Boot to the live UI (unmodified firmware)
-Splash (32bpp) + main UI (16bpp RGB565) render; dynamic bpp scanout reads the IPU
-display stride. Launch: `qemu/watch.sh`. Uses `nand.img` (the GAL
-DirectFB gfxdriver removed so DirectFB software-renders). Committed.
+## Panel controls and LEDs
+✅ The front panel ("sub-ucom" MCU) is emulated in `xdj-panel.c`: rbp reads every control and
+drives every LED and meter.
+- **Input** (MISO `SubRxData`): one 100-byte frame on `/dev/subucom_spi1.0` per ECSPI burst
+  (`xdj_subucom_frame_start`, hooked from `02-imx6-peripherals.patch`). CRC-16/X-25 (poly 0x8408,
+  init/xorout 0xFFFF) over the first 96 bytes with each 32-bit word byte-reversed, LE at `[0x62]`;
+  the ECSPI shifts each word MSB-first, so rbp's byte `j` is frame byte `(j&~3)+(3-(j&3))`. Frame
+  bytes 2–3 carry the MCU firmware version (see [service modes](service-modes.md)).
+- **Control map**: every button, fader, knob, the jog wheels and the browse encoder are
+  runtime-verified —
+  [subucom-frame-map.md](subucom-frame-map.md); protocol and decoder internals:
+  [rbp-and-panel-protocol.md](rbp-and-panel-protocol.md). The POWER key (`0x5d.0`) is active-low and
+  inverted by the harness (a hold means "pressed").
+- **Output** (MOSI `SubTxData`): 20-byte payload, CRC-16/X-25 at `[0x16]`, deck 2 = deck 1 + 4
+  bytes. Published on every change as `T <hex>` up the `xdjctrl` chardev (or `/tmp/subucom_tx` in
+  file mode); the panel streams it at `GET /leds`. Lit: PLAY, CUE, LOOP IN/OUT, RELOOP, REV, SLIP,
+  SYNC, MASTER, M.T, VINYL, pad modes and pads, CUE1/2, the four COLOR FX, BEAT FX ON, MASTER REC,
+  the CH1/CH2/MASTER meters and the jog rings — [subucom-led-map.md](subucom-led-map.md).
+- **Source-key LEDs** (rekordbox/MIDI/USB1/USB2) are rbp GPIO outputs 162–165, mirrored by
+  `xdj-board.c` onto the LED line as byte `0x14`.
+- **MASTER REC** records to USB2, with its blinking LED.
+- **Transport**: per-instance QEMU chardevs `id=xdjctrl` (sub-ucom snapshot) and `id=xdjkey`
+  (main-ucom key GPIO). The client writes the whole control state as one NUL-terminated record
+  (empty = release). Launch with `XDJ_RUNTIME_DIR=<dir>` (sockets `<dir>/ctrl.sock`, `key.sock`).
+  Without those chardevs the harness reads `/tmp/subucom_ctrl` / `/tmp/mainkey` (override:
+  `XDJ_CTRL_PATH` / `XDJ_KEY_PATH`), which the debug tools (`inj.py`, `sweep_*.py`) use.
+- **Auto-level**: once rbp has been polling for a settle delay, the harness merges an audible
+  default into the frame (both channels → DECK, faders/MASTER/TRIM up, EQ and COLOR centred), per
+  control, so a hold for any offset still wins. `XDJ_AUTOLEVEL=0` disables it,
+  `XDJ_AUTOLEVEL_DELAY_MS` sets the settle (default 4000).
+- Debug knobs: `SUBUCOM_TRACE=1` (SPI frames), `XDJ_FRAME_LOG=1` (first 12 frames), `XDJ_TX_LOG`,
+  `XDJ_TX_PATH`.
 
-**Boot-speed:** the multi-second stall at the splash (`wait otg vbus change
-timeout!`, between `ehci_hcd` and `fsl-ehci.0`) was the i.MX6 OTG controller
-waiting for a VBUS/session-valid transition that QEMU's stubbed USB PHY + chipidea
-OTGSC (both read 0) could never deliver, so it only continued at the kernel
-timeout. Fixed by the OTG VBUS change, now in `qemu/patches/04-usb-chipidea-hub.patch` (was patch 12; OTGSC reports a
-settled host VBUS/session); the OTG core now registers with no gap and USB still
-mounts. Firmware untouched.
+## Audio
+✅ Real deck audio reaches the host (`xdj-audio.c`): a minimal SDMA engine, RAM-backed SSI1/2/3
+and AUDMUX let imx-sdma/ASoC/ALSA run with the playhead in real time; a host sonifier plays SDMA
+**ch1 = MasterOut**.
+- Audible needs routing = DECK (`rbp[0x33].7` / `rbp[0x43].7`) and gains up (rbp's on-air gate
+  `FUN_00065028`); auto-level provides both.
+- **Pacing**: rbp's ALSA ring is 2 × 64 frames, so periods must complete evenly. A pacer thread
+  completes one period per 1.45 ms, rate-locked to the host through a PCM FIFO (two decks + BEAT
+  FX + COLOR FX + tempo: ~2 guest xruns in 30 s). Launch scripts set the host backend's
+  `timer-period=1451`.
+- Knobs: `XDJAUDIO` (host backend, `none` = silent), `XDJ_AUDIO_LATENCY_MS` (FIFO target, default
+  20 ms), `XDJ_AUDIO_OUT_CH` (SDMA channel, default 1), `XDJ_AUDIO_NOSOUND`, `XDJ_AUDIO_PERIOD_HZ`,
+  `XDJ_AUDIO_BYTE_RATE`.
+- Verify: `XDJ_AUDIO_STATS=1` (pacer stats), `XDJ_AUDIO_DEBUG=1` (per-channel SDMA peaks); xruns
+  show as `ALSA: Resolve xrun` on the guest console.
 
-**Auto-level:** the mixer is auto-initialised to an audible default on boot
-(auto-level, now in `qemu/xdj/xdj-panel.c`; was patch 13) so a loaded deck plays without a
-manual gain/routing inject. The sub-ucom harness uses the panel SPI poll itself as
-the "rbp is up" signal and, after a short settle, **merges** an audible default
-(both channels → DECK + unity-ish gains) into the frame per-control: a
-`/tmp/subucom_ctrl` hold overrides the baseline for the offsets it sets (web panel
-keeps full runtime control), while an unrelated leftover hold can't silence the
-deck. Verified: routing flips to DECK on its own (and stays DECK with an unrelated
-hold present); deck plays to the host (master SDMA peak ~85% FS).
-`XDJ_AUTOLEVEL=0` disables it; `XDJ_AUTOLEVEL_DELAY_MS` tunes the settle (default 4000).
+## USB
+✅ Both front slots work like hardware: boot with the USB 2.0 hub only, insert the stick after rbp
+is polling (`device_add`, or LOAD in the panel) → it mounts at `/media/usb1|usb2/sda1` and rbp
+loads the rekordbox library. Recipe and troubleshooting: [usb.md](usb.md).
+- `xdj-usbnc.c` wakes the suspended HOST1 on attach; `04-usb-chipidea-hub.patch` provides the
+  high-speed hub and ChipIdea port speed, so the slots enumerate at **480 Mbit/s**;
+  `05-macos-submillisecond-poll.patch` keeps sub-ms QEMU timers on time on macOS. The firmware caps
+  requests at 8 KB, so per-request latency dominates: a 60 MB WAV loads in ~7.4 s.
+- GPIO4_IO30 / GPIO7_IO12 (gpiodrv `0x7e` / `0xcc`) are **active-low USB fault flags**, not
+  insert-detect. `touch /tmp/usb_insert` / `/tmp/usb2_insert` deliberately injects a fault ("USB
+  Error. Remove the device.").
+- A stick attached at boot (cold-plug) races rbp's mount rendezvous and shows "USB Error"; insert
+  after boot instead. Don't `device_del` to retry by hand (it tears down the drive backend); the
+  panel's eject handles this, otherwise reboot.
 
-## ✅ A. galcore / Vivante GPU — fully initialises (default path)
-The built-in galcore (Vivante) driver now fully initialises on the default boot path:
-the QEMU GPU stub (`xdj-display.c` (was patch 02)) + GC355 VG core + DVFS GPT kick (`xdj-display.c` (was patch 05)) carry it through
-init, so `/dev/galcore` exists and boot reaches `#### Application Start!! ###` (details
-below). The rootfs is now byte-for-byte (the DirectFB GAL gfxdriver `libdirectfb_gal.so`
-is kept), and **the full live deck UI renders through galcore** (pixel-identical to
-software render, no `gui_task` crash). The last blocker — galcore's runtime 2D
-command-completion — is emulated in `xdj-display.c` (was patch 02) (`xdj_gpu_cmd_event`): the stub parses each
-submitted command's EVENT id (`LOAD_STATE 0x0E01`) from the command buffer and raises
-exactly that completion event, instead of a fixed mask, so rbp's per-commit blit stalls
-release. Full write-up in `docs/gpu2d-handover.md` ("Runtime 2D completion").
+## Network
+🔶 The i.MX6 FEC is modelled and `eth0` works; rekordbox LINK over the LAN is untested.
+- Backend: user-mode NAT by default; `XDJNIC=bridged` (or a literal QEMU nic spec) puts the device
+  on the LAN (`qemu/watch.sh`; macOS vmnet needs root, `run.sh` elevates only that launch).
+- `eth0` gets a DHCP lease on both boots: on a NAND unit rbp starts `udhcpc` itself once it is
+  up (console: `udhcpc … Lease of 10.0.2.15 obtained`); the SD test bed (`qemu/build-nand.py`) also
+  adds a backgrounded `udhcpc` to apl_start.
+- Open: enable rekordbox LINK from rbp's menu and check the library link with a rekordbox PC on the
+  LAN (rbp's link handler: `LnkHand`). The target is the rekordbox library link, not Pro DJ Link.
 
-**The full-galcore path is now the DEFAULT (and only) boot path.** Making galcore fully
-initialise needs `xdj-display.c` (was patch 02)'s GC320 2D identity (so galcore derives `gcvHARDWARE_2D` and
-clears `-22`) plus the mapped GC355 VG core and the DVFS GPT kick. That path is now
-**always on** and boots to the live UI on `-smp 1` (the launch default); the old
-software-render behaviour is reachable only as a regression escape hatch
-(`XDJ_GPU2D_OFF=1`: 2D slot reports GC2000, galcore fails `-22` and fast-aborts). The
-remaining open work is the real dual-core `-smp 2` config — see `docs/gpu2d-handover.md`.
+## Firmware update, NAND unit, desktop app
+✅ The full firmware update (SUB + MAIN) runs Pioneer's own updater to completion, and a unit boots
+from its emulated NAND — [firmware-update-and-nand.md](firmware-update-and-nand.md).
+- `xdj-panel.c` emulates the panel MCU's flash bootloader (1 MiB flash, persisted to
+  `XDJ_PANELCOM_IMG`; update type from `XDJ_UPDATE_TYPE`, hex: `10` normal, `20` ALL, `15`
+  SERVICE; `XDJ_BL_LOG=1` traces it). `xdj-nand.c` emulates APBH-DMA/GPMI/BCH and a 256 MiB NAND
+  (`XDJ_NAND_IMG`, `XDJ_NAND_LOG`).
+- **Provision + boot** with the `xdj` CLI: `xdj nand init` (blank NAND with the firmware's default
+  env) → an ALL update from USB → `xdj nand boot` (u-boot's `bootcmd_nand`: reads `kernel_bank`,
+  builds the boot blobs) → launch with `XDJ_BOOT_MEDIA=nand XDJ_SD=none XDJ_SMP=2`.
+- **Desktop app** ([standalone-app.md](standalone-app.md)): a dropped firmware provisions a blank
+  NAND unit with its ALL update (stick inserted automatically), then boots from NAND. "Installed" =
+  `release=` in the NAND env. The app starts powered off; the panel's POWER switch / File menu
+  powers QEMU on and off (the [standby handshake](service-modes.md#power-key-standby-handshake)
+  when rbp is up). USB images loaded while off are inserted after boot. File menu: *Power On in Test
+  Mode*, *Install Firmware Update…*, *Enter Firmware Update Mode*. The window shows the deck only,
+  aspect-locked. Prep, NAND handling and the panel server are Rust in `xdj-host` (no Python).
+- **UTILITY → VERSION No.** shows the installed release, e.g. `Ver 2.21` —
+  [version-display-and-override.md](version-display-and-override.md).
 
-The galcore **boot hang is SOLVED** (session 4); galcore runs its full init and the
-firmware boots to `#### Application Start!! ###`. Three nested blockers were found and
-cleared:
-1. **i.MX6 bus-frequency DVFS settling wait (SOLVED).** Enabling the GPU clocks makes
-   galcore call `set_high_bus_freq`, which steps the ARM/DDR clocks with CPU IRQs
-   masked then busy-polls `GICC_HPPIR` for a settling tick. Under emulation the
-   one-shot GPT clockevent isn't reprogrammed in that masked window, so nothing goes
-   pending and the poll spins forever (proved at the hang via gdb: no enabled IRQ
-   pending → HPPIR stays `0x3ff`). **Fix: `imx_gpt_kick()`** (`xdj-display.c` (was patch 05)) raises the GPT
-   OF1 interrupt (GIC ID 87) from the CCM clock-step register writes (`xdj-display.c` (was patch 05) hooks
-   `imx6_ccm_write` on CCSR/CACRR/CGPR; `xdj-display.c` (was patch 02) arms it on the full-galcore path,
-   now the default).
-2. **Idle-loop feedback (benign side-effect).** The GPT kick also wakes the CPU-idle
-   WFI, whose `imx6q_enter_wait` runs its own bus-freq DVFS → a busy idle↔busfreq loop.
-   It does not block progress (galcore's init still completes); it only burns host CPU.
-   A `GICC_HPPIR` read-overlay would avoid it but doesn't reach guest GIC accesses under
-   QEMU's a9mpcore mapping, so the kick is kept as-is.
-3. **The GC355 OpenVG core (SOLVED — the real hang).** The deadlock that masked
-   everything else was galcore's **VG core** init: i.MX6 has a *third* Vivante core,
-   the GC355 OpenVG engine at `0x02204000` (`gcvCORE_VG`, core index 2), which QEMU did
-   not map. galcore enumerates and initialises all three cores; its VG clock/idle poll
-   (`gckOS_ReadRegisterEx` core 2, regs 0x004/0x000) read the unmapped region, got 0,
-   and spun forever (the "idle"/"clock-running" bits never set) — found by walking the
-   blocked init thread's stack (PID 1, `tasks_off=0xb8`) to `gckOS_Delay` inside the
-   poll. **Fix: map a GC355 VG stub at `0x02204000`** (`xdj-display.c` (was patch 02), on the default path),
-   reusing the idle/clock-reporting stub ops. With it, galcore's core init completes and
-   boot runs through to Application Start.
+## Custom firmware
+✅ `xdj fw build` (base image + overlay + `--release`) produces a `.UPD` that Pioneer's updater
+installs on the emulated unit, which then boots it (e.g. 2.21 → 2.30, test mode shows SYSTEM
+Ver.2.30) — [custom-firmware.md](custom-firmware.md) (skill `custom-firmware`). Not yet covered:
+kernel/initramfs rebuilding, u-boot and panel-MCU images (carried over untouched), downgrades.
 
-**SOLVED (Part 2): galcore fully initialises — `/dev/galcore` exists.** On the default
-path the firmware now boots to `#### Application Start!! ###` with no `-22`,
-no MMU/AXI error and no oops; a guest shell confirms `crw-rw-rw- 199,0 /dev/galcore`,
-and a framebuffer screendump shows the Pioneer DJ / rekordbox boot splash
-(`docs/img/galcore-boot-splash.png`). The `-22` and the crashes after it were traced
-with Ghidra (on a sliced region ELF — the full 13 MB kernel times out Ghidra's import)
-and with gdb hardware breakpoints (which *do* work here — the old "breakpoints
-non-functional" note was wrong). `gckGALDEVICE_Construct` builds three cores (3D/2D/VG);
-the 2D-type check passes (GC320 derives type 2), and the real blockers were all in the
-**GC355 VG (OpenVG) core**, fixed in the GPU stub (`xdj-display.c` (was patch 02)):
-- **VG construct `-13` (gcvSTATUS_NOT_SUPPORTED):** `FUN_806919a0` requires VG
-  chipFeatures (0x01c) **bit 28** set (it derives `(chipFeatures & 0x1fffffff) >> 28`
-  and rejects the core if zero). The stub now reports VG features with that bit.
-- **"AXI BUS ERROR" / "MMU Exception!":** `AQIntrAcknowledge` (0x010) was returning
-  `0xffffffff`, whose bits 31/30 are the AXI-error / MMU-exception flags. Masked off.
-- **Command-completion hang + "Vivante Kernel" NULL oops:** the VG core has its own GIC
-  line (`V2D_IRQ` = ID 43), which galcore `request_irq`s and then blocks in
-  `gckOS_WaitSignal`. The stub now wires that IRQ and, on the VG command kick (DMA
-  control 0x504, not the interrupt-enable 0x014), raises it and reports **only** the
-  submitted completion event (event 30, from the command's `0x0E01` load of `0x5e`) in
-  0x010 — signalling all 30 events made the event handler dereference unallocated event
-  structs.
+## Service modes and auth chip
+✅ Test mode (all 8 sub-modes), factory reset key combo, firmware update mode and the POWER standby
+handshake — [service-modes.md](service-modes.md).
+- **Auth chip** (`xdj-mfi.c`): I2C4 (`0x021F8000`, `/dev/i2c-3`) with the Apple MFi coprocessor's
+  identity registers at slave 0x10, so there is no `E-7206 AUTH CHIP ERROR`.
+- **Update mode**: `XDJ_BOOT_UPDATE=1` raises GPIO3_IO30 (`xdj-board.c`) → the initramfs' D001
+  "Connect USB storage device" screen.
 
-So the GPU-2D path is now live and dynamic blits have a real `/dev/galcore` to go
-through. Under `-smp 2` (the real dual-core config) galcore also fully inits (no -22, no
-crash, 2 CPUs up); a separate **userspace udev-coldplug hang** remains on that path.
+## Device features (exFAT, FLAC)
+⬜ These change the firmware and are built as [custom firmware](custom-firmware.md).
+- **exFAT**: the 3.0.35 kernel has vfat/msdos/ntfs but **no exFAT and no FUSE**, so it needs an
+  out-of-tree kernel module (e.g. exfat-nofuse) built for this kernel plus a mount rule.
+- **FLAC**: rbp decodes MP3 (libmpg123), AAC, M4A, AIFF and WAV in two decoder slots
+  (`PLAYER_DECODER_0/1`); codec libraries are `dlopen`ed and their symbols resolved by name. Adding
+  FLAC = a FLAC codec library registered in the player's format→codec factory (in
+  `playengine_Player`, not yet located).
 
-RE tooling: QEMU `-gdb` + a raw-RSP python client (halt+read; breakpoints are
-non-functional here), kernel ELF wrapped at base `0x80008000` for objdump, a validated
-frame-pointerless backtrace (stack words whose `[addr-4]` is a `bl`/`blx`), and a
-statistical PC profiler. Ghidra (REA) on a sliced region ELF (the full 13 MB kernel
-times out Ghidra's import).
+## Known limitations and open items
+- **Test mode flake**: about 1 boot in 8 comes up in the normal UI although both keys are in every
+  frame from the first — rbp-side timing ([service-modes.md](service-modes.md#test-mode)).
+- **NAND unit root shell**: the serial getty needs the stock root password (not recovered); use the
+  SD test bed (same `rbp`/kernel) for shell-level debugging.
+- **u-boot is not executed**: boot blobs are built host-side (`xdj prepare`, `xdj nand boot`); the
+  boot ROM / u-boot path would need real BCH parity.
+- **Single-core** needs `rbp_solo`, which a stock install lacks (SD test bed only).
+- **Rear LINE/PHONO switch** (GPIO 119/120) and external audio inputs are not emulated.
+- **LED map**: a few status bits are unnamed and the jog ring's non-position values are undecoded
+  ([subucom-led-map.md](subucom-led-map.md#open-items)).
+- **rekordbox LINK** over the network is untested (see [Network](#network)).
+- Regression coverage of all of the above: [testing.md](testing.md).
 
-## 🔶 B. Ethernet → rekordbox LAN link
-FEC is modeled and `eth0` now **comes up on the LAN**. The firmware's
-`/etc/rc.d/init.d/network` only configures eth0 when `rc.conf` sets
-`SYSCFG_IFACE0=y`, and the apl_start boot path never runs it — so build-nand.sh
-injects `ifconfig lo up; udhcpc -b -i eth0 … &` into apl_start (DHCP client,
-backgrounded so it can't block the UI). `watch.sh` attaches a QEMU nic to the FEC.
-The **default is user-mode NAT** so `./run.sh` opens the UI window as you with no
-password (a sudo'd Cocoa window won't attach to the macOS session — that was what
-hid the UI). Bridged LAN is opt-in with **`XDJNIC=bridged`** so the device is a
-normal host on your LAN (user goal: a **rekordbox PC on the same LAN pulls/serves
-library over the network**); on macOS vmnet needs root, so `run.sh` builds
-unprivileged and elevates only that launch. **Verified:** eth0 gets a DHCP lease
-(user-mode) and the UI boots to the live deck screen. Remaining: actually enabling the rekordbox
-link is a **menu action in rbp** (needs panel buttons — feature C), and rbp's link
-handler is `LnkHand` / the `(rekordbox)` code. The device is NOT a player-to-player
-Pro-DJ-Link master here; the target is the rekordbox app library link.
-
-## 🔶 D. USB mass storage (= the original exFAT goal)
-**Cold-plug now works end to end.** A `usb-storage` disk present at boot
-(`XDJUSB=<image> ./run.sh`, wired in `qemu/watch.sh`, on `usb-bus.0`) fully
-enumerates — `usb 1-1: new … device`, `scsi … Direct-Access`, `sd … [sda]`,
-`sda: sda1` — and the firmware **auto-mounts** it at `/media/usb1/sda1` (vfat)
-and writes `mount /media/usb1/sda1` into `/proc/udev_usb1`, which is exactly what
-rbp's `DBSA_Task_USB` thread watches. Verified with the rekordbox test image
-(`test/usb/`, PIONEER/rekordbox/export.pdb etc.). The earlier "doesn't enumerate"
-note was from the pre-SABRE-SD wiring and is obsolete.
-
-**✅ FIXED (2026-11-15):** the `USB Error. Remove the device.` modal on a *correct*
-post-boot insert was self-inflicted. The insert recipe touched `/tmp/usb2_insert`
-(`xdj-panel.c` (was patch 06)), which drives GPIO7_IO12 LOW. That line (and GPIO4_IO30 for USB1) is rbp's
-**active-low USB fault flag** (gpiodrv `0xcc`/`0x7e`; `UsbStorageManager` listener
-`0x250020`: LOW on a mounted slot → show caution, HIGH → clear after 500 ms). Insert
-with `device_add` only (`xdj-usbnc.c` (was patch 10) wakes HOST1) → mount + library accept, no modal.
-Panel server + xdj-host fixed; see `docs/usb-mount-howto.md`. Don't `device_del` to retry (it tears down the
-`id=usbstick` drive backend); reboot + insert once instead.
-
-Two live caveats:
-- **Hot-plug does NOT enumerate.** `device_add usb-storage` after boot leaves
-  EHCI PORTSC = `0x00501003` (CCS=1 connect, CSC=1, **PED=0** not-enabled) and the
-  host suspends — the port is never reset/enabled. So the stick must be present at
-  boot. (Fixing hot-plug = the ChipIdea EHCI port-enable/resume path.)
-- **rbp crashes rendering the rekordbox content.** With the stick cold-plugged,
-  rbp's `gui_task` SIGSEGVs (signal 11): PC lands in an anonymous `rwxp` buffer
-  via a garbage function pointer — a **call through an uninitialized GPU 2D
-  callback**. `libg2d.so`/`libGAL-fb.so` are loaded but galcore is dead (-22), so
-  when rbp reaches the artwork/browse blit path it jumps into garbage. The idle UI
-  software-renders fine; USB content reaches the dead GPU path. **This re-opens the
-  galcore/GPU-2D problem (feature A).** To "see" the USB track we need that 2D path
-  to work (or a software fallback / to avoid the blit).
-
-**exFAT itself:** the 3.0.35 kernel has vfat/msdos/**ntfs** but **no exFAT and no
-FUSE** — so the old "fuse-exfat" plan won't work; exFAT needs an out-of-tree kernel
-module (e.g. exfat-nofuse) built against this kernel + a mount rule. (FAT32 is used
-for the current bring-up test image.)
-
-## ✅ E. Audio
-**DONE (2026-11-11/12).** The i.MX6 audio path is modelled in `qemu/patches/11` (a minimal
-SDMA engine + RAM-backed SSI1/2/3 + AUDMUX), so imx-sdma/ASoC/ALSA run and the ALSA playhead
-advances in real time. A host sonifier pinned to SDMA **ch1 = MasterOut** emits **real deck
-audio to the host** (both decks, user-confirmed). Gated on: routing = DECK (source switch
-`B 33 80`/`B 43 80`) + gains up (on-air gate `FUN_00065028`). See `docs/audio-handover.md`,
-`docs/audio-silence-handover.md`, memory `[[deck-playback-audio-gated]]`.
-**Stutter fixed (2026-11-15, `xdj-audio.c` (was patch 16)):** periods were completed in bursts from the host audio
-callback (~2 per call = the guest's whole ALSA ring), so rbp logged constant `ALSA: Resolve xrun`.
-A pacer thread now completes one period per 1.45 ms, rate-locked to the host via a PCM FIFO. Two
-decks + BEAT FX + Color FX + tempo: 378 → 2 guest xruns in 30 s, no host underruns.
-Cost: ~20 ms more output latency (`XDJ_AUDIO_LATENCY_MS`).
-
-**QEMU source consolidated (2026-11-16):** the 21 stacked patches became device models in
-`qemu/xdj/*.c` (board, display, audio, panel, MFi, USBNC; ~2.8k lines of real source) plus 5 small
-patches to stock QEMU files. Behaviour unchanged: a fresh extract + patches + sync builds and is
-byte-identical to the runtime-verified tree (boot/UI, audio, panel input + LEDs, auth chip, 480 Mbit/s
-USB, test and update modes re-checked). Old patch numbers → new homes: skill `qemu-imx6-patches`.
-
-**Track-load speed (2026-11-15, `04-usb-chipidea-hub` + `05-macos-submillisecond-poll` (was patches 20–21)):** loads were ~4× slower than hardware. Causes found:
-the USB hub + stick enumerated at **12 Mbit/s** (ChipIdea PORTSC speed bits not modelled; fixing that
-exposed a BSP busy-wait on USBSTS SRI that hung `khubd`), and on macOS every sub-ms QEMU timer fired
-~1 ms late (no `ppoll`), so each 8 KB request (the firmware's own cap) cost ~4.6 ms. Now 480 Mbit/s,
-raw reads 1.3 → 5.6 MB/s, a 60 MB WAV load 10.6 → 7.4 s. The remaining gap is emulated-CPU
-turnaround per request; rbp's thread pinning matches the real dual-core unit.
-
-**Desktop app power control (2026-11-15):** the app starts **powered off**; the panel's POWER switch
-(red LED) / File menu powers QEMU on or cuts it (`xdj-host` `power.sock`). USB images loaded while off
-are inserted after boot; *Enter Firmware Update Mode* boots the update path (`xdj-board.c` (was patch 19)). The window is
-the deck only, aspect-locked.
-
-**Auth chip / service modes (2026-11-15, `xdj-mfi.c` + `xdj-board.c` (was patches 18–19)):** E-7206 AUTH CHIP ERROR fixed (I2C4 +
-MFi coprocessor identity at 0x10); sub-ucom reports the version of the PANELCOM firmware in its emulated flash (0 if none); **test mode** (hold MEMORY + TEMPO
-RANGE from boot) and **firmware-update mode** (`XDJ_BOOT_UPDATE=1`, D001 screen) both reachable.
-Update past D001 (NAND write, sub-ucom reflash) not emulated. See `docs/service-modes.md`.
-
-**Source-key LEDs (2026-11-15, `xdj-board.c` (was patch 17)):** the active rekordbox/MIDI/USB1/USB2 key glows on the
-panel, mirrored from rbp's GPIO outputs 162–165. The rear LINE/PHONO switch (GPIO 119/120) is not
-emulated (no external audio input).
-
-## ⬜ F. FLAC playback
-rbp decodes **MP3 (libmpg123), AAC, M4A, AIFF, WAV — no FLAC** (two decoder slots
-`PLAYER_DECODER_0/1`). The codecs are **dlopen'd** (e.g. `libmpg123.so.0` with
-`mpg123_*` resolved by name, not a static PLT symbol), so the player has a
-format→codec-lib factory. Adding FLAC = ship a FLAC codec lib + register it in that
-factory's format map (follow-up: locate the dlopen/format-map factory in
-`playengine_Player`). (Device feature; modifies firmware.)
-
-## 🔶 C / G. Controls → app (panel buttons)
-Control surface (buttons/jogs/faders) comes via the Sub-ucom panel MCU over SPI
-(`/dev/subucom_spi1.0`). **The panel now boots and rbp actively reads it.** The
-root cause of "rbp never reads the panel" was *not* a disabled poll — it was a
-**boot deadlock** in panel init: rbp pushes an initial USB state to the panel
-(triggered by a USB fault-flag GPIO reading 0 — originally thought to be USB-detect) via `peer->send()` *before* the panel
-poll thread exists, and spins forever. QEMU reset every GPIO input to 0 ("USB
-present"); on real hw these USB fault flags idle HIGH. **Fixed** by
-the GPIO reset levels, now `qemu/xdj/xdj-board.c` (was patch 04) (reset GPIO4_IO30 / GPIO7_IO12 high —
-no firmware change). Verified on a stock boot: `/dev/subucom_spi1.0` open, the
-`UiMain` poll thread running + epoll up, and `SUBUCOM_TRACE=1` shows it clocking
-the SSI slave (~300k MOSI bytes). Full story + symbols:
-`docs/rbp-and-panel-protocol.md` → "SOLVED".
-
-**SOLVED + DECODE CONFIRMED (2026-11-05).** The panel input protocol is reverse-
-engineered and the `xdj-sub-ucom` slave now feeds frames that rbp **decodes end to
-end** (proven: injecting a decoded control crashes rbp in its render path — a
-rejected frame could not). The real gate was never the auth/handshake — it was a
-**per-frame CRC**: the MISO `SubRxData` frame (class `ui::SubRxFormat`) is a flat
-100-byte frame and parser `FUN_00284d44` decodes it only when a **CRC-16/X-25**
-(poly 0x8408, init/xorout 0xFFFF) over the first 96 bytes (each 32-bit word
-byte-swapped) matches the LE halfword at `[0x62]`. Sections: `refFmtData` +0x04,
-`refCommonData` +0x14 (global buttons `[0x1a]/[0x1b]`), `tMixerData` +0x24/+0x34
-(per-deck analog), `refOtherData` +0x44. The `E-7206 AUTH CHIP ERROR` was a red
-herring *for panel decode* (it is the missing MFi auth chip on I2C4 — fixed 2026-11-15 by
-`xdj-mfi.c` (was patch 18), see `docs/service-modes.md`), and the StaticInfomation handshake is a lazy
-version-screen cache (confirmed uninitialized in rbp's live memory), not on the
-button path. Full protocol: `docs/rbp-and-panel-protocol.md`.
-
-**UPDATE (2026-11-06): DECODE NOW TRULY WORKS — the slave frame byte-order was
-wrong; several 2025-11-05 claims above are corrected here.** The real blocker was
-a QEMU-slave byte-order bug: the ECSPI shifts each 32-bit word MSB-first, so
-`rbp_buf[j] = s->frame[(j&~3)+(3-(j&3))]` (a **per-word byte reversal, no linear
-shift**), but the slave used `memcpy(s->frame+3, …)` (bogus +3). That pushed the
-CRC off the 100-byte burst → rbp read CRC=0 → every frame rejected → **zero
-decode**. **Fixed in `xdj-display.c` (was patch 02)** (`s->frame[i]=rbp[(i&~3)+(3-(i&3))]`). Verified
-live (gdb): CRC matches, the handler runs the NORMAL decode path (`this+0x88`
-initialised, frames diffed), and a control change drives the section decoder →
-dispatch. Corrections to above: the "injecting a control crashes rbp" proof was a
-**phantom crash** (a `ps|grep` artifact — rbp is daemonised; use `pidof`), and
-**gdb breakpoints DO work here** (the "non-functional" note was wrong). Full
-detail: `docs/rbp-and-panel-protocol.md` → "FRAME TRANSPORT SOLVED".
-
-**USB mount is crash-free (2026-11-06):** booting with
-`XDJUSB=test/usb/rekordbox_test.img` (cold-plug `usb-storage`), the stick
-enumerates and mounts (`/dev/sda1 → /media/usb1/sda1 vfat`) and rbp stays healthy
-(pid alive, 79 threads) — no crash. The deck screen does not auto-switch on insert
-(expected; you open the browser with BROWSE).
-
-**✅ UI VISIBLY REACTS — SEEN LIVE (2026-11-09).** Injected panel controls now
-**visibly change the deck UI**, reproduced live in a Cocoa window, with rbp healthy
-throughout (pid 2405, 79 threads). The earlier "no fb change / nothing reacts" was a
-**measurement artifact** (by-eye diffing of subtle sticky toggles on pre-fix builds);
-md5-diffing each screendump catches the changes. Confirmed reacting controls (all-bits
-granularity): `0x12`→**DECK1 TEMPO ±10→±16**, `0x22`→**DECK2 TEMPO ±16**, `0x56`→**BEAT
-EFFECTS 500ms→10ms**, `0x5b`→**ROLL (orange)+TAP BPM (green)**. The render path is NOT
-the bottleneck: this build renders via **software DirectFB straight to fb 0x18000000**
-(GPU cmd traffic frozen at 1× `0x658` since init), so the 2D stub isn't even in the live
-redraw path. Full detail + method: `docs/rbp-and-panel-protocol.md` → "UI VISIBLY REACTS".
-
-**Remaining (refinement, not a blocker): complete the XDJ-RX control map.** The all-bits
-byte sweep proves visible reaction but doesn't isolate individual controls; the full map
-needs (a) a **per-bit pre/post-diff** sweep of each reacting byte, (b) an **analog sweep**
-of the section ADC offsets (faders / jog / knobs), and (c) correlation of each hit to the
-visible UI element, the static decoder code table (`docs/rbp-and-panel-protocol.md` →
-"FULL control map"), and the physical XDJ-RX control (BROWSE/rotary/LOAD still to pin).
-Verification tooling: guest shell (root, empty pw, `-serial` socket), `pidof`/`/proc`,
-the **working** gdbstub (`-gdb tcp::1234`, resume with gdb `c`), `scratchpad/launch_live.sh`
-(visible window), `scratchpad/sweep_btn.py` (md5-diff sweep).
-
-**Control transport (standalone-app Phase 1, ✅ 2026-11-12).** Panel control input can now
-reach the harness over **per-instance QEMU chardevs** instead of the global `/tmp` files:
-`id=xdjctrl` carries the sub-ucom snapshot (`xdj-panel.c` (was patches 07–13)), `id=xdjkey` the main-ucom key int
-(`xdj-panel.c` (was patch 09)). QEMU is the socket server; the client writes the ENTIRE state as a NUL-terminated
-record (one record == one atomic ctrl-file write; empty = release). The text spec and parsing
-are unchanged — only the byte source moved (shared `xdj_parse_ctrl`). Enable by launching with
-`XDJ_RUNTIME_DIR=<dir>` (sockets at `<dir>/ctrl.sock`,`key.sock`) and point the panel at them:
-`server.py --ctrl-sock <dir>/ctrl.sock --key-sock <dir>/key.sock`. Unset `XDJ_RUNTIME_DIR` =
-the old `/tmp`-file behavior (env override `XDJ_CTRL_PATH`/`XDJ_KEY_PATH`), so inj.py and the
-sweep tools are unchanged. See `docs/standalone-app-roadmap.md` §Phase 1.
-
-**✅ Panel LEDs, level meters, jog rings (2026-11-15, `xdj-panel.c` (was patch 15)).** The other direction of the
-sub-ucom burst: rbp's MOSI `SubTxData` carries every panel LED, the CH1/CH2/MASTER meters and
-the jog-ring position. It has a 20-byte payload with a CRC-16/X-25 at `[0x16]`, and deck 2 sits at
-deck 1 + 4 bytes. `xdj-panel.c` (was patch 15) publishes each change (`T <hex>` up `xdjctrl`, or `/tmp/subucom_tx` in
-file mode). The panel server streams it at `GET /leds` (SSE), and the web panel lights PLAY, CUE,
-LOOP IN/OUT, RELOOP, REV, SLIP, SYNC, MASTER, M.T, VINYL, the pad modes and pads, CUE1/2,
-the four colour FX, BEAT FX ON, the meters and the jog rings. Verified live in file and socket
-mode. Map + open bits: [subucom-led-map.md](subucom-led-map.md).
-
-## RE tooling notes
-- Kernel: link base **0x80008000** (PAGE_OFFSET 0x80000000); wrap `vmlinux.bin` as
-  an ELF at that base for objdump/Ghidra. Ghidra-via-REA times out on the 13MB
-  kernel — use `objdump -d` + QEMU `-s -S` gdbstub instead.
-- rbp: ARM ELF, C++ RTTI survives; REA/Ghidra works well (literal pools resolve).
+## RE notes
+- Kernel: link base **0x80008000** (PAGE_OFFSET 0x80000000); wrap `vmlinux.bin` as an ELF at that
+  base for objdump. Ghidra times out importing the 13 MB kernel — slice the region of interest
+  into its own ELF, or use `objdump -d` + the QEMU gdbstub (`-s -S`). gdb hardware breakpoints work.
+- rbp: ARM32 ELF with C++ RTTI; REA/Ghidra handles it well — skill `rbp-binary-internals`.

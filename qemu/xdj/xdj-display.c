@@ -116,14 +116,6 @@ static void imx6_gpu_fe_fire(void *opaque)
  * to raise the GPT's completion interrupt (GIC ID 87), which ends the poll.
  * Armed (pointer != NULL) on the full-galcore path (the default); a no-op when
  * that path is disabled (XDJ_GPU2D_OFF=1).
- *
- * NOTE (WIP): this gets the guest past the DVFS and into galcore, but the GPT
- * tick also wakes the CPU-idle WFI, which re-runs the idle loop's own bus-freq
- * DVFS -> another tick -> a busy idle<->busfreq loop.  galcore's init thread is
- * nonetheless blocked on its real (post-DVFS) wait; that wait is the remaining
- * blocker.  A GICC_HPPIR read-overlay would avoid the idle feedback but QEMU's
- * A9 GIC CPU-interface (mapped inside the a9mpcore container) is not reached by
- * a system-memory overlay for guest accesses, only for debug reads.
  */
 static IMXGPTState *xdj_dvfs_gpt;
 
@@ -592,13 +584,12 @@ void xdj_display_realize(FslIMX6State *s, DeviceState *dev, DeviceState *gic)
      * satisfies the 2D command-completion wait); together with the mapped GC355
      * VG core and the DVFS GPT kick this is the full-galcore boot path.
      *
-     * This is now the DEFAULT and only path — it emulates the real dual-core
-     * controller's GPU-2D, so vanilla rbp drives galcore instead of falling back
-     * to software render.  It boots to the live UI on -smp 1 (the launch default,
-     * qemu/watch.sh); -smp 2 (the real core count) still has an open DVFS
-     * rendezvous deadlock — see docs/gpu2d-handover.md.  Set XDJ_GPU2D_OFF=1 to
-     * restore the old behaviour (2D slot reports GC2000, galcore fails -22 and
-     * fast-aborts to the software-render path) for regression comparison. */
+     * This is the default path — it emulates the real dual-core controller's
+     * GPU-2D, so vanilla rbp drives galcore instead of falling back to software
+     * render, on one or two cores (two = the real controller; the app and a NAND
+     * unit use two).  Set XDJ_GPU2D_OFF=1 for the software-render path (2D slot
+     * reports GC2000, galcore fails -22 and fast-aborts to software render),
+     * for regression comparison. */
     {
         static XdjGpuCore gpu3d_core, gpu2d_core;
         bool gpu2d_full = getenv("XDJ_GPU2D_OFF") == NULL;

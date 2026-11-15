@@ -1,8 +1,8 @@
 # xdj-fw — XDJ-RX firmware tooling (library + `xdj` CLI)
 
 Shared by the desktop app (`app/host`, which links the library) and the command line
-(`xdj`). Replaces the Python prep scripts for everything except the dev SD-image builder
-and the key fetch.
+(`xdj`). Covers all firmware handling except the dev SD-image builder
+(`qemu/build-nand.py`) and the key fetch (`tools/fetch_key.py`).
 
 ```
 cargo build --release          # -> target/release/xdj
@@ -46,5 +46,4 @@ Overlay parts: `iso/` (raw image files), `rootfs/` (rootfs.cramfs, mtd5), `pione
 `.xdj-delete` lists removals. The update's `check_sig` is only CRC32 + the `XDJAERO`
 model prefix (no signature). End-to-end example: `tools/fw/make-test-upd.sh`.
 
-Parity with the Python dev tools: `qemu/test_rust_parity.sh`. Never commit firmware
-contents (Pioneer-owned): build overlays from the unpacked image at build time.
+Never commit firmware contents (Pioneer-owned): build overlays from the unpacked image at build time.

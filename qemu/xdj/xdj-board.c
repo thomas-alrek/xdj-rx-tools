@@ -125,7 +125,7 @@ void xdj_imx6_gpio_post_realize(FslIMX6State *s, int bank)
  * BOOT_CFG1[7:4] >= 8 = NAND boot: the firmware's fw_printenv then uses the NAND u-boot
  * env (/dev/mtd2) and bootmod reports BOOTMODE=NAND, so apl_start mounts the UBI data /
  * gui volumes -- the real unit's configuration. XDJ_BOOT_MEDIA=nand selects it; unset
- * keeps 0, which the legacy SD test bed (qemu/build-nand.py) is built around.
+ * keeps 0, which the dev SD test bed (qemu/build-nand.py) is built around.
  */
 uint32_t xdj_src_sbmr1(void)
 {

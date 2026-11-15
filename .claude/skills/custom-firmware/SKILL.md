@@ -6,14 +6,15 @@ description: Build, install and verify a modified XDJ-RX firmware (.UPD) - edit 
 # Custom firmware (`xdj fw build`)
 
 Full reference: **`docs/custom-firmware.md`**. Format details: skill [upd-firmware-format].
-Working end to end since 2026-11-15 (TEST.UPD 2.30 installed + booted, SYSTEM Ver.2.30).
+Verified end to end: a rebuilt image installs through Pioneer's updater and boots (test mode
+SYSTEM Ver. shows the new release).
 
 ## Build the tool
 ```
 cd crates/xdj-fw && cargo build --release      # -> crates/xdj-fw/target/release/xdj
 cargo test --release                            # codec round trips (needs build/XDJRX.iso)
 ```
-Key: `--key-file`, else `$XDJRX_AES_KEY`, else `.env` (repo, from `fetch_key.py`), else the app's key.
+Key: `--key-file`, else `$XDJRX_AES_KEY`, else `.env` (repo, from `tools/fetch_key.py`), else the app's key.
 
 ## Quickest: unpack, edit in place, repack
 ```

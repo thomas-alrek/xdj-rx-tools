@@ -677,7 +677,7 @@ async function startScreen(){
   }
 }
 
-// ===== LEDs / meters (rbp -> panel MCU SubTxData, xdj-panel.c (was patch 15)) =========
+// ===== LEDs / meters (rbp -> panel MCU SubTxData, xdj-panel.c) =========
 // The server streams rbp's 20-byte LED payload as hex over SSE (/leds). Map:
 // docs/subucom-led-map.md. Blinking is rbp's own doing (it toggles the bit), so we
 // just mirror the bits.
@@ -829,7 +829,7 @@ const MENU=[
     ['Master Rec (to USB2)',()=>tap('mrec')], ['Track Mark',()=>tap('tmark')] ]],
   ['View',[
     ['rekordbox',()=>tap('src_rb')], ['MIDI',()=>tap('src_midi')], ['USB1',()=>tap('src_usb1')], ['USB2',()=>tap('src_usb2')], '-',
-    ['Browse',()=>tap('browse')], ['Tag List',()=>tap('taglist')], ['Info',()=>tap('info')], ['Menu (Utility)',()=>tap('menu')],
+    ['Browse',()=>tap('browse')], ['Tag List',()=>tap('taglist')], ['Info',()=>tap('info')], ['Menu (Utility)',()=>tap('menu',2000)],
     ['Back',()=>tap('back')], ['Tag Track',()=>tap('tagtrk')], '-',
     ['Quantize',()=>tap('quant')], ['Deck 1/2',()=>tap('deck12')], ['Time Mode',()=>tap('timemd')], '-',
     ['Pop Out Screen',popScreen], '-',

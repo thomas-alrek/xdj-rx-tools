@@ -1,62 +1,65 @@
-# XDJ-RX debug console protocol (DebugSub / DebugMain)
+# rbp debug console protocol (DebugSub / DebugMain)
 
-rbp (the firmware app) ships a built-in **debug command console** that can drive
-almost every function of the device — including simulating **any panel control**.
-This is the mechanism we use to inject input into the emulator (automated testing,
-and a quick interactive path that bypasses the gated SPI panel).
+rbp has a built-in text command console. It can drive most device functions, including
+simulating panel controls. Its command vocabulary is also the naming source for the panel event
+codes: [subucom-frame-map.md](subucom-frame-map.md) names each frame bit with the code its
+`button`/`knob`/`rotary` handlers use.
 
-> Reverse-engineered from `rbp` (ARM, stripped) with REA/Ghidra + a QEMU gdbstub
-> watchpoint trace. All addresses are rbp's fixed load VAs (non-PIE, base 0x8000).
+The emulator does not use this console for input. Panel input goes through real SPI frames
+([rbp-and-panel-protocol.md](rbp-and-panel-protocol.md)). Whether the console's injectors cause
+the same visible UI reactions as real frames has not been verified.
+
+All addresses are rbp VAs (non-PIE, base `0x8000`).
 
 ## Transport
 
-- `allinone_debug::DebugSub` (thread `DebugSub`, run loop `FUN_0002b260`) binds a
-  **UDP socket on `127.0.0.1:20000`** and loops on `recvfrom`. It is live from
-  app start. (Config via "DebugManager"; default port 20000. Also listening:
-  UDP `0.0.0.0:50000/50001/50002` — separate servers, not this console.)
-- Each received **text line** (`\r` or `\n` terminated) is wrapped into a
-  `common::CommonMessage` (type `0x1234`, parser `FUN_0002b0e8`) and dispatched to
-  `allinone_debug::DebugMain` (dispatcher `FUN_0002ad84`). The command's text reply
-  is sent back over UDP to the sender.
-- **Reply / timeout:** DebugSub waits up to **10 s** (`FUN_0003febc`, 10000 ms) for
-  a reply before returning. Commands with no text output return a 1-byte `'1'` ack,
-  and that ack can take the full 10 s. **The action itself runs immediately** (in
-  DebugMain's thread, the moment the message is posted) — the 10 s only delays the
-  ack and blocks DebugSub from reading the *next* datagram. So: single actions are
-  responsive; rapid/continuous streams are throttled by this serial reply-wait.
+- `allinone_debug::DebugSub` (thread `DebugSub`, run loop `FUN_0002b260`) binds a **UDP socket
+  on `127.0.0.1:20000`** (the port comes from the DebugManager config; 20000 is the default) and
+  loops on `recvfrom`. It is live from app start. rbp's UDP listeners on `0.0.0.0:50000/50001/50002`
+  are separate servers.
+- Each received **text line** (`\r` or `\n` terminated) is wrapped in a `common::CommonMessage`
+  (type `0x1234`, tag `0x74583`, parser `FUN_0002b0e8`) and posted to
+  `allinone_debug::DebugMain` (dispatcher `FUN_0002ad84`). The command's text reply goes back
+  over UDP to the sender.
+- **Reply and timeout:** DebugSub waits up to **10 s** for a reply (`FUN_0003febc`, 10000 ms).
+  Commands that print nothing return a 1-byte `'1'` ack, which can take the full 10 s. The action
+  itself runs immediately in DebugMain's thread; the wait only delays the ack and stops DebugSub
+  from reading the next datagram. Single commands are responsive, but rapid streams are
+  throttled by this wait.
 
-### Sending commands (from inside the guest)
+### Sending commands
 
-busybox `nc` is TCP-only and there's no socat/python, but the rootfs ships
-`/bin/bash`, whose `/dev/udp` builtin does UDP. `qemu/build-nand.sh` installs a
-helper `/usr/bin/subcmd` (bake, don't hand-hack):
+The socket is bound to the guest's loopback, so commands are sent from a guest shell (the serial
+console, see the `run-xdj-emulator` skill). busybox `nc` is TCP-only and the rootfs has no
+socat or python, but `/bin/bash` supports `/dev/udp`:
 
 ```sh
-# one line == one command; fire-and-forget (ignore the ack to stay responsive)
+# one line = one command; fire-and-forget
 bash -c 'exec 3<>/dev/udp/127.0.0.1/20000; printf "%s\n" "$*" >&3' _ button play 0
+
+# with the reply
+bash -c 'exec 3<>/dev/udp/127.0.0.1/20000; printf "%s\n" "$0" >&3; cat <&3 >/tmp/r & p=$!; sleep 11; kill $p' "button"
 ```
 
-Host → guest: DebugSub binds `127.0.0.1` (guest-internal), so a host sender needs a
-guest-side TCP↔UDP bridge reachable via QEMU `hostfwd` (planned; baked into
-build-nand.sh). For automated tests, run the sender in the guest.
+The emulator has no host → guest forward for this port.
 
 ## Command format
 
-`verb arg arg …` — whitespace/tab delimited, quote-aware (tokenizer
-`FUN_002e8d0c`). `verb` is matched against the command table at **`0x461d70`**
-(`{name, handler}` pairs, 71 entries, null-terminated). Unknown verb → no-op ack.
+`verb arg arg …`, separated by spaces or tabs, with quote-aware tokenizing (tokenizer
+`FUN_002e8d0c`). `verb` is matched against the command table at **`0x461d70`**: 71
+`{name, handler}` pairs, null-terminated. An unknown verb gives a no-op ack.
 
-## Command table (71 commands)
+## Commands
 
-Args are from each handler's `usage:` string where present (`?` = not yet extracted).
+Arguments come from each handler's `usage:` string. `?` means the usage has not been extracted.
 
-### Panel-control injectors (the important ones)
+### Panel-control injectors
 | command | args | effect |
 |---|---|---|
-| `button` | `<type> [l] [playerNo 0-3]` | full press+release of a control (down, hold, up). `l` = long push. See the **button types** table below. |
-| `knob`   | `<type> value(0-1023) [playerNo]` | set a continuous control (EQ, trim, fader…) to an absolute value |
+| `button` | `<type> [l] [playerNo 0-3]` | full press + release of a control (down, hold, up); `l` = long push. Types are listed below. |
+| `knob` | `<type> value(0-1023) [playerNo]` | set a continuous control (EQ, trim, fader, …) to an absolute value |
 | `rotary` | `<type> diff` | send a relative delta to a rotary encoder |
-| `fader`  | `?` | fader position (handler not yet decoded) |
+| `fader` | `?` | fader position (handler not decoded) |
 
 ### Playback / deck
 | command | args |
@@ -76,23 +79,25 @@ Args are from each handler's `usage:` string where present (`?` = not yet extrac
 | `gain` | `mixerChNo` |
 | `miceq` | `value` |
 | `type` | `mixer` |
-| `typech`/`chtype` | `playerChNo mixerChNo` |
-| `route`/`setroute` | `player -> mixer` |
+| `typech` / `chtype` | `playerChNo mixerChNo` |
+| `route` / `setroute` | `player -> mixer` |
 | `routch` | `playerChNo mixerChNo` |
 | `eqchange`, `mixeron`, `cfset`, `setMT`, `curve` | `?` |
-| `bfbeat` | `chNo beat` (beat-FX) |
+| `bfbeat` | `chNo beat` (beat FX) |
 | `bfdepth` | `playerNo value` |
-| `filter`/`crush`/`gate`/`noise`/`effect` | `?` (release-FX; also button types) |
+| `filter` / `crush` / `gate` / `noise` / `effect` | `?` (sound-colour FX; these are also `button` types) |
 
-### Browser / navigation  (needs a mounted USB — blocked by the 2D-GPU work)
+### Browser / navigation
+These need a mounted USB.
+
 | command | meaning |
 |---|---|
 | `brws` | browse |
 | `lup` / `ldown` | list scroll up / down |
 | `ep` / `bk` | enter / back |
 | `epl` / `bkl` | enter-long / back-long |
-| `lpoi` / `rpoi` / `callfwd` / `callrev` | pointer/call nav |
-| `trfwd`/`trrev`/`srfwd`/`srrev` | track/search fwd/rev |
+| `lpoi` / `rpoi` / `callfwd` / `callrev` | pointer / call navigation |
+| `trfwd` / `trrev` / `srfwd` / `srrev` | track / search forward / reverse |
 
 ### Engine / codec / debug
 `decode, simd, buffer, bufsleep, analyze_aac, hz, latency, get_bpm, bpm_test_on,
@@ -101,17 +106,17 @@ true, usbstop, umount, shutdown, help, led_enable true/false`
 
 ### Network / NFS / Wi-Fi
 `nfsmount, nfsumount ipaddr [force], nfsexport, nfsget drv:/file [unit],
-nfsdir drv:, nfssd, nfsana, nfsmount, wlan_onoff, wlan_mode, ap_info, ap_other,
+nfsdir drv:, nfssd, nfsana, wlan_onoff, wlan_mode, ap_info, ap_other,
 ap_ip ipaddr netmask, ap_get, ap_select ssid encryption password, wlantest [ssid],
 wpatalk …`
 
-## `button <type>` — the control vocabulary (handler `FUN_0001ec50`)
+## `button <type>`: the control vocabulary
 
-Each `button <type>` dispatches an event **code** via the same internal panel
-dispatcher the real SPI panel uses (`FUN_002482d0()->dispatch(code, 0=down,
-playerNo)` → `usleep` → `dispatch(code, 2=up)`). **These codes are identical to the
-ones the SPI `SubRxData` receiver decodes** (`FUN_0028cea4`), so this table doubles
-as the SPI control map.
+Handler `FUN_0001ec50`. It gets the panel event object from `FUN_002482d0()` and calls its
+dispatch method with `(code, 0 = down, playerNo)`, then `usleep`, then `(code, 2 = up)`. The
+codes and the down/up state values are the same ones the SPI frame decoders emit (observed at the
+panel dispatcher `0x2a47c0`, where state 0 = press and 2 = release). So this table also names the
+frame's control codes.
 
 Deck controls take a `playerNo` (0-3); global controls ignore it.
 
@@ -132,23 +137,14 @@ Deck controls take a `playerNo` (0-3); global controls ignore it.
 | `aloop` | 0x4114 | | `decksel` | 0x420c | | `noise` | 0x5098 |
 | `loopsplit` | 0x4115 | | `load` | 0x420d | | `usbstop` | 0x8002 |
 
-Global (no playerNo): `midi` 0x201, `rekord` 0x202, `usb` 0x203, `info` 0x204,
-`browse` 0x208, `taglist` 0x209, **`menu` 0x20a**, `mark` 0x409.
+Global (no playerNo): `midi` 0x201, `rekord` 0x202, `usb` 0x203, `info` 0x204, `browse` 0x208,
+`taglist` 0x209, `menu` 0x20a, `mark` 0x409.
 
-Send `button` with no type to get the device to print the full list.
+`button` with no type makes the device print the full list.
 
-### `knob` / `rotary` `<type>` (continuous controls)
-Continuous-control types (from the adjacent string block; exact code tables in
-handlers `FUN_0001e69c` (knob) / `FUN_0001e49c` (rotary), decode on demand):
-`eqh, eqm, eql, color, fader, trim, xfader, curve, gain, master_att, miceq,
-miceqh, miceql, booth, depth, hpmix, hplevel, mic, touch, time, rotary`.
+### `knob` / `rotary` types
 
-## Relationship to the SPI panel path
-
-The UDP **text** format is unrelated to SPI. But `button/knob/rotary` feed the
-**same internal dispatcher** (`FUN_002482d0`→`FUN_00222188`) with the **same event
-codes** that the SPI `SubRxData` frames carry. So:
-- For **automated testing**: drive features via this console (scriptable, repeatable).
-- For the **responsive final product**: the SPI path is still the faithful one
-  (all controls incl. continuous jog/fader at hardware rates, no 10 s serial
-  reply-wait). This table gives the SPI event codes per control for that work.
+Handlers `FUN_0001e69c` (knob) and `FUN_0001e49c` (rotary). Their code tables have not been
+fully decoded. The type names, from the adjacent string block:
+`eqh, eqm, eql, color, fader, trim, xfader, curve, gain, master_att, miceq, miceqh, miceql,
+booth, depth, hpmix, hplevel, mic, touch, time, rotary`.

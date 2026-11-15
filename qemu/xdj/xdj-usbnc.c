@@ -57,10 +57,10 @@
  * as OWIR=1 so the firmware treats it as a valid wakeup and resumes. FPRES
  * is transient -- the guest clears it once the resume completes -- so OWIR
  * self-clears and the controller can suspend again and STAY suspended.
- * (An earlier version also OR'd in PORTSC_CSC, but CSC latches on every
+ * (PORTSC_CSC is deliberately NOT OR'd in: CSC latches on every
  * connect/DISconnect until the guest clears it, so after the first churn it
- * kept OWIR asserted and the guest resumed -> re-enumerated -> disconnected
- * -> resumed ... forever; FPRES-only breaks that loop.) OWIR is read-only
+ * would keep OWIR asserted and the guest would resume -> re-enumerate ->
+ * disconnect -> resume ... forever; FPRES-only avoids that loop.) OWIR is read-only
  * (never stored); other CTRL bits are stored so guest read-modify-write
  * behaves. The region sits in the unused tail of USBOH3 (the four chipidea
  * cores occupy 0x000/0x200/0x400/0x600; USBNC is at +0x800), so it cannot

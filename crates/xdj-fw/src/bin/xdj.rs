@@ -1,5 +1,5 @@
-//! `xdj` -- XDJ-RX firmware tool (replaces xdjrx_upd.py, qemu_prepare.py,
-//! qemu/xdj_update_stick.py and qemu/xdj_nand.py).
+//! `xdj` -- XDJ-RX firmware tool: `.UPD` decrypt/unpack/build/pack, update sticks,
+//! emulator boot blobs and the emulated NAND.
 
 use std::path::{Path, PathBuf};
 

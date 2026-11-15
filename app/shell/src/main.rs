@@ -1,4 +1,4 @@
-//! XDJ-RX desktop shell (standalone-app roadmap, Phase 2 + 3).
+//! XDJ-RX desktop shell.
 //!
 //! A Tauri native window around the `xdj-host` orchestrator.
 //!
@@ -32,7 +32,7 @@ struct AppState {
     busy: Mutex<bool>, // a prep/boot is in progress; ignore further drops
 }
 
-/// Repo root in dev: app/shell -> app -> repo. (Bundled builds: Phase 5.)
+/// Repo root in dev: app/shell -> app -> repo. (A bundled .app uses its Contents/Resources.)
 fn repo_root() -> PathBuf {
     let md = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     md.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf()).unwrap_or(md)

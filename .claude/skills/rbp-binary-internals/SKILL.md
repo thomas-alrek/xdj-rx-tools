@@ -35,15 +35,22 @@ to get callers (finds vtable-less direct callers REA misses). Name scripts anyth
   `ui::TestMode` ctor `FUN_0023b5e8` mode 0; +DELETE → factory reset; +RELOOP → mode 2; stores the
   sub-ucom version word = frame bytes 2–3). Test views: `VersionTestMode` (SUB `"%x.%02x"`
   @`0x242a14`), `SwitchTestMode` page `FUN_002404ac`.
+- **Power / standby** (`docs/service-modes.md`): POWER key `0x5d.0` (code `0x8001`, active-low,
+  decoder `0x283678`) → `ui::PowerManager` (vtable `0x427cc8`, `reqStandbyOn` /
+  `notifyPreparedToStandby`; also AUTO STANDBY) → `PanelComController` vtable slot 2 `0x21a350` sets
+  its standby flag (`+0x50`) and TX payload byte `0x11 = 'S'` with the LEDs cleared.
 - **Auth chip (E-7206)**: MFi coprocessor on `/dev/i2c-3` (I2C4 `0x021F8000`) slave `0x10`; open +
   `I2C_SLAVE` `0x34ae5c`, reset via `/dev/gpiodrv` `0x34b02c`, write-ptr `0x34aeb4` / read
   `0x34af70` (5 retries, 1 ms), self-check `FUN_00349294` (reg0==0x05, reg1==0x01), register
-  accessors `0x349294…0x34a640`. `xdj-mfi.c` (was patch 18).
+  accessors `0x349294…0x34a640`. `xdj-mfi.c`.
 
 **Sub-ucom panel protocol** (100-byte SPI frame; see the map-subucom-* skills)
 - `PanelComController` ctor `FUN_0021a4ac` (vtable `DAT_00420700`); frame decoders `~0x282000-0x28b000`.
 - Center/mixer code dispatcher **`FUN_0026ae7c`**; encoder event ctor `FUN_002adfa0`.
-- Deck-button code handler is **NOT** `FUN_00222188` (bp there never fires) — still unpinned.
+- Every panel event reaches the dispatcher **`0x2a47c0`** as `(obj, code, state, deck, …)` (state
+  0 = press, 2 = release) — break there to confirm a mapping. The deck-button code handler is not
+  `FUN_00222188` (a bp there never fires); unpinned.
+- Jog decoder `FUN_00283dc4` (code `0x4306`).
 - Analog block decoder `0x282800` (EQ/TRIM/FADER/COLOR), continuous-analog `FUN_002adee8`.
 
 **GPIO / `common::GpioManager`** (`/dev/gpiodrv`; see [map-gpio-control])
@@ -51,7 +58,7 @@ to get callers (finds vtable-less direct callers REA misses). Name scripts anyth
 - Reader/dispatch `FUN_0002bd6c`, poll thread `FUN_0002bc18`, set-direction `FUN_0002c058`,
   read-level `FUN_0002c0fc`. Object: `+0x54` gpio, `+0x58` level, `+0x5c` fd, `+0x60` dir, `+0x64` observer.
 
-**Audio: MixerEngine + playengine** (see [deck-playback-audio-gated] memory, audio docs)
+**Audio: MixerEngine + playengine**
 - Engine ctor `FUN_00065350`; master section `FUN_00066688` (owns GpioIn 117/118 = **outputs**).
 - Channel strips: input chans `FUN_00084e20(obj, ch, deckSrc=ch, lineSrc=ch+3, graph)`, `FUN_000849e8`, `FUN_00085e40`.
 - **Routing tables:** source table `DAT_0107ac88` (7 slots `{buf,idx,flag}`, stride 12), channel
@@ -89,8 +96,9 @@ for static dtors; control-name strings cluster `0x42b3a4-0x42b454`; "DECK SELECT
   tight loop) — prefer post-boot, spaced, or hardware bp.
 
 ## References
-`docs/rbp-and-panel-protocol.md`, `docs/subucom-frame-map.md`, `docs/audio-handover.md`,
-`docs/audio-silence-handover.md`, `docs/version-display-and-override.md`. Memories:
-[deck-playback-audio-gated], [input-source-switch], [deck-line-routing]. Tools: `tools/xdj-panel/debug/`.
+`docs/rbp-and-panel-protocol.md`, `docs/subucom-frame-map.md`, `docs/subucom-led-map.md`,
+`docs/debug-console-protocol.md` (rbp's built-in command console; the naming source for event
+codes), `docs/service-modes.md`, `docs/version-display-and-override.md`, `docs/emulator-status.md`.
+Tools: `tools/xdj-panel/debug/`.
 Skills: [map-gpio-control], [map-subucom-button], [map-subucom-fader], [map-subucom-knob],
 [map-subucom-rotary], [upd-firmware-format], [run-xdj-emulator].

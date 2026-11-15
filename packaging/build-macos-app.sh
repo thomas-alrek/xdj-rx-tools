@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Assemble a self-contained XDJ-RX.app (standalone-app roadmap, Phase 5, macOS).
+# Assemble a self-contained XDJ-RX.app (macOS).
 #
 # Bundles everything the app needs to prepare a firmware and run the emulator:
 #   - the Tauri shell (Contents/MacOS/XDJ-RX) + the xdj-host orchestrator
@@ -8,11 +8,11 @@
 #   - the panel pages + assets + vendored noVNC (served by xdj-host's in-process panel)
 #
 # NOT bundled (by design): firmware, the AES key, the unit's NAND — those are generated
-# at runtime from the user's own .UPD into app-data (see roadmap §3 / §5bis-A).
+# at runtime from the user's own .UPD into app-data (see docs/standalone-app.md).
 #
 # Signing: binaries are **ad-hoc** signed (`codesign -s -`) because Apple Silicon
 # refuses to run a binary whose signature dylibbundler invalidated. This is NOT
-# Developer-ID signing or notarization (deferred, §5.4) — a notarized build is what a
+# Developer-ID signing or notarization (not done yet) — a notarized build is what a
 # user double-clicks without Gatekeeper warnings; this ad-hoc build runs locally.
 #
 # Prereqs: Rust, a built patched qemu (qemu/build-qemu.sh),

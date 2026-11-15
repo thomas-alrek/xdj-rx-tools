@@ -1,6 +1,6 @@
 # Custom firmware: build, install and verify a modified XDJ-RX `.UPD`
 
-**Status: working end to end (2026-11-15).** A firmware rebuilt with `xdj fw build` from the
+**Status: working end to end.** A firmware rebuilt with `xdj fw build` from the
 official 2.21 image (new release number, edited root filesystem, edited `pioneer` payload)
 installs through Pioneer's own updater on the emulated unit and boots:
 `signature ok. version = 2.30` → `USER UPDATE 2.21 to 2.30` → every partition md5-verified →
@@ -55,7 +55,7 @@ complete. Turn the power off/on before using." power off, untick update mode, po
 Scripted: `tools/test/regress.py --only custom` (does exactly this on a throwaway unit).
 
 The key is found the usual way: `--key-file`, `$XDJRX_AES_KEY`, `XDJRX_AES_KEY=` in a `.env`
-here or in a parent dir (written by `fetch_key.py`), else the desktop app's saved key.
+here or in a parent dir (written by `tools/fetch_key.py`), else the desktop app's saved key.
 
 ## 2a. Best practices for building a custom firmware
 
@@ -161,7 +161,7 @@ most files 0444), **SL** symlinks (`lib/libc.so.6 -> libc-2.13.so`, ...).
 - Writer: ISO9660 with uppercase d-character identifiers (`NAME.EXT;1`, unique per dir), both
   path tables, the PVD + terminator, and Rock Ridge on every record: **SP** + **CE** in the root's
   `.` record pointing at a continuation sector holding **ER** "RRIP_1991A" (SP + PX + ER doesn't
-  fit in one 255-byte record — the first version tripped an assert on exactly that), **PX**
+  fit in one 255-byte record), **PX**
   (36-byte RRIP 1.09 form), **NM**, **SL** (root/`.`/`..` component flags). No Joliet (Linux uses
   Rock Ridge). Dates are fixed (2017-10-18). Directory records never cross a sector.
 - Verified: write → read gives the identical tree; pycdlib (independent) reads a rebuilt image
@@ -197,18 +197,17 @@ write the ISO (volume id copied from the base). `unpack` writes `iso/`, `rootfs/
 `gui/`, `data/`, `user/`, each with a `.xdj-metadata` listing every path's mode/uid/gid/kind
 (including the device nodes that can't be created unprivileged).
 
-## 5. Verification record (2026-11-15)
+## 5. Verification
 
 | check | result |
 |---|---|
 | `cargo test --release` (crates/xdj-fw) | ISO, cramfs, tar round trips + no-change build identical + overlay build + unpack→edit→repack (edit/add/delete/symlink; re-unpack diffs to 0): 5/5 |
-| `qemu/test_rust_parity.sh` | Rust vs the Python tools: decrypt, blobs, stick, NAND init/boot: 13/13 identical |
-| independent readers on TEST.UPD | `xdjrx_upd.py` decrypts it; pycdlib: 87 files, only release.txt / rootfs.cramfs / pioneer.tar.gz differ; Python cramfs walk finds the rcS marker |
+| independent readers on TEST.UPD | pycdlib: 87 files, only release.txt / rootfs.cramfs / pioneer.tar.gz differ; an independent Python cramfs walk (`qemu/cramfs_extract.py` logic) finds the rcS marker |
 | install on a clone of the provisioned 2.21 unit | `signature ok. version = 2.30`, USER update, PANELCOM + mtd3 + mtd5 + mtd7 + mtd9/10 Success, all md5 OK, 65 s; env `release=2.30`, `kernel_bank=A` |
 | boot of the installed 2.30 | both markers on the console; test mode Mode 1: **SYSTEM Ver.2.30**, SUB 0.35, APL 4206, KERNEL 4195 |
 
-Open observation: the *first* test-mode boot right after the update came up in the normal UI
-(the second one entered test mode). Tracked by `regress.py`'s "custom: test mode after update".
+Open observation: the *first* test-mode boot right after an update can come up in the normal UI
+(the next one enters test mode). Tracked by `regress.py`'s "custom: test mode after update".
 
 ## 6. Not covered yet
 - **The kernel / initramfs** (`images/uImage`): replace it raw via `iso/images/uImage`, but
@@ -220,6 +219,6 @@ Open observation: the *first* test-mode boot right after the update came up in t
   build and install.)
 - **Downgrades:** the updater compares the image's release with the installed one ("already
   updated target=%f, release=%f"); whether it refuses an *older* or only an *equal* release is
-  not verified yet; installing the *same* release shows the update screen without the progress run
-  (seen 2026-11-15; likely the "already updated" path). Safe ways back to stock: build with a higher number, or reprovision the unit
+  not verified; installing the *same* release shows the update screen without the progress run
+  (likely the "already updated" path). Safe ways back to stock: build with a higher number, or reprovision the unit
   (delete `provisioned.stamp` + `nand-flash.img` in the app's firmware dir).

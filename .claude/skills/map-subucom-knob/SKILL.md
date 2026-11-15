@@ -11,10 +11,11 @@ and COLOR knobs all come through the mixer **analog block decoder**.
 
 ## Sub-ucom fundamentals (shared)
 - 100-byte frame over `/dev/subucom_spi1.0`; decoders `~0x282000-0x28b000`.
-- Inject (`xdj-panel.c`, was patches 02/07) via `/tmp/subucom_ctrl`: `A <off> <val16>` hold (`0x200`=center,
-  `0x3ff`=max, `0`=min); `a`=one-shot. Tools: `tools/xdj-panel/debug/{inj.py,mon.py,rsp.py,tables.py}`.
+- Inject through the `qemu/xdj/xdj-panel.c` harness via `/tmp/subucom_ctrl` (or the `xdjctrl`
+  chardev): `A <off> <val16>` hold (`0x200`=center, `0x3ff`=max, `0`=min); `a`=one-shot.
+  Tools: `tools/xdj-panel/debug/{inj.py,mon.py,rsp.py,tables.py}`.
 
-## Knob anchors — the analog block decoder at `0x282800` (confirmed)
+## Knob anchors — the analog block decoder at `0x282800`
 Per channel, a contiguous block of 16-bit fields is decoded; each slot emits a code
 (`push {r4,r5,r6,r7,lr}`, `r5`=current `r4`=previous). **Block base `0x24` (d1) / `0x34` (d2):**
 
@@ -27,8 +28,10 @@ Per channel, a contiguous block of 16-bit fields is decoded; each slot emits a c
 | +8 | `0x2c`/`0x3c` | `0x5011` | CH FADER (linear — see [map-subucom-fader]) |
 | +0xa | `0x2e`/`0x3e` | `0x508b` | COLOR / FILTER pot |
 
-Setter leaves: EQ `FUN_000836dc`, level `FUN_00083df8`. (EQ MID/LOW were once mislabelled —
-trust the codes: `0x5009`=MID, `0x500a`=LOW.)
+Other pots (centre section): `0x44`/`0x46` MIC EQ LOW/HI (`0x805`/`0x804`), `0x52` HEADPHONES
+MIXING (`0x4402`), `0x06`/`0x16` VINYL SPEED ADJ (`0x411d`). Setter leaves: EQ `FUN_000836dc`,
+level `FUN_00083df8`. Note the slot order: `0x5009` = MID sits at +6, `0x500a` = LOW at +4 — trust
+the codes.
 
 ## Method
 0. **Test-mode oracle:** test **Mode 7** lists TRIM/HIGH/MID/LOW/COLOR/TOUCH-RELEASE/HP/MIC EQ/
@@ -42,7 +45,7 @@ trust the codes: `0x5009`=MID, `0x500a`=LOW.)
 3. **Distinguish knob vs fader:** both are 16-bit analog in the same block; the knob's neutral is
    center (`0x200`), the fader's is min (`0`). Decode is identical — this skill vs
    [map-subucom-fader] differ only in which slots/codes and the neutral value.
-4. Record in `docs/subucom-frame-map.md` (Analog continuous table).
+4. Record in `docs/subucom-frame-map.md`.
 
 ## Gotchas
 - EQ at 0 kills the channel (the on-air gate `FUN_00065028` requires EQ not all-zero) — hold EQ
@@ -52,5 +55,5 @@ trust the codes: `0x5009`=MID, `0x500a`=LOW.)
 - Don't hammer RSP (rbp watchdog). Space gdb stops.
 
 ## References
-`docs/subucom-frame-map.md`, `docs/rbp-and-panel-protocol.md`, `docs/rx3-panel-crossref.md`.
+`docs/subucom-frame-map.md`, `docs/rbp-and-panel-protocol.md`, `docs/service-modes.md`.
 Sibling skills: [map-subucom-fader], [map-subucom-button], [map-subucom-rotary], [map-gpio-control].

@@ -1,7 +1,7 @@
-//! The virtual-panel server, in-process (port of tools/xdj-panel/server.py's socket
-//! mode -- the .py stays as the dev/debug-launcher server with its /tmp-file mode,
-//! HMP screendump and calibration tools; keep the two in step, see
-//! tools/xdj-panel/test_panel_parity.py).
+//! The virtual-panel server, in-process: the Rust counterpart of
+//! tools/xdj-panel/server.py's socket mode (server.py is the dev/debug-launcher server,
+//! with its /tmp-file mode, HMP screendump and calibration tools). The two must behave
+//! the same; tools/xdj-panel/test_panel_parity.py checks it.
 //!
 //! Serves panel.html / logs.html / noVNC / knobs and turns panel actions into the
 //! QEMU harness's control protocol: the WHOLE desired sub-ucom state as one
@@ -737,7 +737,6 @@ async fn get(p: Arc<Panel>, path: &str, query: &str) -> Response<Body> {
     let assets = pd.join("assets");
     match path {
         "/" | "/panel.html" => send_file(&pd, "panel.html"),
-        "/grid" | "/index.html" => send_file(&pd, "index.html"),
         "/logs.html" => send_file(&pd, "logs.html"),
         _ if path.starts_with("/assets/") => send_file(&assets, &path["/assets/".len()..]),
         _ if path.starts_with("/novnc/") => send_file(&p.cfg.novnc_dir, &path["/novnc/".len()..]),

@@ -1,22 +1,22 @@
-//! XDJ-RX emulator orchestrator (standalone-app roadmap, Phase 2).
+//! XDJ-RX emulator orchestrator (`xdj-host`).
 //!
-//! Supervises one emulator instance and wires the three per-instance channels the
-//! roadmap calls for, out of the global `/tmp` world:
+//! Supervises one emulator instance and wires three per-instance channels, out of
+//! the global `/tmp` world:
 //!
 //!   * **QEMU** spawned headless (`-display none`) with, in a per-instance runtime
 //!     dir: `-qmp unix:qmp.sock` (lifecycle), `-vnc unix:vnc.sock` (the host-side
 //!     scanout surface -- the same surface cocoa/screendump draw, so zero guest
-//!     changes), and the Phase-1 control chardevs `id=xdjctrl` / `id=xdjkey`.
-//!   * **The virtual panel** (src/panel.rs, in-process; port of tools/xdj-panel/server.py)
-//!     serving panel.html and driving `ctrl.sock`/`key.sock` -- was the roadmap's "run server.py as a sidecar first,
-//!     port to Rust later" path. It still serves panel.html + composes controls.
+//!     changes), and the control chardevs `id=xdjctrl` / `id=xdjkey`.
+//!   * **The virtual panel** (src/panel.rs, in-process; the Rust counterpart of
+//!     tools/xdj-panel/server.py) serving panel.html, composing controls and driving
+//!     `ctrl.sock`/`key.sock`.
 //!   * **A WebSocket<->VNC bridge**: noVNC speaks RFB-over-WebSocket while QEMU
 //!     `-vnc` is raw RFB over the unix socket, so we accept WS clients and pump bytes
-//!     to/from `vnc.sock`. This replaces panel.html's `/raw` screendump poll (the
-//!     roadmap's main perf pain) with push + dirty-rects.
+//!     to/from `vnc.sock`: the screen is pushed with dirty-rects instead of polled as
+//!     screendumps.
 //!
-//! This is the Rust host core; the Tauri shell will wrap it (webview instead of a
-//! browser tab). For now, open the printed URL in a browser to drive the emulator.
+//! The Tauri shell (app/shell) wraps it in a webview; run standalone, open the
+//! printed URL in a browser to drive the emulator.
 //!
 //! Firmware is never touched -- everything here is host-side orchestration.
 
@@ -44,7 +44,7 @@ struct Config {
     nand: PathBuf,      // the unit's NAND flash (raw pages + OOB, qemu/xdj/xdj-nand.c)
     panelcom: PathBuf,  // the panel MCU's flash (qemu/xdj/xdj-panel.c bootloader)
     panel_dir: PathBuf,            // panel.html / logs.html / assets
-    scripts_dir: PathBuf,          // dir holding xdjrx_upd.py / qemu_prepare.py / qemu/xdj_*.py
+    scripts_dir: PathBuf,          // bundled Resources/scripts (else the repo); searched for a dev .env
     novnc_dir: PathBuf,            // noVNC (served at /novnc/)
     knobs_dir: PathBuf,            // Knobs (audio-knobs) dist (served at /knobs/)
     qemu_data: Option<PathBuf>,    // bundled qemu data dir (keymaps); passed via -L when packaged
@@ -267,9 +267,9 @@ fn qemu_args(cfg: &Config, boot_dir: &Path) -> Vec<String> {
         // USB-2.0 hub on HOST1 (guest bus 2 = usb-bus.1), hub-only boot: the front
         // slots live behind this hub at devpaths 2-1.1 (USB2) / 2-1.2 (USB1). Storage
         // is inserted AFTER rbp is polling (see maybe_insert_usb) — cold-plugging at
-        // boot hits a mount-rendezvous race ("USB Error"). See docs/usb-slot-topology.md.
+        // boot hits a mount-rendezvous race ("USB Error"). See docs/usb.md.
         "-device".into(), "usb-hub,bus=usb-bus.1,port=1,id=xdjhub".into(),
-        // Phase-1 control channels (per-instance).
+        // Control channels (per-instance).
         "-chardev".into(), format!("socket,id=xdjctrl,path={},server=on,wait=off", s(cfg.rt("ctrl.sock"))),
         "-chardev".into(), format!("socket,id=xdjkey,path={},server=on,wait=off", s(cfg.rt("key.sock"))),
         // Lifecycle + screen, per-instance.
@@ -535,7 +535,7 @@ fn clean_stale(cfg: &Config) {
     for slot in ["usb1", "usb2"] {
         let _ = std::fs::remove_file(usb_link(slot));
     }
-    // The xdj-panel.c (was patch 06) USB fault-flag hooks are still global /tmp paths (not yet
+    // The xdj-panel.c USB fault-flag hooks are still global /tmp paths (not yet
     // per-instance) — clear them so a stale fault doesn't carry across runs.
     for f in ["/tmp/usb_insert", "/tmp/usb2_insert"] {
         let _ = std::fs::remove_file(f);
@@ -563,7 +563,7 @@ fn preflight(cfg: &Config) -> Result<(), String> {
         let p = cfg.fw_dir.join(b);
         if !p.exists() {
             return Err(format!(
-                "boot blob missing: {} (prepare a firmware first: `xdj-host prep <firmware.UPD|.zip>`, or run qemu_prepare.py)",
+                "boot blob missing: {} (prepare a firmware first: `xdj-host prep <firmware.UPD|.zip>`, or `xdj prepare`)",
                 p.display()
             ));
         }
@@ -574,7 +574,7 @@ fn preflight(cfg: &Config) -> Result<(), String> {
     Ok(())
 }
 
-// ---- Phase 3: firmware preparation (drag-drop a .UPD -> cached boot artifacts) ----
+// ---- firmware preparation (drag-drop a .UPD -> cached boot artifacts) ----
 
 /// App-data root where prepared firmwares are cached, keyed by firmware hash.
 /// macOS: ~/Library/Application Support/XDJ-RX ; else $XDG_DATA_HOME/xdj-rx (or
@@ -601,9 +601,9 @@ fn firmware_key_dir() -> PathBuf {
 }
 
 
-/// Resolve the firmware decryption key for the decrypt step: returns extra
-/// xdjrx_upd.py args + env. Prefers the app-data key; falls back to the dev .env that
-/// xdjrx_upd reads; errors only if no key is available anywhere.
+/// Resolve the firmware decryption key for the decrypt step. Prefers the app-data key;
+/// falls back to $XDJRX_AES_KEY or a dev .env; errors only if no key is available
+/// anywhere.
 fn resolve_firmware_key(cfg: &Config) -> Result<[u8; 32], String> {
     let bad = |p: &Path| format!("{}: not a usable key (64 hex chars, or a passphrase file)", p.display());
     let kf = firmware_key_dir().join("aes256.key");
@@ -612,7 +612,7 @@ fn resolve_firmware_key(cfg: &Config) -> Result<[u8; 32], String> {
         return Ok(firmware::key_from_hex(&String::from_utf8_lossy(&raw))
             .unwrap_or_else(|| firmware::key_from_passphrase(&raw)));
     }
-    // dev: XDJRX_AES_KEY in the environment or a repo .env (as xdjrx_upd.py reads it)
+    // dev: XDJRX_AES_KEY in the environment or a repo .env (as the `xdj` CLI reads it)
     if let Ok(v) = std::env::var("XDJRX_AES_KEY") {
         return firmware::key_from_hex(&v).ok_or_else(|| bad(Path::new("$XDJRX_AES_KEY")));
     }
@@ -694,7 +694,7 @@ fn prep_firmware(cfg: &Config, upd: &Path) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-// ---- Phase 3b: mount a USB (disk image OR physical device) after boot ----
+// ---- mount a USB (disk image OR physical device) after boot ----
 
 /// Minimal JSON string literal (for the QMP human-monitor-command command-line).
 fn json_str(s: &str) -> String {
@@ -778,12 +778,12 @@ fn unmount_host_disk(dev: &str) {
 
 /// If XDJ_USB is set, mount it into the guest AFTER rbp is polling, reproducing the
 /// hardware insert choreography (hub-only boot -> post-boot device_add; no GPIO —
-/// the xdj-panel.c (was patch 06) lines are USB fault flags, see the note at the insert below).
+/// the xdj-panel.c lines are USB fault flags, see the note at the insert below).
 ///   XDJ_USB=<image.img|/dev/diskN>   the backing: a disk image, or a host block device
 ///   XDJ_USB_SLOT=usb1|usb2           front slot (default usb2 = hub port 1.1)
 ///   XDJ_USB_WRITE=1                   persist writes (default: snapshot=on, discarded —
 ///                                     the safe default, and what protects a real stick)
-/// A physical device is unmounted on the host first. See docs/usb-mount-howto.md.
+/// A physical device is unmounted on the host first. See docs/usb.md.
 async fn maybe_insert_usb(runtime_dir: PathBuf) {
     let Some(src) = std::env::var_os("XDJ_USB") else {
         return;
@@ -803,7 +803,7 @@ async fn maybe_insert_usb(runtime_dir: PathBuf) {
     }
     // Settle so rbp's UsbMountManager is firmly in its /proc/udev_usb2 poll before the
     // device enumerates — else the udev "mount" rendezvous is lost and rbp shows
-    // "USB Error" (docs/usb-slot-topology.md). Tunable via XDJ_USB_DELAY (seconds).
+    // "USB Error" (docs/usb.md). Tunable via XDJ_USB_DELAY (seconds).
     let settle = std::env::var("XDJ_USB_DELAY").ok().and_then(|v| v.parse().ok()).unwrap_or(6);
     tokio::time::sleep(Duration::from_secs(settle)).await;
 
@@ -864,10 +864,10 @@ async fn insert_usb(runtime_dir: &Path, src: &str, slot: &str, write: bool) -> R
             }
         }
     }
-    // Do NOT create the xdj-panel.c (was patch 06) file here: GPIO4_IO30 / GPIO7_IO12 are rbp's
+    // Do NOT create the xdj-panel.c file here: GPIO4_IO30 / GPIO7_IO12 are rbp's
     // active-low USB *fault* flags, not insert-detect lines, and holding one low
     // raises "USB Error. Remove the device." once the slot mounts. The attach
-    // itself wakes HOST1 (xdj-usbnc.c (was patch 10), USBNC OWIR). Clear any stale fault file.
+    // itself wakes HOST1 (xdj-usbnc.c, USBNC OWIR). Clear any stale fault file.
     let _ = std::fs::remove_file(fault);
     eprintln!("[usb] attached; the slot should mount shortly");
     Ok(())
@@ -875,7 +875,7 @@ async fn insert_usb(runtime_dir: &Path, src: &str, slot: &str, write: bool) -> R
 
 /// Drive a provisioning boot (BootKind::Provision): insert the update stick when the
 /// initramfs asks for it, then report how the updater ended. The console lines are the
-/// update initramfs' own (`/init`): "### USB update mount. ###" (it now loops mounting
+/// update initramfs' own (`/init`): "### USB update mount. ###" (it loops mounting
 /// /dev/sd[a-e]{1,} until XDJRX.UPD shows up), then "### USB update success. (...) ###"
 /// or "### USB update error. (...) error_code = N ###".
 async fn provision_watch(runtime_dir: PathBuf, stick: PathBuf) -> Result<(), String> {
@@ -965,7 +965,7 @@ async fn main() {
                     let _ = tx.send(provision_watch(rt, stick).await).await;
                 }));
             }
-            // Phase 3b: if XDJ_USB is set, mount it (disk image or host device) once rbp polls.
+            // If XDJ_USB is set, mount it (disk image or host device) once rbp polls.
             BootKind::Normal => *usb = Some(tokio::spawn(maybe_insert_usb(cfg.runtime_dir.clone()))),
             BootKind::Update => {}
         }

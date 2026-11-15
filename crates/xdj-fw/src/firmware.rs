@@ -1,6 +1,5 @@
-//! Firmware preparation, in-process (was xdjrx_upd.py / qemu_prepare.py /
-//! qemu/xdj_update_stick.py). Keep in step with those scripts, which remain the dev
-//! tools; `xdj-host selftest-prep` compares the two byte for byte.
+//! Firmware preparation, in-process: `.UPD` decrypt/pack, kernel boot blobs and the
+//! update stick (`xdj fw …` / `xdj prepare` on the command line).
 //!
 //!   * `.UPD` container: AES-256-CBC per 512-byte sector, IV = LE32(sector) || 0*12,
 //!     + a 16-byte footer (12-byte model string, LE32 CRC32 of the body). A Pioneer
@@ -201,7 +200,7 @@ pub fn env_lines(text: &[u8]) -> Vec<String> {
         .collect()
 }
 
-// ---- kernel boot blobs (qemu_prepare.py) ------------------------------------------
+// ---- kernel boot blobs (`xdj prepare`) ----------------------------------------------
 
 pub const KERNEL_ENTRY: u32 = 0x1000_8000;
 pub const ATAGS_ADDR: u32 = 0x1000_0100;
@@ -209,7 +208,7 @@ pub const MACH_TYPE_SABRESD: u32 = 3980;
 pub const BOARD_REV_SABRESD: u32 = 0x500;
 const RAM_BASE: u32 = 0x1000_0000;
 const RAM_SIZE: u32 = 0x1000_0000;
-/// See qemu_prepare.py CMDLINE (console on ttymxc0, the LVDS framebuffer mode line).
+/// Kernel command line: console on ttymxc0, the LVDS framebuffer mode line.
 pub const CMDLINE: &str = "console=ttymxc0,115200 earlyprintk keep_bootcon \
 video=mxcfb0:dev=ldb,800x480M@60,if=RGB24,bpp=32 \
 video=mxcfb1:off video=mxcfb2:off video=mxcfb3:off";
@@ -284,7 +283,7 @@ pub fn write_boot_blobs(iso: &[u8], out: &Path) -> Result<(), String> {
     w("atags.bin", &atags(&format!("{CMDLINE} mtdparts={mtd}"), Some(BOARD_REV_SABRESD)))
 }
 
-// ---- the update stick (xdj_update_stick.py) ----------------------------------------
+// ---- the update stick (`xdj fw stick`) ---------------------------------------------
 
 const ROOT_ENTRIES: usize = 512;
 const ROOT_SECTORS: usize = ROOT_ENTRIES * 32 / SECTOR;

@@ -3,9 +3,9 @@
 # Build build/qemu/nand.img -- the SD-card image that boots the XDJ-RX firmware
 # to its on-screen UI in QEMU.
 #
-# This is now a thin wrapper around qemu/build-nand.py.  The old Docker recipe is
-# gone: the build runs entirely on the host with Python + e2fsprogs (mke2fs +
-# debugfs), no container and no root.  See build-nand.py for the full details.
+# A thin wrapper around qemu/build-nand.py: the build runs entirely on the host
+# with Python + e2fsprogs (mke2fs + debugfs), no container and no root.
+# See build-nand.py for the full details.
 #
 #   Needs: python3 (+ pycdlib) and e2fsprogs.
 #          macOS:  brew install e2fsprogs

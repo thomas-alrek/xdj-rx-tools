@@ -3,7 +3,6 @@
 | check | covers | run | time |
 |---|---|---|---|
 | `cd crates/xdj-fw && cargo test --release` | the firmware codecs against the real 2.21 image: ISO / cramfs / tar round trips, a no-change build reproducing every file, overlay build, unpack → edit → repack | after touching `crates/xdj-fw` | ~5 s |
-| `qemu/test_rust_parity.sh <fw.zip> [installed nand-flash.img]` | the Rust firmware/NAND code vs the Python dev tools, byte for byte (decrypt, boot blobs, stick, NAND init/boot, installed check) | after touching either side | ~5 s |
 | `tools/xdj-panel/test_panel_parity.py` | the in-process Rust panel (`app/host/src/panel.rs`) vs `server.py`: every control snapshot, HTTP reply, LED and log line for one scripted session | after touching either panel server | ~30 s |
 | **`tools/test/regress.py`** | the whole thing, live, on a throwaway unit (private `$HOME`, runtime dir, ports) | before merging anything that touches QEMU, the host, the panel or firmware handling | ~8 min |
 
@@ -30,6 +29,3 @@ provisioning; `--keep` keeps the work dir; on failure it is kept anyway, with `h
 Screens are classified from pixel statistics (`stats()`: black/white/colour/blue/red fractions,
 printed with every result) — no reference screenshots, since the UI is Pioneer's. Run it with
 nothing else heavy on the machine (single-core TCG boots are load-sensitive).
-
-Last full run (2026-11-15): 12/14 on the first pass — the two failures were test bugs (MENU needs a
-hold; the browser shows USB1), fixed and re-run green; custom stage green on a 2.30 unit (2.31).
