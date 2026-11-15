@@ -95,7 +95,7 @@ def extract_uimage(iso_path):
     return dst
 
 
-def decompress_kernel(uimage_path):
+def decompress_kernel(uimage_path, out=None):
     img = open(uimage_path, "rb").read()[64:]   # strip 64-byte U-Boot header
     i = img.find(b"\x1f\x8b\x08")               # gzip magic (zImage payload)
     if i < 0:
@@ -105,7 +105,7 @@ def decompress_kernel(uimage_path):
     except Exception:
         d = zlib.decompressobj(16 + zlib.MAX_WBITS)
         raw = d.decompress(img[i:])
-    open(os.path.join(OUT, "vmlinux.bin"), "wb").write(raw)
+    open(os.path.join(out or OUT, "vmlinux.bin"), "wb").write(raw)
     return len(raw)
 
 
@@ -129,15 +129,16 @@ def _atags(cmdline, revision=None):
     return atags
 
 
-def build_boot_blobs(mtdparts=MTDPARTS_FALLBACK):
+def build_boot_blobs(mtdparts=MTDPARTS_FALLBACK, out=None, cmdline=None):
     # SABRE-SD boot blobs: the XDJ-RX firmware's real board. MACH_TYPE 3980 +
     # ATAG_REVISION=0x500 make the board register ECSPI2 (bus 1) ->
     # /dev/subucom_spi1.0 (front-panel MCU) and the AK4387 codecs. The machine
     # attaches the nand image on uSDHC3 (-drive if=none,id=xdjsd). See qemu/watch.sh.
-    open(os.path.join(OUT, "tramp.bin"), "wb").write(
+    out = out or OUT
+    open(os.path.join(out, "tramp.bin"), "wb").write(
         _trampoline(MACH_TYPE_SABRESD))
-    open(os.path.join(OUT, "atags.bin"), "wb").write(
-        _atags(CMDLINE + " mtdparts=" + mtdparts, revision=BOARD_REV_SABRESD))
+    open(os.path.join(out, "atags.bin"), "wb").write(
+        _atags(cmdline or (CMDLINE + " mtdparts=" + mtdparts), revision=BOARD_REV_SABRESD))
 
 
 def main():

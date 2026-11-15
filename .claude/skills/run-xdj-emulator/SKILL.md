@@ -23,6 +23,12 @@ XDJ_AUDIO_DEBUG=1 nohup ./tools/xdj-panel/debug/relaunch.sh > /tmp/xdj_qemu.log 
 ```
 **Always launch as the user, never sudo.** (A failed `sudo`/ptrace attach once *killed* qemu.)
 
+Launcher options (debug launcher): `XDJ_BOOT_DIR` (boot blobs dir), `XDJ_SD=none`, `XDJ_SMP`,
+`XDJ_BOOT_MEDIA=nand`, `XDJ_NAND_IMG`, `XDJ_PANELCOM_IMG`, `XDJ_UPDATE_TYPE`. **Install + boot
+from NAND** (the real unit's layout): `docs/update-path-plan.md` "Provisioning + NAND boot".
+When waiting on firmware progress, never block on one guessed log line: bound the wait and
+check the screen (the installer's end is `umount /mnt/usb` after the D007 screen).
+
 ## Control sockets (debug launcher)
 - Monitor (HMP): `tools/xdj-panel/debug/mon.py "<cmd>"` → `/tmp/d_mon4.sock`
   (`screendump`, `device_add`, `xp/1wx <addr>`, `info usb`, `cont`).

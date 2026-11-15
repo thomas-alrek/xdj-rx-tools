@@ -1,6 +1,7 @@
 XDJ-RX: i.MX6 peripheral fixes the firmware needs.
 
-  - imx6_src.c: self-clearing GPU reset bits (galcore waits for them).
+  - imx6_src.c: self-clearing GPU reset bits (galcore waits for them); boot-mode
+    straps SBMR1 from xdj_src_sbmr1() (weak; SD vs NAND u-boot env, xdj-board.c).
   - imx_gpt.c/.h + imx6_ccm.c: imx_gpt_kick() and a DVFS clock-step hook
     (xdj_dvfs_gpt_kick, hw/arm/xdj/xdj-display.c) so the bus-frequency settling
     wait completes.
@@ -12,7 +13,26 @@ XDJ-RX: i.MX6 peripheral fixes the firmware needs.
 
 --- a/hw/misc/imx6_src.c
 +++ b/hw/misc/imx6_src.c
-@@ -239,6 +239,14 @@
+@@ -84,6 +84,18 @@
+     s->regs[SRC_SCR] = 0x521;
+     s->regs[SRC_SRSR] = 0x1;
+     s->regs[SRC_SIMR] = 0x1F;
++
++    /*
++     * XDJ-RX: boot-mode straps (BOOT_CFG1 in SBMR1). The firmware's fw_printenv picks
++     * the SD or NAND u-boot env from BOOT_CFG1[7:4] (>= 8 = NAND); the board glue
++     * (hw/arm/xdj/xdj-board.c) supplies the value.
++     */
++    {
++        extern uint32_t __attribute__((weak)) xdj_src_sbmr1(void);
++        if (xdj_src_sbmr1) {
++            s->regs[SRC_SBMR1] = xdj_src_sbmr1();
++        }
++    }
+ }
+ 
+ static uint64_t imx6_src_read(void *opaque, hwaddr offset, unsigned size)
+@@ -239,6 +251,14 @@
              /* We pretend the IPU1 is reset */
              clear_bit(SW_IPU1_RST_SHIFT, &current_value);
          }

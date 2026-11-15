@@ -118,5 +118,30 @@ ubiformat/ubiattach/ubimkvol/UBIFS persist across reattach.
 gui (ubiformat) all Success → **"Firmware update is complete."**, MAIN and SUB 100 %. (A user
 update doesn't write mtd0 boot / kobs-ng.)
 
+## Provisioning + NAND boot (phases 4-5, verified 2026-11-15)
+A unit is built the way the firmware itself does it -- no SD card, firmware untouched:
+1. `qemu/xdj_nand.py init nand.img --iso XDJRX.iso` -- erased 256 MiB image; mtd2 (env) seeded
+   with the firmware's `images/fw_env.txt` = u-boot's default env, as a factory-fresh unit has.
+2. Install = **ALL update** from USB, as the factory: `XDJ_UPDATE_TYPE=20` (the MCU reports ALL),
+   `XDJ_BOOT_UPDATE=1`, `XDJ_BOOT_MEDIA=nand`, `XDJ_SD=none`, `XDJ_NAND_IMG`, `XDJ_PANELCOM_IMG`,
+   kernel host-loaded from the UPD (`build/qemu`), stick on USB1. The updater writes PANELCOM,
+   mtd0 u-boot.bin.nand, mtd4 uImage, mtd5 rootfs, mtd6+mtd8 data.tar.gz, mtd7 pioneer,
+   mtd9/mtd10 gui, then `finEnv` updates the NAND env (`kernel_bank=B`, `release=2.21`, `rev_*`,
+   `update_status=success`, `ubifs_formatted=true`) -> "Firmware update is complete." (ALL UPDATE).
+   The installer's real end is `umount /mnt/usb` after the D007 screen -- not the last partition.
+   A **user** update (type 0x10) does not create the `data` UBI volume (and sets
+   `ubifs_formatted=true`, so apl_start's first-boot init is skipped): rbp then hangs on the splash.
+3. Boot: `qemu/xdj_nand.py boot nand.img <dir>` does u-boot's `bootcmd_nand` -- reads `kernel_bank`,
+   the bank's uImage (`bootargs_nand_A/B`), builds bootargs from `bootargs_base`+`bootargs_nand`
+   (+ the emulator's LVDS video line) -> vmlinux/atags/tramp. Launch with `XDJ_BOOT_DIR=<dir>
+   XDJ_BOOT_MEDIA=nand XDJ_SD=none XDJ_SMP=2 XDJ_NAND_IMG XDJ_PANELCOM_IMG`. The initramfs takes
+   `rootfs=nand` (nanddump mtd5/mtd7), apl_start sees `BOOTMODE=NAND` and mounts UBI data/gui,
+   rbp starts -> home screen. **Needs >= 2 CPUs**: single-core makes apl_start run `rbp_solo`,
+   which the firmware lacks (the SD test bed adds a symlink; a stock install has none).
+   The serial getty needs the stock root password on a NAND unit (the SD bed clears it).
+Boot strap: `SRC_SBMR1` BOOT_CFG1 = 0x80 (`XDJ_BOOT_MEDIA=nand`, weak hook in patch 02 ->
+`xdj_src_sbmr1()` in xdj-board.c); fw_printenv and bootmod read it via /dev/mem (>= 8 = NAND).
+u-boot itself (mtd0) is not executed -- the boot ROM/u-boot path would need real BCH parity.
+
 ## Status
-- [x] 0 references  - [x] 1 SUB  - [x] 2 NAND  - [x] 3 MAIN  - [ ] 4 NAND boot  - [ ] 5 provisioning/app
+- [x] 0 references  - [x] 1 SUB  - [x] 2 NAND  - [x] 3 MAIN  - [x] 4 NAND boot  - [~] 5 provisioning (scripted, verified) / app (todo)

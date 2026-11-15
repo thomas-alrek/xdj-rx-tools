@@ -120,6 +120,19 @@ void xdj_imx6_gpio_post_realize(FslIMX6State *s, int bank)
  * fsl_imx6_realize() after the stock devices. The front-panel MCU SSI slave
  * is attached to ECSPI2 by the machine (hw/arm/sabrelite.c).
  */
+/*
+ * Boot-mode straps (SRC_SBMR1, read via the weak hook in hw/misc/imx6_src.c).
+ * BOOT_CFG1[7:4] >= 8 = NAND boot: the firmware's fw_printenv then uses the NAND u-boot
+ * env (/dev/mtd2) and bootmod reports BOOTMODE=NAND, so apl_start mounts the UBI data /
+ * gui volumes -- the real unit's configuration. XDJ_BOOT_MEDIA=nand selects it; unset
+ * keeps 0, which the legacy SD test bed (qemu/build-nand.py) is built around.
+ */
+uint32_t xdj_src_sbmr1(void)
+{
+    const char *m = getenv("XDJ_BOOT_MEDIA");
+    return (m && !strcmp(m, "nand")) ? 0x80 : 0;
+}
+
 void xdj_imx6_realize(FslIMX6State *s, DeviceState *dev, DeviceState *gic)
 {
     xdj_mfi_realize(gic);

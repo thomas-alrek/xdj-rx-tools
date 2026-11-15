@@ -38,7 +38,7 @@ qemu/patches/        edits to stock QEMU files (diffs against pristine 11.1.0)
 | patch | files | what |
 |---|---|---|
 | `01-imx6-soc-xdj-hooks` | `hw/arm/fsl-imx6.c`, `hw/arm/meson.build` | `#include "xdj/xdj.h"`; `xdj_imx6_gpio_pre/post_realize(s, i)` around each GPIO bank's realize; one `xdj_imx6_realize(s, dev, gic)` after the PCIe PHY stub; `subdir('xdj')` |
-| `02-imx6-peripherals` | `imx6_src.c`, `imx_gpt.c/.h`, `imx6_ccm.c`, `imx_gpio.c/.h`, `imx_spi.c` | SRC GPU reset bits self-clear; `imx_gpt_kick()` + CCM clock-step → `xdj_dvfs_gpt_kick()`; GPIO `psr-reset` property; ECSPI burst start → `xdj_subucom_frame_start()` (weak) |
+| `02-imx6-peripherals` | `imx6_src.c`, `imx_gpt.c/.h`, `imx6_ccm.c`, `imx_gpio.c/.h`, `imx_spi.c` | SRC GPU reset bits self-clear; SBMR1 boot straps from `xdj_src_sbmr1()` (weak; `XDJ_BOOT_MEDIA=nand`); `imx_gpt_kick()` + CCM clock-step → `xdj_dvfs_gpt_kick()`; GPIO `psr-reset` property; ECSPI burst start → `xdj_subucom_frame_start()` (weak) |
 | `03-sabresd-board` | `hw/arm/sabrelite.c` | SD rootfs `xdjsd` on uSDHC3, console ttymxc0, `xdj-subucom` SSI slave on ECSPI2 |
 | `04-usb-chipidea-hub` | `dev-hub.c`, `chipidea.c`, `hcd-ehci*.c/.h` | USB-2.0 hub descriptor + `PORT_STAT_HIGH_SPEED`; OTG VBUS-valid; ChipIdea (`tdi`): PORTSC[27:26] PSPD, USBSTS[7] SRI reads 1, microframe async re-poll while busy |
 | `05-macos-submillisecond-poll` | `util/qemu-timer.c` | whole-ms `poll` + `nanosleep` the remainder (no `ppoll` on macOS) |
