@@ -69,6 +69,15 @@ to update them.
   block (`http://127.0.0.1:*`, `http://localhost:*`) to `app/shell/capabilities/default.json` so the
   external page may use IPC at all. `remote` capabilities are stable on Tauri 2.12 (no `unstable`).
 
+## Pop-out screen window (`screen`)
+The panel's `⧉ Screen` button creates a second webview window, label **`screen`**, from the remote
+page via the JS API (`window.__TAURI__.webviewWindow.WebviewWindow`) at `/?screen=1`. Needs
+`core:webview:allow-create-webview-window` + `core:window:allow-set-focus` in
+`capabilities/default.json` (permissions are compiled into the shell — **rebuild the shell**, copying
+`panel.html` isn't enough). `main.rs`: `on_page_load` locks the window to the 800x480 framebuffer
+aspect with `NSWindow.contentAspectRatio` (objc2-app-kit, macOS only; Tauri has no aspect option),
+and closing `main` closes `screen` too.
+
 ## Gotchas (all bit us; all fixed — don't regress)
 - **prep stdout must be ONLY the dir path.** The shell reads `xdj-host prep` stdout as `XDJ_FW_DIR`.
   The prep scripts inherit stdout, so on a **cache miss** their build chatter polluted it → garbage

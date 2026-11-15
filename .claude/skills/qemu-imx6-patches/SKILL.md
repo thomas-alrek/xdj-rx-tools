@@ -11,7 +11,7 @@ but booted as the real board (**SABRE-SD, MACH_TYPE 3980, `ATAG_REVISION=0x500`*
 trampoline + hand-built ATAGs (`qemu_prepare.py` builds `tramp.bin`/`atags.bin`/`vmlinux.bin`).
 
 ## Build
-- `qemu/build-qemu.sh` applies `qemu/patches/*.patch` to the QEMU 11.1.0 source and builds into
+- `qemu/build-qemu.sh` applies `qemu/patches/*.patch` (recorded in `<src>/.xdj-patches`, so a re-run on an existing tree is idempotent — the old reverse-dry-run check re-applied patch 02 once later patches changed its context) to the QEMU 11.1.0 source and builds into
   `build/qemu-src/qemu-11.1.0/build/qemu-system-arm`.
 - **Incremental rebuild** after editing a source file (e.g. `hw/arm/fsl-imx6.c`):
   `ninja -C build/qemu-src/qemu-11.1.0/build qemu-system-arm` (~30 s). The build tree is
@@ -57,6 +57,9 @@ Regenerate after *any* build-tree edit so the committed patches reproduce the ru
 | 11 | `imx6-audio-sdma-ssi` | minimal **SDMA** engine + RAM-backed **SSI1/2/3 + AUDMUX** so imx-sdma/ASoC/ALSA run; a host **sonifier** pinned to SDMA **ch1=MasterOut** (`XDJ_AUDIO_OUT_CH`/`XDJ_AUDIO_DEBUG` peak/rate meters) emits real audio to the host |
 | 12 | `imx6-otg-vbus-valid` | chipidea **OTGSC** (0x1A4) reports a settled host VBUS/session so the OTG driver skips its multi-second VBUS wait (`wait otg vbus change timeout!`) at the splash |
 | 13 | `imx6-subucom-autolevel` | **auto-levels** the mixer on boot (both ch → DECK + unity-ish gains) so a loaded deck is audible with no manual inject; MERGES per-control with the ctrl snapshot (chardev `xdjctrl` or `/tmp/subucom_ctrl`; panel still overrides); `XDJ_AUTOLEVEL=0`, `XDJ_AUTOLEVEL_DELAY_MS` |
+| 14 | `imx6-subucom-frame-hook` | calls `xdj_subucom_frame_start()` from the ECSPI burst start (`imx_spi_flush_txfifo`) — **without it no panel control reaches rbp** (all-zero frames); MAXHOLD 64; auto-level both channels |
+| 15 | `imx6-subucom-led-backchannel` | captures rbp's **MOSI `SubTxData`** (LEDs / meters / jog ring), CRC-gates the 20-byte payload, publishes changes as `T <hex>` up `xdjctrl` (socket) or `/tmp/subucom_tx` (`XDJ_TX_PATH`); `XDJ_TX_LOG=1`. Map: `docs/subucom-led-map.md` |
+| 16 | `imx6-audio-paced-sdma` | **fixes audio stutter**: SDMA periods were completed in bursts from the host audio callback (~2 per call = rbp's whole 2×64-frame ALSA ring → constant `ALSA: Resolve xrun`). A **pacer thread** (own thread: macOS main-loop timers can't tick every 1.45 ms) completes one period per channel per tick, copies the master period into a PCM FIFO the host callback drains, and trims its rate ±8% by FIFO level (locks the playhead to the host audio clock; late wake-ups resync, never burst). `XDJ_AUDIO_LATENCY_MS` (FIFO target, default 20), `XDJ_AUDIO_STATS=1` (5 s stats). |
 
 ## Key machine file
 `build/qemu-src/qemu-11.1.0/hw/arm/fsl-imx6.c` holds most hooks: the per-frame sub-ucom hook

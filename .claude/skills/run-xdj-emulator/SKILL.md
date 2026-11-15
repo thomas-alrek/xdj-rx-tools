@@ -66,6 +66,16 @@ source/DECK keys are GPIO → `/tmp/mainkey` (number=press, remove=release).
 Examples: source switch DECK = `B 33 80` + `B 43 80`; gains = `A 2c 3ff`(fader) `A 4a 3ff`(master)
 `A 4e 200`(xfader) `A 24/2a/28 200`(EQ) `A 26 3ff`(trim).
 
+**One-shot gotcha:** a `b`/`a` line left in the file *together with holds* re-fires every ~30
+frames (only a holds-free file is removed after firing) — rewrite the holds alone ~0.5 s later
+(`inj.py pulse` does), else a toggle button flips on/off repeatedly.
+
+## Read panel LEDs / meters
+QEMU patch 15 mirrors rbp's LED frame (`SubTxData`): file mode → `cat /tmp/subucom_tx`
+(`T <40 hex>`, updated on change); socket mode → the panel server's `GET /leds?once=1`.
+`XDJ_TX_LOG=1` logs every changed burst (`SUBUCOM-TX …`) to the qemu stderr. Bit map:
+`docs/subucom-led-map.md`; probe new ones with `tools/xdj-panel/debug/ledprobe.py`.
+
 ## Hear deck audio
 Audio is modelled (SDMA+SSI+AUDMUX, patch 11); the sonifier is pinned to **SDMA ch1 =
 MasterOut** (`XDJ_AUDIO_OUT_CH` overrides, `XDJ_AUDIO_DEBUG=1` prints per-channel peaks). For a
@@ -74,6 +84,15 @@ gains up (on-air gate `FUN_00065028`). Load a track via the USB2 browser (track-
 **Auto-level (patch 13) now sets routing=DECK + gains automatically ~4 s after rbp starts** — so
 a loaded deck just plays. Idle routing is therefore **DECK by default** now (not LINE); disable
 with `XDJ_AUTOLEVEL=0` (e.g. to test LINE/PHONO), tune the settle with `XDJ_AUTOLEVEL_DELAY_MS`.
+
+### Audio STUTTERS? (measure, don't guess)
+Dropouts are almost always **guest ALSA xruns**, not host underruns: rbp runs a 2×64-frame ring
+(2.9 ms), so the guest must see one period complete every 1.45 ms, evenly. Patch 16's pacer
+thread does that. To measure: count `ALSA: Resolve xrun` on the guest console (read
+`/tmp/d_con4.sock` for 30 s; ~0 is healthy, the pre-patch-16 burst model gave ~12/s), and boot
+with `XDJ_AUDIO_STATS=1` for a 5 s line: `underruns`/`gap` (host ran dry), `minfifo`, `guest_late`
+(rbp didn't re-arm a period in time = guest CPU too slow), `pace=689/s` (must equal 44100/64),
+`resync` (pacer woke >1 period late). More headroom: `XDJ_AUDIO_LATENCY_MS=40` (adds latency).
 
 ### Deck loaded but SILENT? (debug recipe)
 1. **Stray `/tmp/subucom_ctrl`** is the #1 cause — any hold there (even an unrelated leftover

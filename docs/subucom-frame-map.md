@@ -1,5 +1,8 @@
 # XDJ-RX sub-ucom frame → control map (authoritative, from the firmware's section decoders)
 
+> The **other direction** (rbp → panel MCU: LEDs, level meters, jog ring) is the MOSI
+> `SubTxData` frame — see [subucom-led-map.md](subucom-led-map.md).
+
 The XDJ-RX panel MCU sends ONE 100-byte frame over `/dev/subucom_spi1.0` (single channel —
 there is no SUB channel; every control is in this frame). rbp decodes it in three decoders,
 each an unrolled `ldrb [cur,#OFF]; ldrb [prev,#OFF]; eor; tst #MASK; …` pattern:

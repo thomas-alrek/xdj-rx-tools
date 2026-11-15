@@ -124,6 +124,21 @@
 #       sends its full state) and makes auto-level centre both COLOR pots and bring
 #       up CH2 as well as CH1.
 #
+#   patches/15-imx6-subucom-led-backchannel.patch
+#       The other direction of the same SPI burst: captures rbp's MOSI SubTxData
+#       (LED / level-meter / jog-ring state for the panel MCU), CRC-checks the
+#       20-byte payload and publishes each change as "T <hex>\n" -- back up the
+#       xdjctrl chardev (socket mode) or to /tmp/subucom_tx (XDJ_TX_PATH; file
+#       mode). The web panel lights its buttons from it. Map: docs/subucom-led-map.md.
+#
+#   patches/16-imx6-audio-paced-sdma.patch
+#       Fixes audio stutter. Patch 11 completed SDMA periods from the host audio
+#       callback, ~2 periods (the guest's whole 2x64-frame ALSA ring) per call, so
+#       rbp hit "ALSA: Resolve xrun" constantly. A pacer thread now completes one
+#       period per tick, evenly spaced, feeding a PCM FIFO the host drains; the
+#       tick is rate-locked to the FIFO level. 378 -> 2 xruns / 30 s under load.
+#       XDJ_AUDIO_LATENCY_MS (FIFO target, default 20), XDJ_AUDIO_STATS=1.
+#
 #   patches/03-sabrelite-sabresd-sd.patch
 #       The XDJ-RX firmware's real board is SABRE-SD (MACH_TYPE 3980), which
 #       registers ECSPI2 (bus 1) for the panel MCU + audio codecs, on a
@@ -169,11 +184,21 @@ fi
 [ -d "qemu-$VER" ] || tar xf "qemu-$VER.tar.xz"
 cd "qemu-$VER"
 
+# Applied patches are recorded in .xdj-patches so a re-run on an existing tree is
+# idempotent. (A reverse dry-run alone is not enough: once a later patch edits the
+# context of an earlier one, the earlier patch no longer reverse-applies cleanly and
+# would be re-applied on top of itself.) Trees from before the stamp file fall back
+# to the reverse dry-run.
+STAMP=.xdj-patches
+touch "$STAMP"
 for p in "$PATCHES"/*.patch; do
-  if patch -p1 --dry-run -R -f <"$p" >/dev/null 2>&1; then
-    echo "  already applied: $(basename "$p")"
+  n=$(basename "$p")
+  if grep -qxF "$n" "$STAMP"; then
+    echo "  already applied: $n"
+  elif patch -p1 --dry-run -R -f <"$p" >/dev/null 2>&1; then
+    echo "  already applied: $n"; echo "$n" >>"$STAMP"
   else
-    echo "  applying: $(basename "$p")"; patch -p1 <"$p"
+    echo "  applying: $n"; patch -p1 --no-backup-if-mismatch <"$p"; echo "$n" >>"$STAMP"
   fi
 done
 

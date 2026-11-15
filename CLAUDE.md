@@ -20,11 +20,12 @@ interoperability/preservation on owned hardware.
 
 ## Layout
 - `xdjrx_upd.py`, `fetch_key.py` — `.UPD` firmware decrypt/extract/pack + AES key fetch → skill `upd-firmware-format`.
-- `qemu/` — `build-qemu.sh`, `patches/01..14`, `watch.sh`, `build-nand.sh`, `cramfs_extract.py`.
+- `qemu/` — `build-qemu.sh`, `patches/01..16`, `watch.sh`, `build-nand.sh`, `cramfs_extract.py`.
 - `qemu_prepare.py` — kernel boot blobs (trampoline/atags/vmlinux). `run.sh` — from-scratch build+boot.
 - `build/` (git-ignored) — `qemu-src/` (patched QEMU), `extract/rbp` (the analyzed binary), `qemu/` (boot blobs, nand.img).
 - `tools/xdj-panel/` — the virtual web panel (`server.py`, `panel.html`) + `debug/` (RE launcher & helpers: `relaunch.sh`, `rsp.py`, `tables.py`, `mon.py`, `ser.py`, `inj.py`, `sweep_*.py`).
-- `docs/` — handovers + the authoritative `subucom-frame-map.md` (control map) and `emulator-status.md` (feature board).
+- `docs/` — handovers + the authoritative `subucom-frame-map.md` (control map), `subucom-led-map.md`
+  (LED/meter map) and `emulator-status.md` (feature board).
 - `test/` — e.g. `test/usb/rekordbox_new.img`; `~/Downloads/rekordbox_test.dmg` also exists.
 
 ## Key established facts (so they aren't re-derived)
@@ -43,8 +44,15 @@ interoperability/preservation on owned hardware.
   the top table of `docs/subucom-frame-map.md` (captured at dispatcher `0x2a47c0`, named via the
   debug-console vocabulary). **Jog** = period `rbp[0x0c]` + 16-bit counter `rbp[0x0e]` + flags
   `rbp[0x10]` .0 touch/.1 reverse (deck2 +0x10).
+- **LEDs/meters = the MOSI half of the same burst** (`SubTxData`): 20-byte payload, CRC-16/X-25
+  at `[0x16]`, deck2 = deck1 + 4 bytes. Patch 15 publishes it (`T <hex>` up `xdjctrl`, or
+  `/tmp/subucom_tx`); the panel lights from `GET /leds`. Map: `docs/subucom-led-map.md`.
+- A one-shot `b`/`a` left in `/tmp/subucom_ctrl` **next to holds re-fires every 30 frames** (file
+  mode) — rewrite the holds alone right after (`inj.py pulse`), or toggles flip back and forth.
 - **Audio** works (patch 11, SDMA/SSI/AUDMUX; sonifier → SDMA ch1 = MasterOut). Audible needs
-  routing=DECK + gains up (on-air gate `FUN_00065028`).
+  routing=DECK + gains up (on-air gate `FUN_00065028`). **Stutter = guest ALSA xruns** (rbp's ring is
+  2×64 frames): periods must complete evenly, one per 1.45 ms — patch 16's pacer thread does that
+  (378 → 2 xruns/30 s under load). Check: `ALSA: Resolve xrun` on the console; `XDJ_AUDIO_STATS=1`.
 
 ## Common workflows (→ skill)
 - Run/boot/USB/inject/screenshot/audio → **`run-xdj-emulator`**.

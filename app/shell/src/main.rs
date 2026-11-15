@@ -223,6 +223,29 @@ fn show_emulator(app: &tauri::AppHandle) {
     }
 }
 
+/// The XDJ-RX LCD framebuffer (rbp draws 800x480; QEMU's display is the same size).
+const SCREEN_FB: (f64, f64) = (800.0, 480.0);
+
+/// Lock the pop-out screen window (label `screen`, opened by the panel's ⧉ Screen button
+/// through the JS API) to the framebuffer's aspect ratio, so resizing never letterboxes.
+/// Tauri has no aspect-ratio option; on macOS this is NSWindow.contentAspectRatio, which
+/// constrains the content area (not the title bar) during live resize.
+fn lock_screen_aspect(window: &tauri::Window) {
+    #[cfg(target_os = "macos")]
+    {
+        let w = window.clone();
+        let _ = window.run_on_main_thread(move || {
+            if let Ok(ptr) = w.ns_window() {
+                // SAFETY: ns_window() is this window's live NSWindow; we're on the main thread.
+                let ns: &objc2_app_kit::NSWindow = unsafe { &*(ptr as *const objc2_app_kit::NSWindow) };
+                ns.setContentAspectRatio(objc2_foundation::NSSize::new(SCREEN_FB.0, SCREEN_FB.1));
+            }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+}
+
 /// Handle a dropped firmware file: prep (with progress) then boot it.
 fn on_firmware_dropped(app: &tauri::AppHandle, path: PathBuf) {
     if !has_key() {
@@ -400,6 +423,11 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState { repo: repo.clone(), host: Mutex::new(None), busy: Mutex::new(false) })
         .invoke_handler(tauri::generate_handler![set_key_hex, key_present, browse_firmware, browse_key])
+        .on_page_load(|webview, _| {
+            if webview.label() == "screen" {
+                lock_screen_aspect(&webview.window());
+            }
+        })
         .setup(move |app| {
             match &startup_fw {
                 Some(dir) => {
@@ -433,6 +461,10 @@ fn main() {
                 // (don't leave a headless QEMU running).
                 WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed => {
                     if window.label() == "main" {
+                        // the pop-out screen window (opened from the panel) goes with it
+                        if let Some(s) = window.app_handle().get_webview_window("screen") {
+                            let _ = s.close();
+                        }
                         stop_host(&window.app_handle().state::<AppState>());
                     }
                 }

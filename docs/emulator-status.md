@@ -178,6 +178,11 @@ advances in real time. A host sonifier pinned to SDMA **ch1 = MasterOut** emits 
 audio to the host** (both decks, user-confirmed). Gated on: routing = DECK (source switch
 `B 33 80`/`B 43 80`) + gains up (on-air gate `FUN_00065028`). See `docs/audio-handover.md`,
 `docs/audio-silence-handover.md`, memory `[[deck-playback-audio-gated]]`.
+**Stutter fixed (2026-11-15, patch 16):** periods were completed in bursts from the host audio
+callback (~2 per call = the guest's whole ALSA ring), so rbp logged constant `ALSA: Resolve xrun`.
+A pacer thread now completes one period per 1.45 ms, rate-locked to the host via a PCM FIFO. Two
+decks + BEAT FX + Color FX + tempo: 378 → 2 guest xruns in 30 s, no host underruns.
+Cost: ~20 ms more output latency (`XDJ_AUDIO_LATENCY_MS`).
 
 ## ⬜ F. FLAC playback
 rbp decodes **MP3 (libmpg123), AAC, M4A, AIFF, WAV — no FLAC** (two decoder slots
@@ -266,6 +271,15 @@ are unchanged — only the byte source moved (shared `xdj_parse_ctrl`). Enable b
 `server.py --ctrl-sock <dir>/ctrl.sock --key-sock <dir>/key.sock`. Unset `XDJ_RUNTIME_DIR` =
 the old `/tmp`-file behavior (env override `XDJ_CTRL_PATH`/`XDJ_KEY_PATH`), so inj.py and the
 sweep tools are unchanged. See `docs/standalone-app-roadmap.md` §Phase 1.
+
+**✅ Panel LEDs, level meters, jog rings (2026-11-15, patch 15).** The other direction of the
+sub-ucom burst: rbp's MOSI `SubTxData` carries every panel LED, the CH1/CH2/MASTER meters and
+the jog-ring position. It has a 20-byte payload with a CRC-16/X-25 at `[0x16]`, and deck 2 sits at
+deck 1 + 4 bytes. Patch 15 publishes each change (`T <hex>` up `xdjctrl`, or `/tmp/subucom_tx` in
+file mode). The panel server streams it at `GET /leds` (SSE), and the web panel lights PLAY, CUE,
+LOOP IN/OUT, RELOOP, REV, SLIP, SYNC, MASTER, M.T, VINYL, the pad modes and pads, CUE1/2,
+the four colour FX, BEAT FX ON, the meters and the jog rings. Verified live in file and socket
+mode. Map + open bits: [subucom-led-map.md](subucom-led-map.md).
 
 ## RE tooling notes
 - Kernel: link base **0x80008000** (PAGE_OFFSET 0x80000000); wrap `vmlinux.bin` as

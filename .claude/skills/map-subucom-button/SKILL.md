@@ -52,6 +52,12 @@ inject it.
    bit 7 = CH1** (`1`=DECK, `0`=LINE; live-toggles). Space the RSP reads (don't hammer).
 5. Record `(off, bit, code, control, confidence)` in `docs/subucom-frame-map.md`.
 
+## The button's LED (other direction)
+Button LEDs are NOT in the RX frame: rbp drives them through the MOSI `SubTxData` payload (QEMU
+patch 15). After mapping the press, find its LED with `tools/xdj-panel/debug/ledprobe.py b_<off>_<mask>`
+(press twice: on + off), add `led:[byte,bit,low]` to the panel entry, and record it in
+`docs/subucom-led-map.md`.
+
 ## Gotchas
 - A bit may need a **loaded track** to show any effect (deck transport). Load first.
 - Writing a *bare* one-shot to `/tmp/subucom_ctrl` replaces the analog-gain holds and

@@ -12,6 +12,9 @@ protocol, and streams the QEMU framebuffer to the browser as raw RGB (drawn on a
   POST /jog      body="1 move <deg> <sec>" | "1 touch 1"  -> jog wheel (counter/period/flags)
   GET  /raw                      -> latest framebuffer as raw RGB
                                     (headers X-Width / X-Height; body w*h*3 bytes)
+  GET  /leds                     -> Server-Sent Events: one "data: <40 hex>" per change of
+                                    rbp's 20-byte LED/meter payload (SubTxData, QEMU patch 15;
+                                    layout docs/subucom-led-map.md). /leds?once=1 = current JSON.
 
 A QEMU `screendump` of the 800x480 surface takes ~18 ms, so /raw back-to-back gives
 20-40 fps on localhost. The QEMU xdj-subucom harness reads /tmp/subucom_ctrl each
@@ -67,6 +70,85 @@ _CTYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
            ".js": "application/javascript", ".svg": "image/svg+xml"}
 
 _grab_lock = threading.Lock()
+
+# LED back-channel (QEMU patch 15). rbp streams its LED / level-meter state to the
+# panel MCU as a SubTxData frame; the harness forwards each change as "T <40 hex>\n" --
+# back up the xdjctrl socket in socket mode, or into TX_PATH in file mode. We keep the
+# latest payload here and fan it out to every /leds SSE client.
+TX_PATH = os.environ.get("XDJ_TX_PATH") or "/tmp/subucom_tx"
+_leds = {"hex": "", "seq": 0}
+_leds_cv = threading.Condition()
+
+
+def _leds_update(hexstr):
+    hexstr = hexstr.strip().lower()
+    if len(hexstr) != 40 or any(c not in "0123456789abcdef" for c in hexstr):
+        return
+    with _leds_cv:
+        if hexstr != _leds["hex"]:
+            _leds["hex"] = hexstr
+            _leds["seq"] += 1
+            _leds_cv.notify_all()
+
+
+def _leds_file_loop():
+    """File mode: poll the harness's TX file (atomically replaced on each change)."""
+    last = None
+    while True:
+        try:
+            st = os.stat(TX_PATH)
+            key = (st.st_mtime_ns, st.st_size, st.st_ino)
+            if key != last:
+                last = key
+                with open(TX_PATH) as f:
+                    ln = f.read().strip()
+                if ln.startswith("T "):
+                    _leds_update(ln[2:])
+        except Exception:
+            pass
+        time.sleep(0.03)
+
+
+def _leds_sock_loop():
+    """Socket mode: read "T <hex>" lines QEMU writes back on the xdjctrl connection.
+    Shares the persistent connection _sock_send uses (one client per chardev)."""
+    buf = b""
+    while True:
+        with _sock_lock:
+            conn = _conn["ctrl"]
+            if conn is None:
+                try:
+                    conn = socket.socket(socket.AF_UNIX)
+                    conn.settimeout(2.0)
+                    conn.connect(CTRL_SOCK)
+                    _conn["ctrl"] = conn
+                    buf = b""
+                except Exception:
+                    conn = None
+        if conn is None:
+            time.sleep(0.5)
+            continue
+        try:
+            data = conn.recv(4096)
+        except socket.timeout:
+            continue
+        except Exception:
+            data = b""
+        if not data:                      # peer closed / error: drop and reconnect
+            with _sock_lock:
+                if _conn["ctrl"] is conn:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    _conn["ctrl"] = None
+            time.sleep(0.5)
+            continue
+        buf += data
+        while b"\n" in buf:
+            ln, buf = buf.split(b"\n", 1)
+            if ln.startswith(b"T "):
+                _leds_update(ln[2:].decode("ascii", "replace"))
 
 # Browse ROTATE state: the encoder is a free-running 16-bit counter at the
 # subucom frame bytes rbp[0x54]/[0x55] (LE). The firmware reads delta=new-old,
@@ -559,6 +641,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send_file("calibration.json", base=ASSETS)
             else:
                 self._send(404, "application/json", b"{}")
+        elif path == "/leds":
+            if "once=1" in self.path:
+                with _leds_cv:
+                    body = json.dumps(_leds).encode()
+                self._send(200, "application/json", body)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            seen = -1
+            try:
+                while True:
+                    with _leds_cv:
+                        if _leds["seq"] == seen:
+                            _leds_cv.wait(15.0)
+                        seq, hx = _leds["seq"], _leds["hex"]
+                    if seq != seen and hx:
+                        self.wfile.write(("data: %s\n\n" % hx).encode())
+                    else:
+                        self.wfile.write(b": ping\n\n")      # keep-alive
+                    self.wfile.flush()
+                    seen = seq
+            except Exception:
+                pass                       # client went away
         elif path == "/raw":
             fb = grab_raw()
             if fb:
@@ -772,6 +881,8 @@ def main():
         except Exception:
             pass
         threading.Thread(target=_jog_idle_loop, daemon=True).start()
+        threading.Thread(target=_leds_sock_loop if CTRL_SOCK else _leds_file_loop,
+                         daemon=True).start()
         print("Ctrl-C to stop.")
         try:
             httpd.serve_forever()

@@ -1,0 +1,174 @@
+XDJ-RX patch 15: sub-ucom LED back-channel (rbp -> panel MCU SubTxData).
+
+The MOSI half of every sub-ucom SPI burst is rbp's SubTxData: LED, level-meter
+and jog-ring state for the panel MCU. Capture it, un-swap it (same per-32-bit-word
+byte reversal as MISO), gate on its CRC-16/X-25 (20-byte payload, CRC LE at 0x16),
+and publish each change as one text line "T <40 hex>\n":
+  - socket mode: back up the xdjctrl chardev (the panel server's connection),
+    non-blocking; re-sent to a newly connected client;
+  - file mode:   XDJ_TX_PATH (default /tmp/subucom_tx), atomically replaced.
+XDJ_TX_LOG=1 logs every changed burst to stderr (RE aid).
+Byte/bit layout: docs/subucom-led-map.md.
+
+--- a/hw/arm/fsl-imx6.c	2026-11-15 12:46:50
++++ b/hw/arm/fsl-imx6.c	2026-11-15 12:46:50
+@@ -1135,6 +1135,11 @@
+     uint32_t pos;         /* byte position within the current SPI burst */
+     int      press;       /* >0: menu-press injection countdown */
+     uint8_t  frame[128];  /* SubRxData frame presented on MISO this burst */
++    uint8_t  mosi[128];   /* raw MOSI bytes rbp sent this burst (SubTxData) */
++    uint8_t  tx_last[128];/* last published logical TX frame */
++    uint32_t tx_len;      /* length of the last seen burst (0 = none yet) */
++    uint8_t  tx_pub[20];  /* last published LED payload */
++    bool     tx_pub_valid;
+ };
+ 
+ static XdjSubucom *g_xdj_subucom;
+@@ -1320,6 +1325,9 @@
+     if (ev == CHR_EVENT_OPENED) {            /* new client: drop any partial record */
+         c->acc_len = 0;
+         c->overflow = false;
++        if (c == &xdj_ctrl_chan && g_xdj_subucom) {
++            g_xdj_subucom->tx_pub_valid = false;   /* re-send LED state to it */
++        }
+     }
+ }
+ 
+@@ -1339,6 +1347,14 @@
+     return c->present;
+ }
+ 
++/* Non-blocking write back to the channel's client (LED back-channel). */
++static void xdj_ctrl_chan_write(XdjCtrlChan *c, const uint8_t *buf, int len)
++{
++    if (c->present && qemu_chr_fe_backend_open(&c->be)) {
++        qemu_chr_fe_write(&c->be, buf, len);   /* partial/failed write = dropped */
++    }
++}
++
+ /*
+  * Parse a sub-ucom ctrl snapshot (newline-separated spec lines, same grammar as
+  * the /tmp/subucom_ctrl file) into the hold arrays. Returns the number of holds.
+@@ -1393,6 +1409,104 @@
+         *has_oneshot = did_oneshot;
+     }
+     return newn;
++}
++
++/*
++ * rbp -> panel MCU direction (SubTxData, the MOSI half of the burst): LED /
++ * indicator / level-meter state (XDJ-RX patch 15). rbp's TX frame shares the RX
++ * transport conventions: per-32-bit-word byte reversal on the wire, and a
++ * CRC-16/X-25 (same table as RX) over the first XDJ_TX_PAYLOAD bytes stored LE at
++ * [0x16] (logical coordinates). Only bytes 0x00..0x13 carry state; the rest of the
++ * 100-byte burst is stale buffer memory. Layout: docs/subucom-led-map.md.
++ *
++ * At the end of each burst the payload is un-swapped, CRC-checked, and -- when it
++ * differs from the last one -- published as one text line "T <40 hex>\n":
++ *   - socket mode: written back up the xdjctrl chardev (the same connection the
++ *     panel server pushes control snapshots on), non-blocking; dropped if no
++ *     client / the socket is full (the next change re-sends full state anyway);
++ *   - file mode:   atomically replaces XDJ_TX_PATH (default /tmp/subucom_tx).
++ *   XDJ_TX_LOG=1  also logs "SUBUCOM-TX <len> <hex>" (the whole burst) on stderr.
++ */
++#define XDJ_TX_PAYLOAD 20
++#define XDJ_TX_CRC_OFF 0x16
++
++static void xdj_subucom_tx_publish(const uint8_t *tx)
++{
++    char line[8 + 2 * XDJ_TX_PAYLOAD];
++    int i, n;
++    XdjCtrlChan *c = &xdj_ctrl_chan;
++
++    n = snprintf(line, sizeof(line), "T ");
++    for (i = 0; i < XDJ_TX_PAYLOAD; i++) {
++        n += snprintf(line + n, sizeof(line) - n, "%02x", tx[i]);
++    }
++    line[n++] = '\n';
++    if (xdj_ctrl_bind(c)) {
++        xdj_ctrl_chan_write(c, (const uint8_t *)line, n);
++    } else {
++        static char path[512], tmp[520];
++        FILE *f;
++        if (!path[0]) {
++            const char *e = getenv("XDJ_TX_PATH");
++            snprintf(path, sizeof(path), "%s", (e && e[0]) ? e : "/tmp/subucom_tx");
++            snprintf(tmp, sizeof(tmp), "%s.tmp", path);
++        }
++        f = fopen(tmp, "w");
++        if (f) {
++            fwrite(line, 1, n, f);
++            fclose(f);
++            rename(tmp, path);
++        }
++    }
++}
++
++static void xdj_subucom_tx_done(XdjSubucom *s)
++{
++    uint8_t tx[128], sw[XDJ_TX_PAYLOAD];
++    uint32_t n = s->pos, i;
++    uint16_t crc;
++    static int log = -1;
++
++    if (n < XDJ_TX_CRC_OFF + 2) {
++        return;
++    }
++    if (n > sizeof(tx)) {
++        n = sizeof(tx);
++    }
++    for (i = 0; i < n; i++) {
++        uint32_t j = (i & ~3u) + (3 - (i & 3));
++        tx[i] = (j < n) ? s->mosi[j] : 0;
++    }
++    if (log < 0) {
++        const char *e = getenv("XDJ_TX_LOG");
++        log = (e && e[0] && e[0] != '0') ? 1 : 0;
++    }
++    if (log && (n != s->tx_len || memcmp(tx, s->tx_last, n) != 0)) {
++        fprintf(stderr, "SUBUCOM-TX %u ", n);
++        for (i = 0; i < n; i++) {
++            fprintf(stderr, "%02x", tx[i]);
++        }
++        fprintf(stderr, "\n");
++    }
++    if (n == s->tx_len && memcmp(tx, s->tx_last, n) == 0) {
++        return;
++    }
++    memcpy(s->tx_last, tx, n);
++    s->tx_len = n;
++    /* CRC gate: same scheme as RX -- CRC over the word-reversed payload. */
++    for (i = 0; i < XDJ_TX_PAYLOAD; i++) {
++        sw[i] = tx[(i & ~3u) + (3 - (i & 3))];
++    }
++    crc = xdj_crc16(sw, XDJ_TX_PAYLOAD);
++    if ((tx[XDJ_TX_CRC_OFF] | (tx[XDJ_TX_CRC_OFF + 1] << 8)) != crc) {
++        return;                      /* not a valid SubTxData frame (boot noise) */
++    }
++    if (memcmp(tx, s->tx_pub, XDJ_TX_PAYLOAD) == 0 && s->tx_pub_valid) {
++        return;
++    }
++    memcpy(s->tx_pub, tx, XDJ_TX_PAYLOAD);
++    s->tx_pub_valid = true;
++    xdj_subucom_tx_publish(tx);
+ }
+ 
+ /*
+@@ -1488,6 +1602,7 @@
+     if (getenv("SUBUCOM_BURST") && s->pos) {
+         fprintf(stderr, "SUBUCOM msg_size=%u\n", s->pos);
+     }
++    xdj_subucom_tx_done(s);
+     s->pos = 0;
+ 
+     /*
+@@ -1667,6 +1782,9 @@
+                 s->idx, (unsigned)(val & 0xff));
+     }
+     s->idx++;
++    if (s->pos < sizeof(s->mosi)) {
++        s->mosi[s->pos] = (uint8_t)val;
++    }
+     miso = (s->pos < sizeof(s->frame)) ? s->frame[s->pos] : 0x00;
+     s->pos++;
+     return miso;
