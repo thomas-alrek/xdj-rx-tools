@@ -138,7 +138,11 @@ A unit is built the way the firmware itself does it -- no SD card, firmware unto
    `rootfs=nand` (nanddump mtd5/mtd7), apl_start sees `BOOTMODE=NAND` and mounts UBI data/gui,
    rbp starts -> home screen. **Needs >= 2 CPUs**: single-core makes apl_start run `rbp_solo`,
    which the firmware lacks (the SD test bed adds a symlink; a stock install has none).
-   The serial getty needs the stock root password on a NAND unit (the SD bed clears it).
+   The serial getty needs the stock root password on a NAND unit (the SD bed clears it). That hash
+   (`/etc/shadow`, DES crypt, salt `bE`) was **not recovered** (rockyou+rules, dict+mangle, firmware
+   strings, lowercase+digits <=6 on the M5 Pro GPU via Metal all missed), so **for a root shell use
+   the SD boot as the fallback** — same `rbp`/kernel. Only the home-screen UI needs NAND; shell-level
+   debugging doesn't. (To get a shell on NAND specifically, blank root in the installed rootfs.)
 Boot strap: `SRC_SBMR1` BOOT_CFG1 = 0x80 (`XDJ_BOOT_MEDIA=nand`, weak hook in patch 02 ->
 `xdj_src_sbmr1()` in xdj-board.c); fw_printenv and bootmod read it via /dev/mem (>= 8 = NAND).
 u-boot itself (mtd0) is not executed -- the boot ROM/u-boot path would need real BCH parity.

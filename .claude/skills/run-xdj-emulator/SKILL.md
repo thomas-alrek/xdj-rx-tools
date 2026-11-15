@@ -33,6 +33,10 @@ check the screen (the installer's end is `umount /mnt/usb` after the D007 screen
 - Monitor (HMP): `tools/xdj-panel/debug/mon.py "<cmd>"` → `/tmp/d_mon4.sock`
   (`screendump`, `device_add`, `xp/1wx <addr>`, `info usb`, `cont`).
 - Serial console: `tools/xdj-panel/debug/ser.py "<shell cmd>"` → `/tmp/d_con4.sock` (login root).
+  **Root shell works only on SD boot** (the SD build clears root's password; [build-xdj-sd-image]).
+  A NAND boot keeps the stock rootfs whose root password is unknown, so `ser.py` can't get a shell
+  there — boot SD (the launcher default) when you need to poke the running system; it runs the same
+  `rbp`/kernel as NAND.
   Everything the console prints is also logged to **`/tmp/xdj_console.log`** (chardev `logfile=`;
   the panel's View > System Log tails it) — read it instead of competing for the socket.
 - gdbstub: `tools/xdj-panel/debug/rsp.py` (raw RSP); `tables.py` dumps the audio routing tables.

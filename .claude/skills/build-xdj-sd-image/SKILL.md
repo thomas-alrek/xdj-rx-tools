@@ -40,6 +40,12 @@ No Docker, no root — the old container recipe is gone.
    the device's own `mount_ubifs gui … /root/gui` is gated on `$BOOTMODE` (from i.MX6 boot-mode
    straps QEMU doesn't emulate), so neither branch runs on its own.
 2. **Root password cleared** so the firmware getty on `ttymxc1`/`ttymxc0` logs straight into a shell.
+   This makes **SD boot the root-shell fallback** for debugging. A real NAND install (the
+   `xdj_nand.py` path) keeps the **stock** rootfs, whose root password is the firmware's own
+   DES-crypt hash (`/etc/shadow`, salt `bE`) — not recovered, so a NAND unit's serial getty can't be
+   logged into. When you need a shell on the running system, boot SD (`qemu/watch.sh` /
+   `relaunch.sh` default) rather than NAND; the two run the same `rbp`/kernel. (If a NAND unit ever
+   needs a shell, blank root in the installed rootfs the same way, or `switch_root`-inspect offline.)
 
 ## Gotchas
 - The SD path copies the rootfs into a **fixed 48 MB tmpfs** (hard-coded in `/init`), so the

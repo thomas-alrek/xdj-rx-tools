@@ -75,7 +75,8 @@ interoperability/preservation on owned hardware.
   (`xdj-panel.c`) and APBH-DMA/GPMI/BCH + a 256 MiB NAND (`xdj-nand.c`, `$XDJ_NAND_IMG`) are
   emulated. Provision a unit = `qemu/xdj_nand.py init` + an **ALL** update (`XDJ_UPDATE_TYPE=20`)
   from USB; boot it = `qemu/xdj_nand.py boot` + `XDJ_BOOT_MEDIA=nand XDJ_SD=none XDJ_SMP=2`
-  (single-core needs `rbp_solo`, absent on a stock install).
+  (single-core needs `rbp_solo`, absent on a stock install). **For a root shell, boot SD** (it
+  blanks root's password; a NAND unit keeps the stock, unrecovered root hash) — same `rbp`/kernel.
 - **Audio** works (`xdj-audio.c` (was patch 11), SDMA/SSI/AUDMUX; sonifier → SDMA ch1 = MasterOut). Audible needs
   routing=DECK + gains up (on-air gate `FUN_00065028`). **Stutter = guest ALSA xruns** (rbp's ring is
   2×64 frames): periods must complete evenly, one per 1.45 ms — `xdj-audio.c` (was patch 16)'s pacer thread does that
