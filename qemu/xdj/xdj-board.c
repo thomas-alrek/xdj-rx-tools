@@ -126,4 +126,5 @@ void xdj_imx6_realize(FslIMX6State *s, DeviceState *dev, DeviceState *gic)
     xdj_usbnc_realize(s, dev);
     xdj_display_realize(s, dev, gic);
     xdj_audio_realize(dev, gic);
+    xdj_nand_realize(dev, gic);
 }

@@ -6,4 +6,5 @@ arm_common_ss.add(when: 'CONFIG_FSL_IMX6', if_true: files(
   'xdj-panel.c',
   'xdj-mfi.c',
   'xdj-usbnc.c',
+  'xdj-nand.c',
 ))

@@ -31,6 +31,7 @@ qemu/xdj/            real source files -- EDIT THESE; synced to <qemu>/hw/arm/xd
                      GPIO1_IO18 REQ / GPIO1_IO16 ACK; docs/update-path-plan.md)
   xdj-mfi.c          I2C4 controller + MFi auth-coprocessor identity (fixes E-7206)
   xdj-usbnc.c        USBNC OWIR wakeup registers
+  xdj-nand.c         APBH-DMA + GPMI + BCH + 256 MiB NAND chip ($XDJ_NAND_IMG); docs/update-path-plan.md
   meson.build
 qemu/patches/        edits to stock QEMU files (diffs against pristine 11.1.0)
 ```

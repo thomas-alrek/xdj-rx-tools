@@ -100,5 +100,23 @@ flash / no match → 0. Disassembler: binutils 2.42 `--target=m32c-elf --with-sy
 `make MAKEINFO=true all-binutils`, `objdump -b binary -m m16c` (it shows some valid opcodes as
 `*unknown*`, e.g. `e7` = `cmp.b:s #imm,abs16`).
 
+## Implementation (phase 2-3): `qemu/xdj/xdj-nand.c`
+APBH-DMA (CCW chains: PIO words → GPMI, CMD_READ/WRITE data phases, CHAIN/DEC_SEM/IRQ, SEMA kick;
+SPI 13), GPMI (CTRL0 operations: CLE+ADDRESS_INCREMENT→ALE, raw data, wait-for-ready, ECC pages),
+BCH (FLASH0LAYOUT bit-packed `[meta][data0][ecc0][data1]…`, status 0x00/0xff-erased, COMPLETE_IRQ;
+SPI 15; parity written as zeros — the kernel never checks it, the boot ROM would), and a non-ONFI
+Samsung K9F2G08U0C-style chip (ID `EC DA 10 95 44`, 2048+64, 64 pages/block, 2048 blocks). Backing
+file `$XDJ_NAND_IMG` = raw pages with OOB (2112 B each, created erased); unset = no chip.
+`XDJ_NAND_LOG=1` logs unhandled commands. The kernel gets `mtdparts=` from the firmware's own
+`fw_env.txt` via `qemu_prepare.py` (real u-boot passes it from its env).
+Kernel: `mxs-dma-apbh: initialized`, `Samsung NAND 256MiB`, `ecc_strength = 0x4` (t=8),
+17 cmdline partitions. Verified in the guest: flash_erase/nandwrite/nanddump round trip,
+ubiformat/ubiattach/ubimkvol/UBIFS persist across reattach.
+
+**Verified 2026-11-15 — full update:** update mode + NAND + XDJRX.UPD 2.21 → "USER UPDATE ???? to
+2.21": PANELCOM Success, mtd4 uImage (md5 read-back OK), mtd5 rootfs.cramfs, mtd7 pioneer, mtd9/mtd10
+gui (ubiformat) all Success → **"Firmware update is complete."**, MAIN and SUB 100 %. (A user
+update doesn't write mtd0 boot / kobs-ng.)
+
 ## Status
-- [x] 0 references  - [x] 1 SUB  - [ ] 2 NAND  - [ ] 3 MAIN  - [ ] 4 NAND boot  - [ ] 5 provisioning/app
+- [x] 0 references  - [x] 1 SUB  - [x] 2 NAND  - [x] 3 MAIN  - [ ] 4 NAND boot  - [ ] 5 provisioning/app

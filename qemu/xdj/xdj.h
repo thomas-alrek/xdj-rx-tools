@@ -18,6 +18,7 @@ void xdj_mfi_realize(DeviceState *gic);
 void xdj_usbnc_realize(FslIMX6State *s, DeviceState *dev);
 void xdj_display_realize(FslIMX6State *s, DeviceState *dev, DeviceState *gic);
 void xdj_audio_realize(DeviceState *dev, DeviceState *gic);
+void xdj_nand_realize(DeviceState *dev, DeviceState *gic);   /* APBH/GPMI/BCH + NAND */
 
 /* panel harness state shared with the GPIO glue (xdj-panel.c) */
 extern DeviceState *g_xdj_usb_gpio[2];
