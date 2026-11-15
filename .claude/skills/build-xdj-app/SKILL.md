@@ -58,8 +58,9 @@ host-side. See also skills [xdj-virtual-panel], [run-xdj-emulator], [qemu-imx6-p
 ( cd app/host && cargo build ) && ( cd app/shell && cargo build && cargo run )
 # release binaries
 ( cd app/host && cargo build --release ); ( cd app/shell && cargo build --release )
-# package (macOS): bundles patched qemu + dylibs, scripts, panel, novnc, knobs dist,
-# python-build-standalone; ad-hoc signs. Needs dylibbundler.
+# package (macOS): bundles patched qemu + dylibs, panel pages, novnc, knobs dist and every license
+# text (packaging/collect-licenses.py -> Resources/licenses/); ad-hoc signs. Needs dylibbundler.
+# Then test the bundle itself: tools/test/regress.py --app dist/XDJ-RX.app
 packaging/build-macos-app.sh        # -> dist/XDJ-RX.app
 ```
 **Refresh a built bundle after a code change** (faster than a full repackage): copy the changed

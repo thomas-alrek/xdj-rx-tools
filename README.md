@@ -355,3 +355,16 @@ build/qemu-src/          the patched QEMU source + build
   The RX3 panel byte/bit tables are now a working hypothesis source for the rest of our
   mappings — see [docs/rx3-panel-crossref.md](docs/rx3-panel-crossref.md). The two models'
   firmwares and key codes differ, so every mapping is verified against the live XDJ-RX.
+
+## License
+This repository is licensed under the **GNU General Public License, version 2 or (at your option)
+any later version** (`GPL-2.0-or-later`; full text in [LICENSE](LICENSE)). GPLv2 compatibility
+matters because the emulator's device models (`qemu/xdj/`) and patches (`qemu/patches/`) are built
+into QEMU, which is GPLv2.
+
+**Not covered, and never committed or bundled:** Pioneer/AlphaTheta firmware, its contents, and the
+firmware AES key. Users supply their own `.UPD` and key.
+
+The packaged desktop app also redistributes third-party software (QEMU, shared libraries, noVNC,
+Rust crates) under their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The app
+bundle carries every license text in `Contents/Resources/licenses/`.

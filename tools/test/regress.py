@@ -12,11 +12,13 @@ never touches the app's cache or a running app. Stages:
   boot       normal NAND boot -> home screen
   panel      MENU held opens UTILITY, a short MENU tap leaves it; rbp's LED stream is live
   usb        BROWSE, panel USB LOAD of test/usb/*.img on USB1 -> its library appears
+  standby    POWER off while rbp runs: POWER key -> rbp prepares -> TX 'S' -> power cut (< 10 s)
   testmode   File > Power On in Test Mode -> VERSION INFORMATION screen
   custom     tools/fw/make-test-upd.sh TEST.UPD (2.30) installed via File > Install Firmware
              Update (POST /install-update) ->
              env release=2.30, both console markers, test mode right after the update
 --unit clones an already-installed firmware dir (skips provision; ~2 min faster).
+--app dist/XDJ-RX.app tests the packaged app (bundled host, relocated QEMU, panel files).
 Screens are classified from pixel statistics (no reference images: the UI is Pioneer's).
 Exit 0 = all selected stages passed. Needs ~8 min and nothing else heavy running.
 """
@@ -27,6 +29,7 @@ HOST = os.path.join(ROOT, "app/host/target/release/xdj-host")
 XDJ = os.path.join(ROOT, "crates/xdj-fw/target/release/xdj")
 PORT, WS = 8797, 6097
 RESULTS = []
+APP_RES = None   # --app: run the packaged app's host/QEMU/panel instead of the build tree
 
 
 def log(*a):
@@ -46,7 +49,8 @@ class Unit:
         self.proc = None
 
     def env(self):
-        return dict(os.environ, HOME=os.path.join(self.work, "home"), XDJ_REPO=ROOT, XDJ_FW_DIR=self.fw,
+        extra = {"XDJ_RESOURCES": APP_RES} if APP_RES else {}
+        return dict(os.environ, **extra, HOME=os.path.join(self.work, "home"), XDJ_REPO=ROOT, XDJ_FW_DIR=self.fw,
                     XDJ_RUNTIME_DIR=self.run, XDJ_PANEL_PORT=str(PORT), XDJ_VNC_WS_PORT=str(WS),
                     XDJAUDIO="none", XDJ_AUTOSTART="0", XDJ_FRAME_LOG="1")
 
@@ -183,9 +187,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fw", default=os.path.join(ROOT, "build/XDJ-RX_v221.zip"))
     ap.add_argument("--unit", help="clone this installed firmware dir instead of provisioning")
-    ap.add_argument("--only", default="provision,boot,panel,usb,testmode,custom")
+    ap.add_argument("--only", default="provision,boot,panel,usb,standby,testmode,custom")
     ap.add_argument("--keep", action="store_true", help="keep the work dir")
+    ap.add_argument("--app", help="test a packaged XDJ-RX.app (its xdj-host, QEMU and panel)")
     a = ap.parse_args()
+    global HOST, APP_RES
+    if a.app:
+        APP_RES = os.path.join(os.path.abspath(a.app), "Contents", "Resources")
+        HOST = os.path.join(APP_RES, "xdj-host")
     only = set(a.only.split(","))
     for b in (HOST, XDJ):
         if not os.path.exists(b):
@@ -251,10 +260,25 @@ def main():
                     u.tap("B 5f 08"); time.sleep(1)
                 else:
                     log("  skip usb (no test/usb/*.img)")
+        if "standby" in only:
+            log("== POWER off = standby handshake")
+            if not u.console() or "commandline read: rbp" not in u.console():
+                boot(u, "on", "pre_standby")
+            t0 = time.time()
+            r = u.http("POST", "/power", "off")
+            took = time.time() - t0
+            check("standby: rbp answered 'S', power cut", r.strip() == "off" and took < 10, "%.1fs" % took)
         if "testmode" in only:
             log("== test mode")
+            # Known flake (~1 in 8, docs/service-modes.md): rbp sometimes boots normal although the
+            # keys are in its first frame. One retry; the result says if it was needed.
             r = boot(u, "on test", "testmode")
-            check("testmode: VERSION screen", r is not None and is_testmode(r[1]), str(r[1]) if r else "never booted")
+            note = ""
+            if not (r and is_testmode(r[1])):
+                u.http("POST", "/power", "off"); time.sleep(3)
+                r = boot(u, "on test", "testmode2")
+                note = " (passed on retry: known rbp-side flake)"
+            check("testmode: VERSION screen", r is not None and is_testmode(r[1]), (str(r[1]) if r else "never booted") + note)
         if "custom" in only:
             # one step above what's installed (an equal release takes the updater's other path)
             try:

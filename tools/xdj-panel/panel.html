@@ -202,8 +202,8 @@ const C = {
   mic1:{l:'MIC1'}, mic2:{l:'MIC2'},
   miceqhi:{l:'HI',t:'knob',spec:'A 46',v:512}, miceqlow:{l:'LOW',t:'knob',spec:'A 44',v:512},
   micsw:{l:'MIC',t:'switch',off:0x5b,mask:0xc0,pos:['OFF','ON','TALK'],bits:[0x40,0x00,0x80],v:1},
-  usb1stop:{l:'USB1 STOP',spec:'B 5e 10'}, usb1load:{l:'USB1 LOAD',usb:'usb1'},
-  usb2stop:{l:'USB2 STOP',spec:'B 5e 08'}, usb2load:{l:'USB2 LOAD',usb:'usb2'},
+  usb1stop:{l:'USB1 STOP',spec:'B 5e 10',led:[0x03,7]}, usb1load:{l:'USB1 LOAD',usb:'usb1'},
+  usb2stop:{l:'USB2 STOP',spec:'B 5e 08',led:[0x07,7]}, usb2load:{l:'USB2 LOAD',usb:'usb2'},
   booth:{l:'BOOTH',t:'knob',spec:'A 48',v:512}, masterlvl:{l:'MASTER',t:'knob',spec:'A 4a',v:512},
   mrec:{l:'MASTER REC',spec:'B 5e 04',led:[0x0a,7],dot:true}, tmark:{l:'TRACK MARK',spec:'B 5e 02'},
   // display keys (top-panel MAIN-UCOM GPIOs) + quantize
@@ -212,11 +212,11 @@ const C = {
   src_usb1:{l:'USB1',gpio:160,led:[0x14,2],ledc:'#39b3ff'}, src_usb2:{l:'USB2',gpio:158,led:[0x14,3],ledc:'#39b3ff'},
   quant:{l:'QUANTIZE',spec:'B 5e 20'}, deck12:{l:'DECK 1/2',gpio:149}, timemd:{l:'TIME MODE',gpio:146},
   // browse section
-  browse:{l:'BROWSE',spec:'B 5f 08'}, taglist:{l:'TAG LIST',spec:'B 5f 04'},
-  info:{l:'INFO',spec:'B 5f 02'}, menu:{l:'MENU',spec:'B 5f 01'},
+  browse:{l:'BROWSE',spec:'B 5f 08',led:[0x0b,7]}, taglist:{l:'TAG LIST',spec:'B 5f 04',led:[0x0b,6]},
+  info:{l:'INFO',spec:'B 5f 02',led:[0x0b,5]}, menu:{l:'MENU',spec:'B 5f 01',led:[0x0b,4]},
   back:{l:'BACK',spec:'B 5e 01'}, tagtrk:{l:'TAG TRK',spec:'B 5d 80',tip:'TAG TRACK'},
   enc:{l:'BROWSE',t:'encoder',pushSpec:'B 5d 10'},
-  loadL:{l:'◄ LOAD',spec:'B 5d 40',tip:'LOAD to deck 1'}, loadR:{l:'LOAD ►',spec:'B 5d 20',tip:'LOAD to deck 2'},
+  loadL:{l:'◄ LOAD',spec:'B 5d 40',tip:'LOAD to deck 1',led:[0x13,5]}, loadR:{l:'LOAD ►',spec:'B 5d 20',tip:'LOAD to deck 2',led:[0x13,4]},
   // channel strips
   // channel INPUT SELECT (DECK <-> LINE/PHONO), frame bits 0x33.7 / 0x43.7 via POST /input.
   // (The rear LINE/PHONO EXT-TYPE toggle, GPIO 119/120, is not emulated: no external audio.)
@@ -248,7 +248,7 @@ const C = {
     pos:['1','2','MIC','CF.1','CF.2','MASTER']},
   fxtime:{l:'TIME',t:'counter',spec:'A 56'},
   fxlev:{l:'DEPTH',tip:'LEVEL/DEPTH',t:'knob',spec:'A 4c',v:512},
-  fxon:{l:'ON/OFF',spec:'B 5b 04',round:true,led:[0x13,6,1],ledc:'#ffcc33',steady:true}, fxtap:{l:'TAP',spec:'B 5b 08',round:true},
+  fxon:{l:'ON/OFF',spec:'B 5b 04',round:true,led:[0x13,6,1],ledc:'#ffcc33',steady:true}, fxtap:{l:'TAP',spec:'B 5b 08',round:true,led:[0x13,7]},
 };
 
 function deckControls(n){ const o=(n-1)*0x10, h=v=>(v+o).toString(16).padStart(2,'0'), p='d'+n;

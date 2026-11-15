@@ -2,6 +2,7 @@
 name = "xdj-fw"
 version = "0.1.0"
 edition = "2021"
+license = "GPL-2.0-or-later"
 description = "XDJ-RX firmware tooling shared by xdj-host and the `xdj` CLI: .UPD decrypt/encrypt, ISO9660 (+Rock Ridge), cramfs, payload tarballs, custom-firmware builds, the update stick, and the emulated NAND image."
 
 [lib]

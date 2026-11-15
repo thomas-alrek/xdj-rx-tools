@@ -703,6 +703,15 @@ void xdj_subucom_frame_start(void)
     }
 
     /*
+     * POWER key (rbp[0x5d].0, code 0x8001) is ACTIVE-LOW on the real panel MCU: it idles at 1
+     * and reads 0 while pressed (decoder 0x283678). Holds/one-shots name *presses*, so invert
+     * it here: no hold -> 1 (idle, like hardware), "B 5d 01" -> 0 (pressed). Before this the
+     * frame sent 0 from boot = the key held down forever. A press makes rbp run its standby
+     * handshake (PowerManager -> TX byte 0x11 = 'S'; docs/service-modes.md).
+     */
+    rbp[0x5d] ^= 0x01;
+
+    /*
      * CRC gate: rbp CRCs the first 96 bytes with each 32-bit word byte-reversed
      * (sw[4w+j] = rbp[4w + (3-j)]), then stores the result at rbp_buf[0x62].
      */

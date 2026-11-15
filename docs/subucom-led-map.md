@@ -69,7 +69,9 @@ rekordbox USB.
 | `0x13.2` | GATE (low) | ✅ |
 | `0x13.3` | NOISE (low) | ✅ |
 | `0x13.6` | BEAT FX ON/OFF (low) | ✅ blinks while on (~0.62 s period, measured) |
-| `0x13.4/.5/.7` | ? | toggle at times; candidates are BEAT ◄/► and TAP. Not identified. |
+| `0x13.4` | LOAD (deck 2) | ✅ Mode 5 |
+| `0x13.5` | LOAD (deck 1) | ✅ Mode 5 |
+| `0x13.7` | TAP | ✅ Mode 5 |
 
 **Meters:** bit *i* of the 16-bit field is segment *i*, counted bottom-up from 0. That gives a
 12-segment bar graph (bits 0–11) with a peak-hold dot; for example `0x5ff` = segments 0–8 plus the
@@ -87,14 +89,36 @@ GPIO6 `DR` (`0x020B0000`; `GDIR` = `0x3c`) over the monitor while pressing each 
 rekordbox … bit3 USB2); `server.py` passes 42 hex through and the panel reads it as **byte `0x14`**.
 DECK 1/2 and TIME MODE showed no GPIO-output change (not checked further).
 
+## Test mode Mode 5 (KEY/LED TEST) sweep — 2026-11-15
+Method: boot test mode (`POST /power on test`), turn the browse encoder 4 detents to Mode 5, hold
+every known frame button bit / top-panel GPIO key for 0.6 s and record which TX bits change (script
+pattern: hold via `/ctrl`, sample `/leds?once=1` 4× at 150 ms). Browse PUSH changes the test mode
+(do it last). In Mode 5 each key lights **its own** LED; a key without one lights a neighbour's
+(listed in brackets). New LEDs (✅ mapped and wired in the panel):
+
+| bit | LED | also lit by (no LED of their own) |
+|---|---|---|
+| `0x03.7` | USB1 STOP | |
+| `0x07.7` | USB2 STOP | |
+| `0x0a.7` | MASTER REC | TRACK MARK |
+| `0x0b.4` | MENU | BEAT ► |
+| `0x0b.5` | INFO | BEAT ◄ |
+| `0x0b.6` | TAG LIST | TAG TRACK |
+| `0x0b.7` | BROWSE | BACK |
+| `0x13.4` | LOAD (deck 2) | |
+| `0x13.5` | LOAD (deck 1) | |
+| `0x13.7` | TAP | browse PUSH |
+
+Deck keys confirmed the known deck LEDs (deck 2 = deck 1 + 4 bytes); keys without LEDs map onto
+them (e.g. SEARCH ►► → pad D `0x02.4`). QUANTIZE lights `0x14.0` (the rekordbox source LED) — no LED
+of its own in this test. TIME MODE → `0x14.2`, DECK 1/2 → `0x14.1` (source-LED byte, shared).
+Not lit by any key: **`0x0a.6`** (on in normal operation, off in Mode 5 → a status indicator, not a
+key LED), **`0x01.0`**, and **`0x12 = 0x08`** (constant even with every LED off → not an LED).
+
 ## Open items
 - **`0x0a.7` = MASTER REC** (on/blinking while recording to USB2; verified 2026-11-15).
-- Identify `0x01.0`, `0x03.7`, `0x0a.6`, `0x12`, and `0x13.4/.5/.7`.
-- Test **Mode 5** (KEY/LED TEST) is the oracle for the rest: the service manual names LEDs not
-  mapped yet — USB1/2 STOP, BROWSE, TAGLIST, INFO, MENU, TAP, LOAD1/2 — candidates for
-  the unknown bits (`docs/service-modes.md`).
-- `0x0b.7` went on after the first USB1 press with a stick inserted (2026-11-15) — candidate USB
-  indicator; not yet characterised.
+- `0x0a.6` (status indicator on in normal mode — which?), `0x01.0`, `0x12` (constant `0x08`).
+- `0x0b.7` = BROWSE (lit while the browser is up — explains it going on after a USB1 press).
 - Decode the jog ring's non-position values (`0x3f`, `0x63`) and check its orientation.
 - Statically locate the encoder that writes the payload, for names. rbp's `PcControlLedData`
   string table lists Play/Pause, Vinyl, Sync, MasterTempo, LoopIn, LoopOut, Reloop, Reverse, Slip,

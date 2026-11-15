@@ -17,7 +17,9 @@ interoperability/preservation on owned hardware.
   edits are a last resort.
 - **Launch the emulator as the user, never `sudo`** (a failed sudo/ptrace attach once killed qemu).
 - Accuracy matters (this is a firmware testbed) — no shortcuts; verify live where possible.
-- Pioneer-owned material (`.env`, `aes256.key`) is git-ignored; never commit it.
+- Pioneer-owned material (`.env`, `aes256.key`, firmware files and their contents) is git-ignored; never commit it.
+- **License: GPL-2.0-or-later** (`LICENSE`); bundled third-party software is listed in
+  `THIRD_PARTY_NOTICES.md` and its license texts are packaged by `packaging/collect-licenses.py`.
 
 ## Layout
 - `crates/xdj-fw/` — the firmware toolkit in Rust: library (used by `xdj-host`) + the **`xdj` CLI** (`fw

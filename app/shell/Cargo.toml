@@ -2,6 +2,7 @@
 name = "xdj-rx-shell"
 version = "0.1.0"
 edition = "2021"
+license = "GPL-2.0-or-later"
 description = "XDJ-RX desktop shell: a Tauri window that runs the xdj-host orchestrator and shows the live panel + noVNC screen. Phase 2 of the standalone-app roadmap."
 
 [build-dependencies]

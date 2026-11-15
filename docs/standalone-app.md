@@ -141,6 +141,10 @@ The app emulates the real unit: **no SD card**, everything lives in the emulated
   `bootcmd_nand` host-side: `kernel_bank` → that bank's uImage → blobs + bootargs), so a firmware
   update done inside the emulator boots the new kernel. Update = `XDJ_BOOT_UPDATE=1`.
 - `power.sock` status: `on` (Normal), `on update` (Provision/Update), `off`.
+- **POWER off = the unit's standby handshake** while rbp runs: the panel presses the POWER key
+  (`0x5d.0`, active-low), rbp prepares and sends TX `0x11='S'`, the panel cuts power; rbp's own AUTO
+  STANDBY ends the same way. Otherwise (booting, update mode, no answer in 10 s) a hard cut
+  (`docs/service-modes.md`).
 - **Install Firmware Update** (File > Install Firmware Update…): native file dialog for a `.UPD`/`.zip`
   → panel `POST /install-update <path>` builds `<runtime>/install-update.img` (FAT16, `XDJRX.UPD`),
   power-cycles into update mode (`on update`, the NAND kernel) and inserts it on USB1 when the
@@ -309,7 +313,11 @@ Chrome render the layout differently** (flex-fill + SVG collapses in WebKit).
 `packaging/build-macos-app.sh` → `dist/XDJ-RX.app`. It builds both release binaries and bundles:
 the patched `qemu-system-arm` with its Homebrew dylibs **relocated** (`dylibbundler -p
 @executable_path/libs/`, duplicate `LC_RPATH`s stripped), the keymaps, the panel pages +
-noVNC + knobs dist. **No Python**: prep, the NAND and the panel server all run inside `xdj-host`. Everything is **ad-hoc code-signed inside-out** (`codesign --force -s -`) because Apple
+noVNC + knobs dist. **No Python**: prep, the NAND and the panel server all run inside `xdj-host`.
+**Licensing:** the repo is GPL-2.0-or-later; `packaging/collect-licenses.py` copies every bundled
+component's license text into `Resources/licenses/` (QEMU, each Homebrew dylib keg, noVNC, knobs, all
+Rust crates) — see `THIRD_PARTY_NOTICES.md`. QEMU is built `--disable-libssh` so OpenSSL (Apache-2.0,
+GPLv2-incompatible) is not bundled. Test the bundle with `tools/test/regress.py --app dist/XDJ-RX.app`. Everything is **ad-hoc code-signed inside-out** (`codesign --force -s -`) because Apple
 Silicon won't run a binary whose signature dylibbundler invalidated. Prereqs: Rust, a built patched
 qemu (`qemu/build-qemu.sh`), `dylibbundler`.
 

@@ -37,6 +37,10 @@ sent at QEMU start was read only after that frame was built — now bound at rea
 first parsed input frame. `XDJ_FRAME_LOG=1` traces the first 12 frames (`XDJ-FRAME n t= snap=
 [12]= [13]= [33]=` on QEMU's stderr): frames 0–2 come from the kernel driver at probe, rbp's first
 poll ~20 s later.
+**Known flake (open):** about 1 boot in 8 still comes up in the normal UI although the trace shows
+both keys in every frame from the first (incl. rbp's first poll) — so it is rbp-side timing, not the
+frame. Seen on first boots after an update and at random. `regress.py` retries test mode once and
+says so.
 
 **How rbp enters it** (static + live, rbp sha `4f62aa71…`):
 - `Base::setBinaryData()` (`0x284d48`) parses each sub-ucom frame. When there is **no previous
@@ -110,9 +114,12 @@ sequence:
   storage path (`0x296628`, `0x298170`). The root fs is read-only cramfs and the writable data/gui are
   UBIFS (journaled), so the handshake mainly lets rbp finish what it's doing (e.g. stop a USB
   recording, settle settings) rather than flush a cache. Which receivers do what is not traced.
-- Emulator today: the app's POWER button is an instant power cut (QEMU killed), and the frame holds
-  `0x5d.0` low ("pressed") from boot. Faithful option: idle `0x5d.0 = 1`, POWER off = press it, wait
-  for TX `0x11 == 0x53` (with a timeout), then stop QEMU.
+- **Emulated faithfully (2026-11-15):** the harness inverts `0x5d.0` (`xdj-panel.c`: no hold → 1 =
+  idle, `B 5d 01` → 0 = pressed). The panel plays the MCU's part: POWER off while rbp runs presses
+  the key and waits ≤ 10 s; whenever rbp's TX carries `0x11 = 'S'` (a POWER press *or* rbp's own AUTO
+  STANDBY) it cuts power (`standby_cut` in `panel.rs` / `_standby_cut` in `server.py`). Booting, update
+  mode or no answer → a plain power cut, as before. Measured: rbp answers in ~0.2 s when idle.
+  Regression: `regress.py` stage `standby`.
 
 ## Other manual facts worth keeping
 - Startup sequence (p. 20): sub-ucom resets first (MASTER REC LED flashes red), decides

@@ -257,6 +257,30 @@ def _insert_pending(update):
             _logline("subucom", "·  queued %s insert failed: %s" % (slot, e))
 
 
+_standby = {"on": False}      # rbp signalled standby (TX 'S') and we're cutting power
+
+
+def _standby_cut():
+    """The panel MCU's half of the power-off handshake (as app/host/src/panel.rs): rbp
+    sends 'S' (TX byte 0x11) once it has prepared for standby; the MCU cuts power.
+    Covers a POWER-key press and rbp's own AUTO STANDBY alike."""
+    st = _power_cmd("status")
+    if not st or not st.startswith("on"):
+        return
+    _logline("subucom", "·  rbp is ready for standby (TX 'S'): the panel MCU cuts power")
+    _logline("console", "──────── standby: power off ────────")
+    _power_cmd("off")
+    _leds_off()
+    with _sock_lock:
+        for k in ("ctrl", "key"):
+            try:
+                if _conn[k]:
+                    _conn[k].close()
+            except Exception:
+                pass
+            _conn[k] = None
+
+
 def _leds_update(hexstr):
     # "<40 hex>" = SubTxData; QEMU (xdj-board.c (was patch 17)) appends " <2 hex>" = source-key LEDs
     # (GPIO 162..165: bit0 rekordbox, bit1 MIDI, bit2 USB1, bit3 USB2). Served as one
@@ -272,6 +296,9 @@ def _leds_update(hexstr):
             _leds["seq"] += 1
             _leds["t"] = time.time()
             _leds_cv.notify_all()
+    if hexstr[34:36] == "53" and not _standby["on"]:
+        _standby["on"] = True
+        threading.Thread(target=_standby_cut, daemon=True).start()
 
 
 def _leds_file_loop():
@@ -932,6 +959,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if want == "toggle":
                 want = "off" if cur.startswith("on") else "on"
             if want == "on":
+                _standby["on"] = False                 # fresh power cycle: POWER key up
+                with _browse_lock:
+                    if _held.pop((0x5d, 0x01), None):
+                        _push()
                 if test:
                     # The keys must be down at rbp's first frame: cold boot with them held.
                     if cur.startswith("on"):
@@ -951,6 +982,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if has_pending:
                     threading.Thread(target=_insert_pending, args=(upd,), daemon=True).start()
             else:
+                # POWER key -> panel MCU -> rbp prepares (code 0x8001) -> 'S' -> _standby_cut.
+                # Only while rbp runs; otherwise, or with no answer in 10 s, a plain power cut.
+                if cur == "on" and _console_has("commandline read: rbp"):
+                    _logline("subucom", "·  POWER key: asking rbp to prepare for standby")
+                    with _browse_lock:
+                        _apply_lines(["B 5d 01"])
+                        _push()
+                    t0 = time.time()
+                    while time.time() - t0 < 10 and _power_cmd("status") != "off":
+                        time.sleep(0.2)
+                    with _browse_lock:
+                        _held.pop((0x5d, 0x01), None)
+                    if _power_cmd("status") == "off":
+                        self._send(200, "text/plain", b"off"); return
+                    _logline("subucom", "·  no standby answer from rbp in 10 s: cutting power")
                 st = _power_cmd("off")
                 _leds_off()
                 with _sock_lock:
