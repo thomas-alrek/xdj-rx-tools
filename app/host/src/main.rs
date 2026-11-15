@@ -20,9 +20,9 @@
 //!
 //! Firmware is never touched -- everything here is host-side orchestration.
 
-mod firmware;
-mod nand;
 mod panel;
+
+use xdj_fw::{firmware, nand};
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -921,40 +921,6 @@ async fn main() {
                 eprintln!("[prep] failed: {e}");
                 std::process::exit(1);
             }
-        }
-        return;
-    }
-
-    // Dev subcommands: run one prep/NAND step on its own (parity checks against the
-    // Python tools: qemu/test_rust_parity.sh).
-    if let Some(cmd) = argv.get(1).filter(|c| c.starts_with("dev-")) {
-        let a = |i: usize| PathBuf::from(argv.get(i).cloned().unwrap_or_default());
-        let r: Result<(), String> = (|| match cmd.as_str() {
-            "dev-decrypt" => {
-                let cfg = Config::from_env().map_err(|e| e.to_string())?;
-                let (iso, _) = firmware::decrypt_firmware(&a(2), &resolve_firmware_key(&cfg)?)?;
-                std::fs::write(a(3), iso).map_err(|e| e.to_string())
-            }
-            "dev-blobs" => firmware::write_boot_blobs(&std::fs::read(a(2)).map_err(|e| e.to_string())?, &a(3)),
-            "dev-stick" => {
-                let upd = firmware::read_upd_bytes(&a(2))?;
-                let t = std::fs::metadata(a(4)).and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::now());
-                std::fs::write(a(3), firmware::update_stick(&upd, t)?).map_err(|e| e.to_string())
-            }
-            "dev-nand-init" => {
-                let iso = std::fs::read(a(3)).map_err(|e| e.to_string())?;
-                nand::init(&a(2), &firmware::env_lines(&firmware::iso_read(&iso, "/images/fw_env.txt")?))
-            }
-            "dev-nand-boot" => nand::boot(&a(2), &a(3)),
-            "dev-nand-installed" => {
-                println!("{}", nand::installed(&a(2)));
-                Ok(())
-            }
-            _ => Err(format!("unknown {cmd}")),
-        })();
-        if let Err(e) = r {
-            eprintln!("{cmd}: {e}");
-            std::process::exit(1);
         }
         return;
     }

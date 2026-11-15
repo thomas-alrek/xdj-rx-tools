@@ -17,15 +17,21 @@ interoperability/preservation on owned hardware.
   edits are a last resort.
 - **Launch the emulator as the user, never `sudo`** (a failed sudo/ptrace attach once killed qemu).
 - Accuracy matters (this is a firmware testbed) — no shortcuts; verify live where possible.
-- Pioneer-owned material (`.env`, `aes256.key`) is git-ignored; never commit it.
+- Pioneer-owned material (`.env`, `aes256.key`, firmware files and their contents) is git-ignored; never commit it.
+- **License: GPL-2.0-or-later** (`LICENSE`); bundled third-party software is listed in
+  `THIRD_PARTY_NOTICES.md` and its license texts are packaged by `packaging/collect-licenses.py`.
 
 ## Layout
-- `xdjrx_upd.py`, `fetch_key.py` — `.UPD` firmware decrypt/extract/pack + AES key fetch → skill `upd-firmware-format`.
+- `crates/xdj-fw/` — the firmware toolkit in Rust: library (used by `xdj-host`) + the **`xdj` CLI** (`fw
+  info|decrypt|unpack|diff|repack|build|pack|stick`, `prepare`, `nand init|env|info|boot`). **Custom firmware =
+  `xdj fw build BASE --overlay DIR --release X.YY`**; e2e check `tools/fw/make-test-upd.sh` → skill
+  `custom-firmware`, `docs/custom-firmware.md`.
+- `xdjrx_upd.py`, `fetch_key.py` — older Python `.UPD` decrypt/extract/pack + the AES key fetch.
 - `qemu/` — `build-qemu.sh`, `patches/01..05` + `qemu/xdj/`, `watch.sh`, `build-nand.sh`, `cramfs_extract.py`.
 - `qemu_prepare.py` — kernel boot blobs (trampoline/atags/vmlinux). `run.sh` — from-scratch build+boot.
 - `build/` (git-ignored) — `qemu-src/` (patched QEMU), `extract/rbp` (the analyzed binary), `qemu/` (boot blobs, nand.img).
 - `app/` — the desktop app: `shell/` (Tauri) + `host/` (`xdj-host`: QEMU supervisor, firmware prep
-  `src/firmware.rs`, NAND `src/nand.rs`, the in-process panel server `src/panel.rs`). **No Python in the
+  + NAND via the shared crate `crates/xdj-fw`, the in-process panel server `src/panel.rs`). **No Python in the
   packaged app**; the Python scripts are dev tools, kept byte-identical by `qemu/test_rust_parity.sh`
   and `tools/xdj-panel/test_panel_parity.py` (run them after touching either side) → skill `build-xdj-app`.
 - `tools/xdj-panel/` — the virtual web panel (`panel.html`, `logs.html`; `server.py` = the dev server) + `debug/` (RE launcher & helpers: `relaunch.sh`, `rsp.py`, `tables.py`, `mon.py`, `ser.py`, `inj.py`, `sweep_*.py`).
@@ -66,6 +72,9 @@ interoperability/preservation on owned hardware.
   `/tmp/subucom_tx`); the panel lights from `GET /leds`. Map: `docs/subucom-led-map.md`.
 - A one-shot `b`/`a` left in `/tmp/subucom_ctrl` **next to holds re-fires every 30 frames** (file
   mode) — rewrite the holds alone right after (`inj.py pulse`), or toggles flip back and forth.
+- **No firmware signature:** the update's `check_sig` checks only the footer CRC32 + the `XDJAERO` model
+  prefix (the rest is printed as the version); the updater md5-checks each written partition against its
+  own source. A rebuilt `.UPD` installs like an official one.
 - **`Ver --.--`** in UTILITY → VERSION No. = no `release` in the u-boot env (written by the updater's
   `finEnv`, read by apl_start into `/tmp/smdj2.rev`) — not a panel/rbp issue.
 - **Control chardevs bind at realize** (`xdj_subucom_realize`): bound lazily on the first SPI frame, a
@@ -98,7 +107,9 @@ interoperability/preservation on owned hardware.
 - Map a control: GPIO → **`map-gpio-control`**; sub-ucom button/fader/knob/rotary →
   **`map-subucom-{button,fader,knob,rotary}`**.
 - Reverse-engineer `rbp` internals / REA workflow → **`rbp-binary-internals`**.
-- Firmware `.UPD` format → **`upd-firmware-format`**. QEMU patch set → **`qemu-imx6-patches`**.
+- Firmware `.UPD` format → **`upd-firmware-format`**; build/install a **custom firmware** → **`custom-firmware`**
+  (`docs/custom-firmware.md`). End-to-end regression of the emulator + app → `tools/test/regress.py`
+  (all checks and when to run them: `docs/testing.md`). QEMU patch set → **`qemu-imx6-patches`**.
 - Standalone desktop app (Tauri shell + `xdj-host` orchestrator + packaging) → **`build-xdj-app`**;
   the virtual web panel (controls UI, layout, USB LOAD) → **`xdj-virtual-panel`**.
 

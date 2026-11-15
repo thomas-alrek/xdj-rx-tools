@@ -54,8 +54,8 @@ SEARCH, CALL, EQ MID/LOW, MIC, HP, USB STOP, QUANTIZE, CUE1/2, BROWSE/INFO/TAG L
 | `0x59` | .4 FILTER · .5 CRUSH · .6 GATE · .7 NOISE (sound colour FX, `0x5095..98`) |
 | `0x5a` | .0 BEAT ► (`4494`) · .1 BEAT ◄ (`4493`) · bits 2-4 **CH SELECT** v → pos 5−v: 1, 2, MIC, CF.1, CF.2, MASTER (`448e`) · bits 5-7 **FX SELECT** v → pos 7−v: DELAY, ECHO, SPIRAL, REVERB, TRANS, FLANGER, PITCH, ROLL (`448d`) |
 | `0x5b` | .0 CUE CH2 · .1 CUE CH1 (`5014`) · .2 BEAT FX ON/OFF (`4487`) · .3 TAP (`4486`) · bits 4-5 XF CURVE (v1→0, v0→1, v2→2; `6010`) · bits 6-7 MIC switch OFF/ON/TALK (same encoding; `803`) |
-| `0x5d` | .0 **active-low status** (`0x8001`; not a key) · .4 BROWSE PUSH · .5 LOAD deck 2 · .6 LOAD deck 1 · .7 TAG TRACK |
-| `0x5e` | .0 BACK (`4206`) · .1 TRACK MARK (`409`) · .2 `0x401` (unnamed) · .3 USB2 STOP · .4 USB1 STOP (`8002`) · .5 QUANTIZE (`4488`) |
+| `0x5d` | .0 **POWER key → standby request**, ACTIVE-LOW (`0x8001`; idle = 1 on hardware, the emulator sends 0 = held; see service-modes.md) · .4 BROWSE PUSH · .5 LOAD deck 2 · .6 LOAD deck 1 · .7 TAG TRACK |
+| `0x5e` | .0 BACK (`4206`) · .1 TRACK MARK (`409`) · .2 **MASTER REC** (`401`; records the master to the USB2 stick) · .3 USB2 STOP · .4 USB1 STOP (`8002`) · .5 QUANTIZE (`4488`) |
 | `0x5f` | .0 MENU (`20a`) · .1 INFO (`204`) · .2 TAG LIST (`209`) · .3 BROWSE (`208`) |
 
 Visually confirmed on the LCD: FX/CH SELECT names, TEMPO RANGE, QUANTIZE, MASTER.
@@ -77,10 +77,10 @@ inj = `b <rbp_off> <mask>` for buttons, `A <rbp_off> <val16>` for analog.
 | 0x5d.7 | 0x420b | (center key, name TBD) | ○ |
 | 0x5e.0 | 0x203 | BACK | ✅ |
 | 0x5e.1 | 0x409 | TAG LIST | ✅ |
-| 0x5e.2 | 0x401 | (nav, name TBD) | ○ |
+| 0x5e.2 | 0x401 | MASTER REC (toggle; records to USB2) | ✅ |
 | 0x5e.4 | 0x8002 | (USB-class key, distinct from eject) | ○ |
 | 0x5e.5 | 0x4488 | BEAT FX (sticky) | ○ |
-| 0x5f.0 | 0x20a | MENU (opens SORT) | ✅ |
+| 0x5f.0 | 0x20a | MENU (in the browser: SORT; **held ~1 s+**: UTILITY menu, a short tap leaves it again — a short tap on the home screen does nothing) | ✅ |
 | 0x5f.1 | 0x204 | (center key, name TBD) | ○ |
 | 0x5f.2 | 0x209 | (center key, name TBD) | ○ |
 | 0x5f.3 | 0x208 | (switches browse view) | ○ |
@@ -185,6 +185,29 @@ Of the XDJ-RX's physical controls, these are **NOT sub-ucom buttons** in this 10
   HOT CUE/BEAT LOOP/SLIP LOOP/BEAT JUMP = codes 0x4113/14/15/16).
 - **Separate protocol**: JOG-WHEEL **rotation** (jog *touch* is a normal deck button; rotation is
   not in this frame — see the RX3 "JogCom" notes).
+
+### MASTER REC — ✅ mapped 2026-11-15: `0x5e.2`, code `0x401`
+**Verified live:** with a stick on **USB2** (it records there; on USB1 a tap does nothing), a tap
+starts recording — the USB2 drive's QEMU write counter climbs ~180 KB/s (16-bit stereo 44.1 kHz
+WAV, `/PIONEER REC/REC%03d.WAV`) and the MASTER REC LED (`0x0a.7`, TX) blinks; a second tap stops
+it (writes stop). No on-screen indicator. History of the hunt (kept for the method):
+- **Every code the panel decoders can emit is accounted for** (`movw` scan of `0x282000–0x284f00`):
+  the mapped buttons/analogs above, the master analog block (`0x4402 0x4403 0x4405 0x440c 0x448b
+  0x600f`), deck `0x4108`/`0x410a`, and `0x401`. No unmapped *button* code is left in this frame.
+- **Not a GPIO either:** every `GpioManager` input rbp creates (ctor `0x2be28`) is mapped — 119/120,
+  146, 149, 158–161, the USB fault pins.
+- **`0x401` (`0x5e.2`)**: the code consumer (`0x26a97c`) gates it on a flag bit — first misread as a
+  modifier because the test stick was on USB1. It IS the REC key (above).
+- **`0x5d.0` = code `0x8001` is an ACTIVE-LOW key** (decoder `0x283678`: bit clear → press, set →
+  release). The emulator's all-zero frames hold it "pressed" from boot. A real press (hold `B 5d 01`
+  as the idle level, drop it briefly) makes rbp turn every LED off and send TX byte `0x11 = 0x53`
+  ('S'); a second press changes nothing; the screen and guest keep running. Reads as the
+  power-switch/standby notice from the panel MCU, not REC.
+- **Recording itself:** USB recording (`/PIONEER REC/REC%03d.WAV`) starts in `RecStart` `0x5a388`
+  (status `0x5a5f8`); the only non-debug caller is the toggle `0x276fec` = **vtable slot 3 of
+  `ui::MasterInnards`** (vtable `0x426e08`, ctor ref `0x27a02c`). Its caller (an interface call) is
+  not traced yet — that is the path from the MASTER REC key. The firmware is the shared "XDJAERO"
+  platform, so REC code may exist whether or not the RX's panel routes a key to it.
 
 **Label-ambiguous (in-frame, bits decoded, but RX reassigned the codes vs RX3 and deck transport
 shows no LCD feedback, so the exact label per bit can't be fixed in the emulator):** TRACK SEARCH

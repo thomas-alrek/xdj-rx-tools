@@ -37,6 +37,10 @@ sent at QEMU start was read only after that frame was built — now bound at rea
 first parsed input frame. `XDJ_FRAME_LOG=1` traces the first 12 frames (`XDJ-FRAME n t= snap=
 [12]= [13]= [33]=` on QEMU's stderr): frames 0–2 come from the kernel driver at probe, rbp's first
 poll ~20 s later.
+**Known flake (open):** about 1 boot in 8 still comes up in the normal UI although the trace shows
+both keys in every frame from the first (incl. rbp's first poll) — so it is rbp-side timing, not the
+frame. Seen on first boots after an update and at random. `regress.py` retries test mode once and
+says so.
 
 **How rbp enters it** (static + live, rbp sha `4f62aa71…`):
 - `Base::setBinaryData()` (`0x284d48`) parses each sub-ucom frame. When there is **no previous
@@ -91,6 +95,31 @@ image is persistent.
   protocol — **now emulated** (`xdj-panel.c` SUB bootloader; the SUB bar reaches 100 %, see
   `docs/update-path-plan.md`). MAIN still fails until the NAND model exists. Use the debug
   launcher (`snapshot=on`), never the app's persistent image, and never a real stick.
+
+## Power off: a standby handshake, not a power cut (static + live, 2026-11-15)
+The POWER key reaches rbp through the panel MCU as frame bit **`0x5d.0`** (code **`0x8001`**,
+**active-low**: decoder `0x283678`, bit clear = pressed). rbp answers with a deliberate standby
+sequence:
+- `ui::PowerManager` (vtable `0x427cc8`, implements `uif::IPowerManager`: `reqStandbyOn`,
+  `notifyPreparedToStandby`, `notifyAutoStandbyTime`) notifies the `IStandbyReqReciever`s and waits
+  for them to report "prepared" (`PowerManager::WaitTimer` bounds the wait). The same path serves
+  **auto standby** (`IAutoStandbyPermitter`, the AUTO STANDBY setting).
+- Then `ui::PanelComController` (vtable slot 2, `0x21a350`) sets its standby flag (`+0x50`) and every
+  TX frame carries payload byte **`0x11 = 0x53` ('S')** with the LEDs cleared — "i.MX6 ready, cut
+  me". The panel MCU (which owns the power rails and the STBY/MASTER REC LED per the manual's startup
+  sequence) then powers the i.MX6 down.
+- Live in the emulator: hold `B 5d 01` (key up) then drop it → all LEDs off, TX `0x11=0x53` at once;
+  a second press does nothing; the guest keeps running (the emulated MCU never cuts power).
+- What "prepared" covers: rbp has **no `sync()` call**; `umount`/`umount2` live only in the USB
+  storage path (`0x296628`, `0x298170`). The root fs is read-only cramfs and the writable data/gui are
+  UBIFS (journaled), so the handshake mainly lets rbp finish what it's doing (e.g. stop a USB
+  recording, settle settings) rather than flush a cache. Which receivers do what is not traced.
+- **Emulated faithfully (2026-11-15):** the harness inverts `0x5d.0` (`xdj-panel.c`: no hold → 1 =
+  idle, `B 5d 01` → 0 = pressed). The panel plays the MCU's part: POWER off while rbp runs presses
+  the key and waits ≤ 10 s; whenever rbp's TX carries `0x11 = 'S'` (a POWER press *or* rbp's own AUTO
+  STANDBY) it cuts power (`standby_cut` in `panel.rs` / `_standby_cut` in `server.py`). Booting, update
+  mode or no answer → a plain power cut, as before. Measured: rbp answers in ~0.2 s when idle.
+  Regression: `regress.py` stage `standby`.
 
 ## Other manual facts worth keeping
 - Startup sequence (p. 20): sub-ucom resets first (MASTER REC LED flashes red), decides

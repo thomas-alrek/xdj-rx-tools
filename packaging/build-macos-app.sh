@@ -89,6 +89,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict></plist>
 PLIST
 
+# License texts for everything bundled (GPL/LGPL/MPL/MIT...; THIRD_PARTY_NOTICES.md)
+echo "==> collecting licenses"
+python3 packaging/collect-licenses.py "$RES" "$ROOT/build/qemu-src/qemu-11.1.0"
+
 # Ad-hoc sign inside-out (arm64 won't run binaries with a dylibbundler-broken sig).
 echo "==> ad-hoc signing"
 find "$RES/libs" -name '*.dylib' -exec codesign --force -s - {} + 2>/dev/null || true

@@ -16,9 +16,11 @@
 //!   POST /power    on|off|toggle [update|test]    GET  /power -> {available,state,update,pending}
 //!   GET  /leds (SSE; ?once=1 = JSON)              GET  /log/<subucom|console> (SSE)
 //!   POST /log/note                                GET/POST /cal, /savecal, /cal-ref (dev)
+//!   POST /install-update "<path to .UPD/.zip>"  stick from it + cold boot into update mode
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -104,6 +106,8 @@ pub struct Panel {
     power: PowerTx,
     pending_usb: Mutex<BTreeMap<String, String>>,
     usb_cur: Mutex<HashMap<String, (String, String)>>,
+    /// rbp signalled standby (TX 'S') and we're cutting power; reset at power on.
+    standby: AtomicBool,
 }
 
 fn now_f() -> f64 {
@@ -243,6 +247,7 @@ impl Panel {
             power,
             pending_usb: Mutex::new(BTreeMap::new()),
             usb_cur: Mutex::new(HashMap::new()),
+            standby: AtomicBool::new(false),
         });
         tokio::spawn(ctrl_conn(p.clone(), ctrl_rx));
         tokio::spawn(key_conn(p.cfg.key_sock.clone(), key_rx));
@@ -308,7 +313,12 @@ impl Panel {
         }
     }
 
-    fn leds_update(&self, hexstr: &str) {
+    /// TX payload byte 0x11 = 'S' (0x53): rbp's "ready for standby" to the panel MCU.
+    fn tx_says_standby(hex: &str) -> bool {
+        hex.get(34..36) == Some("53")
+    }
+
+    fn leds_update(self: &Arc<Self>, hexstr: &str) {
         let h = hexstr.trim().to_lowercase().replace(' ', "");
         if !(h.len() == 40 || h.len() == 42) || !h.chars().all(|c| c.is_ascii_hexdigit()) {
             return;
@@ -324,6 +334,9 @@ impl Panel {
                 self.led_diff(&old, &h);
             }
             self.leds_w.send_replace(seq);
+            if Self::tx_says_standby(&h) && !self.standby.swap(true, Ordering::SeqCst) {
+                tokio::spawn(standby_cut(self.clone()));
+            }
         }
     }
 
@@ -521,6 +534,21 @@ async fn test_mode_boot(p: Arc<Panel>) {
         p.push_locked(&st, &[]);
     }
     p.logline("subucom", "·  test mode: released MEMORY + TEMPO RANGE");
+}
+
+/// The panel MCU's half of the power-off handshake (docs/service-modes.md): once rbp
+/// has prepared for standby it sends 'S' (TX byte 0x11) and the MCU cuts the i.MX6's
+/// power. Covers a POWER-key press and rbp's own AUTO STANDBY alike.
+async fn standby_cut(p: Arc<Panel>) {
+    if !p.power_cmd(PowerCmd::Status).await.starts_with("on") {
+        return;
+    }
+    p.logline("subucom", "·  rbp is ready for standby (TX 'S'): the panel MCU cuts power");
+    p.logline("console", "──────── standby: power off ────────");
+    p.power_cmd(PowerCmd::Off).await;
+    p.leds_off();
+    let _ = p.ctrl_tx.send(ConnMsg::Reset);
+    let _ = p.key_tx.send(ConnMsg::Reset);
 }
 
 /// USB LOADs queued while off go in once the guest is ready (maybe_insert_usb's rules).
@@ -820,6 +848,14 @@ async fn post(p: Arc<Panel>, path: &str, body: String) -> Response<Body> {
             }
             let st;
             if want == "on" {
+                // fresh power cycle: the POWER key is up, no standby in progress
+                p.standby.store(false, Ordering::SeqCst);
+                {
+                    let mut s = p.st.lock().unwrap();
+                    if s.held.remove(&(0x5d, 0x01)) {
+                        p.push_locked(&s, &[]);
+                    }
+                }
                 if test {
                     // The keys must be down at rbp's first frame: cold boot with them held.
                     if cur.starts_with("on") {
@@ -841,6 +877,30 @@ async fn post(p: Arc<Panel>, path: &str, body: String) -> Response<Body> {
                     tokio::spawn(insert_pending(p.clone(), upd));
                 }
             } else {
+                // Like the unit: the POWER key goes to the panel MCU, which asks rbp to prepare
+                // (code 0x8001) and cuts power when rbp answers 'S' (standby_cut). Only while
+                // rbp runs a normal boot; otherwise (booting, update mode) or without an answer
+                // in 10 s it's a plain power cut, as before.
+                if cur == "on" && p.console_has("commandline read: rbp") {
+                    p.logline("subucom", "·  POWER key: asking rbp to prepare for standby");
+                    {
+                        let mut s = p.st.lock().unwrap();
+                        s.held.insert((0x5d, 0x01));
+                        p.push_locked(&s, &[]);
+                    }
+                    let t0 = Instant::now();
+                    while t0.elapsed() < Duration::from_secs(10) && p.power_cmd(PowerCmd::Status).await != "off" {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
+                    {
+                        let mut s = p.st.lock().unwrap();
+                        s.held.remove(&(0x5d, 0x01));
+                    }
+                    if p.power_cmd(PowerCmd::Status).await == "off" {
+                        return text(200, "off");
+                    }
+                    p.logline("subucom", "·  no standby answer from rbp in 10 s: cutting power");
+                }
                 st = p.power_cmd(PowerCmd::Off).await;
                 p.leds_off();
                 let _ = p.ctrl_tx.send(ConnMsg::Reset);
@@ -992,6 +1052,51 @@ async fn post(p: Arc<Panel>, path: &str, body: String) -> Response<Body> {
                 Ok(m) => text(200, m),
                 Err(e) => text(500, e),
             }
+        }
+        "/install-update" => {
+            // File > Install Firmware Update: like the real procedure -- the .UPD on a USB
+            // stick in USB1, power on in update mode. We build the stick (FAT16, XDJRX.UPD)
+            // in the runtime dir, power-cycle into update mode and insert it when the
+            // initramfs asks (insert_pending). The user finishes on screen and power-cycles,
+            // as on the unit.
+            let path = body.trim().to_string();
+            if !Path::new(&path).is_file() {
+                return text(404, format!("no such file: {path}"));
+            }
+            let stick = p.cfg.ctrl_sock.with_file_name("install-update.img");
+            let st2 = stick.clone();
+            let built = tokio::task::spawn_blocking(move || -> Result<String, String> {
+                let upd = xdj_fw::firmware::read_upd_bytes(Path::new(&path))?;
+                let (_, model, _) = xdj_fw::firmware::split_container(&upd)?;
+                if !model.starts_with("XDJAERO") {
+                    return Err(format!("{model:?} is not an XDJ-RX firmware (model must start with XDJAERO)"));
+                }
+                let img = xdj_fw::firmware::update_stick(&upd, SystemTime::now())?;
+                std::fs::write(&st2, img).map_err(|e| format!("{}: {e}", st2.display()))?;
+                Ok(model)
+            })
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
+            let model = match built {
+                Ok(m) => m,
+                Err(e) => {
+                    p.logline("subucom", &format!("·  install update: {e}"));
+                    return text(400, e);
+                }
+            };
+            if p.power_cmd(PowerCmd::Status).await.starts_with("on") {
+                p.power_cmd(PowerCmd::Off).await;
+                p.leds_off();
+                let _ = p.ctrl_tx.send(ConnMsg::Reset);
+                let _ = p.key_tx.send(ConnMsg::Reset);
+            }
+            p.pending_usb.lock().unwrap().insert("usb1".into(), stick.to_string_lossy().into_owned());
+            let st = p.power_cmd(PowerCmd::On(true)).await;
+            let ver = model.trim_start_matches("XDJAERO");
+            p.logline("subucom", &format!("·  INSTALL FIRMWARE UPDATE {ver}: power on (firmware update mode), stick on USB1"));
+            p.logline("console", &format!("──────── install firmware update {ver} (update mode) ────────"));
+            tokio::spawn(insert_pending(p.clone(), true));
+            text(200, format!("installing firmware {ver} ({st}): follow the update screen, then power off/on"))
         }
         "/savecal" => {
             let assets = p.cfg.panel_dir.join("assets");

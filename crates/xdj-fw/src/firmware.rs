@@ -87,6 +87,45 @@ pub fn key_from_passphrase(raw: &[u8]) -> [u8; 32] {
     k
 }
 
+/// The key from a file: 64 hex chars, else a losetup passphrase file.
+pub fn key_from_file(path: &Path) -> Result<[u8; 32], String> {
+    let raw = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(key_from_hex(&String::from_utf8_lossy(&raw)).unwrap_or_else(|| key_from_passphrase(&raw)))
+}
+
+/// Find the firmware key the way the tools always have: an explicit key file, else
+/// `XDJRX_AES_KEY` (64 hex), else `XDJRX_AES_KEY=` in a `.env` in `start` or any parent
+/// directory (the repo's, written by fetch_key), else the desktop app's saved key.
+pub fn resolve_key(key_file: Option<&Path>, start: &Path) -> Result<[u8; 32], String> {
+    if let Some(f) = key_file {
+        return key_from_file(f);
+    }
+    if let Ok(v) = std::env::var("XDJRX_AES_KEY") {
+        return key_from_hex(&v).ok_or_else(|| "XDJRX_AES_KEY must be 64 hex characters".to_string());
+    }
+    let mut dir = Some(start);
+    while let Some(d) = dir {
+        if let Ok(t) = std::fs::read_to_string(d.join(".env")) {
+            for l in t.lines() {
+                if let Some((k, v)) = l.trim().split_once('=') {
+                    if k.trim() == "XDJRX_AES_KEY" {
+                        let v = v.trim().trim_matches('"').trim_matches('\'');
+                        return key_from_hex(v).ok_or_else(|| format!("{}: XDJRX_AES_KEY must be 64 hex characters", d.join(".env").display()));
+                    }
+                }
+            }
+        }
+        dir = d.parent();
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let k = Path::new(&home).join("Library/Application Support/XDJ-RX/key/aes256.key");
+        if k.exists() {
+            return key_from_file(&k);
+        }
+    }
+    Err("no firmware key: pass --key-file, set XDJRX_AES_KEY, or run fetch_key (writes .env)".into())
+}
+
 /// Decrypt the body and check it is an ISO9660 image (else: wrong key).
 pub fn decrypt_body(body: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, String> {
     type Dec = cbc::Decryptor<aes::Aes256>;
@@ -106,6 +145,35 @@ pub fn decrypt_body(body: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// Encrypt an ISO into a `.UPD`: AES-256-CBC per sector (zero-padded to a sector) +
+/// the 16-byte footer: model string (12 bytes, NUL-padded; the update's check_sig
+/// wants it to start with "XDJAERO" and prints the rest as the version) + LE32
+/// CRC32 of the encrypted body. check_sig verifies only that CRC and the model prefix.
+pub fn pack(iso: &[u8], key: &[u8; 32], model: &str) -> Result<Vec<u8>, String> {
+    use aes::cipher::BlockEncryptMut;
+    type Enc = cbc::Encryptor<aes::Aes256>;
+    if model.len() > 12 {
+        return Err(format!("model string {model:?} longer than 12 bytes"));
+    }
+    let mut body = iso.to_vec();
+    body.resize(iso.len().div_ceil(SECTOR) * SECTOR, 0);
+    for (i, sec) in body.chunks_mut(SECTOR).enumerate() {
+        let mut iv = [0u8; 16];
+        iv[..4].copy_from_slice(&(i as u32).to_le_bytes());
+        let blocks = unsafe {
+            // SAFETY: a 512-byte sector is 32 contiguous 16-byte AES blocks.
+            std::slice::from_raw_parts_mut(sec.as_mut_ptr() as *mut aes::Block, sec.len() / 16)
+        };
+        Enc::new(key.into(), &iv.into()).encrypt_blocks_mut(blocks);
+    }
+    let crc = crc32fast::hash(&body);
+    let mut m = model.as_bytes().to_vec();
+    m.resize(12, 0);
+    body.extend(m);
+    body.extend(crc.to_le_bytes());
+    Ok(body)
+}
+
 /// `.UPD`/`.zip` -> the decrypted ISO bytes.
 pub fn decrypt_firmware(path: &Path, key: &[u8; 32]) -> Result<(Vec<u8>, String), String> {
     let data = read_upd_bytes(path)?;
@@ -116,79 +184,11 @@ pub fn decrypt_firmware(path: &Path, key: &[u8; 32]) -> Result<(Vec<u8>, String)
     Ok((decrypt_body(body, key)?, model))
 }
 
-// ---- ISO9660 ----------------------------------------------------------------------
-
-const ISO_BLOCK: usize = 2048;
+// ---- ISO9660 (see iso.rs) ---------------------------------------------------------
 
 /// Read a file from an ISO9660 image by its path ("/images/uImage").
 pub fn iso_read(iso: &[u8], path: &str) -> Result<Vec<u8>, String> {
-    let pvd = iso.get(16 * ISO_BLOCK..17 * ISO_BLOCK).ok_or("ISO too short")?;
-    if &pvd[1..6] != b"CD001" || pvd[0] != 1 {
-        return Err("not an ISO9660 image".into());
-    }
-    let mut rec = dir_record(&pvd[156..190]).ok_or("bad ISO root record")?;
-    for comp in path.split('/').filter(|c| !c.is_empty()) {
-        rec = find_entry(iso, rec, comp).ok_or_else(|| format!("{path}: not in the firmware image"))?;
-    }
-    let (lba, len, _) = rec;
-    iso.get(lba * ISO_BLOCK..lba * ISO_BLOCK + len)
-        .map(|b| b.to_vec())
-        .ok_or_else(|| format!("{path}: extent outside the image"))
-}
-
-/// (extent LBA, data length, is_dir)
-fn dir_record(r: &[u8]) -> Option<(usize, usize, bool)> {
-    if r.len() < 34 || r[0] < 34 {
-        return None;
-    }
-    let lba = u32::from_le_bytes(r[2..6].try_into().ok()?) as usize;
-    let len = u32::from_le_bytes(r[10..14].try_into().ok()?) as usize;
-    Some((lba, len, r[25] & 2 != 0))
-}
-
-fn find_entry(iso: &[u8], dir: (usize, usize, bool), name: &str) -> Option<(usize, usize, bool)> {
-    let (lba, len, _) = dir;
-    let data = iso.get(lba * ISO_BLOCK..lba * ISO_BLOCK + len)?;
-    let mut off = 0;
-    while off < data.len() {
-        let rl = data[off] as usize;
-        if rl == 0 {
-            off = (off / ISO_BLOCK + 1) * ISO_BLOCK; // records don't span blocks
-            continue;
-        }
-        let r = data.get(off..off + rl)?;
-        let nl = r[32] as usize;
-        let ident = r.get(33..33 + nl)?;
-        if entry_name(r, ident).as_deref() == Some(name) {
-            return dir_record(r);
-        }
-        off += rl;
-    }
-    None
-}
-
-/// The entry's name: the Rock Ridge NM if present, else the ISO identifier without
-/// its ";version" (and a trailing '.' for extension-less names).
-fn entry_name(r: &[u8], ident: &[u8]) -> Option<String> {
-    let nl = ident.len();
-    let mut su = 33 + nl + (1 - nl % 2);
-    let mut nm = Vec::new();
-    while su + 4 <= r.len() {
-        let (sig, l) = (&r[su..su + 2], r[su + 2] as usize);
-        if l < 4 || su + l > r.len() {
-            break;
-        }
-        if sig == b"NM" {
-            nm.extend_from_slice(&r[su + 5..su + l]);
-        }
-        su += l;
-    }
-    if !nm.is_empty() {
-        return String::from_utf8(nm).ok();
-    }
-    let s = String::from_utf8_lossy(ident).to_string();
-    let s = s.split(';').next().unwrap_or("").to_string();
-    Some(s.strip_suffix('.').map(String::from).unwrap_or(s))
+    crate::iso::read_file(iso, path)
 }
 
 /// `k=v` lines of a u-boot env text file (images/fw_env.txt).

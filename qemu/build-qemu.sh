@@ -95,7 +95,12 @@ mkdir -p build && cd build
 # libSDL3 at runtime — a dependency bundlers can't follow, so it breaks the .app
 # ("Failed loading SDL3 library"). Dropping it removes the problem and shrinks the
 # bundle. cocoa/vnc/none all remain.
-[ -f build.ninja ] || ../configure --target-list=arm-softmmu --disable-werror --disable-docs --disable-tools --disable-sdl
+# --disable-libssh: the SSH block driver is never used, and libssh pulls in OpenSSL's
+# libcrypto (Apache-2.0), which the FSF considers incompatible with GPLv2-only code like
+# QEMU -- so the redistributed .app must not bundle it. (An existing build dir is switched
+# over with `meson configure` below.)
+[ -f build.ninja ] || ../configure --target-list=arm-softmmu --disable-werror --disable-docs --disable-tools --disable-sdl --disable-libssh
+pyvenv/bin/meson configure -Dlibssh=disabled >/dev/null
 ninja qemu-system-arm
 echo
 echo "built: $(pwd)/qemu-system-arm"

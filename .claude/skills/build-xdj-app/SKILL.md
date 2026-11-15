@@ -24,7 +24,7 @@ host-side. See also skills [xdj-virtual-panel], [run-xdj-emulator], [qemu-imx6-p
 ## Flow (drop a firmware → running emulator)
 1. `on_firmware_dropped` (drag, or `browse_firmware` command) → `prep_firmware` → `start_host` →
    `show_emulator` (opens the `main` window at `http://127.0.0.1:8765/?vnc=ws://127.0.0.1:6080/`).
-2. **prep** (`xdj-host prep`, ~1 s, in-process `src/firmware.rs`): decrypt → `fw.iso` → boot
+2. **prep** (`xdj-host prep`, ~1 s, in-process `xdj_fw::firmware`, crate `crates/xdj-fw`): decrypt → `fw.iso` → boot
    blobs (the firmware's kernel) → `update-stick.img` (FAT16, `XDJRX.UPD`). Ports of
    `xdjrx_upd.py`/`qemu_prepare.py`/`xdj_update_stick.py` (kept as dev tools); after touching either
    side run `qemu/test_rust_parity.sh <fw.zip> [provisioned-nand.img]` (byte-for-byte). Cached in **app-data by firmware hash** (`~/Library/Application Support/XDJ-RX/<hash>/`)
@@ -33,7 +33,7 @@ host-side. See also skills [xdj-virtual-panel], [run-xdj-emulator], [qemu-imx6-p
    supervising qemu/panel/ctrl-c/parent-death/provisioning.
 4. **The unit is NAND-only (no SD card)** — `BootKind` in `app/host/src/main.rs`, details in
    `docs/standalone-app.md` §4a. No `provisioned.stamp` → **Provision** at once (regardless of
-   `XDJ_AUTOSTART`): `nand::init` (`src/nand.rs`, port of `xdj_nand.py`) + update mode with `XDJ_UPDATE_TYPE=20` (ALL), stick on USB1
+   `XDJ_AUTOSTART`): `nand::init` (`crates/xdj-fw/src/nand.rs`, port of `xdj_nand.py`) + update mode with `XDJ_UPDATE_TYPE=20` (ALL), stick on USB1
    after `### USB update mount.`, `### USB update success.` → stamp → **Normal**; "installed" is
    also read from the NAND env (`release=`), since the updater stops on "turn off the power" and the
    success line usually never prints. Normal/Update power-ons run `nand::boot` first (kernel_bank → `nand-boot/` blobs). Always
@@ -58,8 +58,9 @@ host-side. See also skills [xdj-virtual-panel], [run-xdj-emulator], [qemu-imx6-p
 ( cd app/host && cargo build ) && ( cd app/shell && cargo build && cargo run )
 # release binaries
 ( cd app/host && cargo build --release ); ( cd app/shell && cargo build --release )
-# package (macOS): bundles patched qemu + dylibs, scripts, panel, novnc, knobs dist,
-# python-build-standalone; ad-hoc signs. Needs dylibbundler.
+# package (macOS): bundles patched qemu + dylibs, panel pages, novnc, knobs dist and every license
+# text (packaging/collect-licenses.py -> Resources/licenses/); ad-hoc signs. Needs dylibbundler.
+# Then test the bundle itself: tools/test/regress.py --app dist/XDJ-RX.app
 packaging/build-macos-app.sh        # -> dist/XDJ-RX.app
 ```
 **Refresh a built bundle after a code change** (faster than a full repackage): copy the changed
@@ -81,7 +82,9 @@ to update them.
 ## Power control (the app starts powered OFF, unless the unit is blank)
 The shell launches `xdj-host` with `XDJ_AUTOSTART=0`: the panel server and VNC bridge come up, QEMU
 does not, except that a blank unit is provisioned at once. The panel's *Power On at Launch* pref
-defaults **on** (`PREF_DEFAULT` in panel.html). File > *Power On in Test Mode* = panel
+defaults **on** (`PREF_DEFAULT` in panel.html). File > *Install Firmware Update…* = panel `POST /install-update <.UPD path>` (builds
+`<runtime>/install-update.img`, power-cycles into update mode, inserts it on USB1 at `USB update mount`).
+File > *Power On in Test Mode* = panel
 `POST /power on test` (holds MEMORY + TEMPO RANGE across a cold boot, releases them after rbp's first
 LED frame). `xdj-host` owns QEMU's lifecycle and listens on **`<runtime>/power.sock`** (line protocol:
 `on` | `on update` | `off` | `status` → one line `on` / `on update` / `off`). `on update` sets

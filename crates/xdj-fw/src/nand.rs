@@ -205,6 +205,11 @@ pub fn read_env(nand: &mut Nand) -> Result<Option<Vec<(String, String)>>, String
     Ok(Some(env))
 }
 
+/// The u-boot env of a NAND image file (None = blank/corrupt env partition).
+pub fn env(path: &Path) -> Result<Option<Vec<(String, String)>>, String> {
+    read_env(&mut Nand::open(path)?)
+}
+
 fn get<'a>(env: &'a [(String, String)], k: &str) -> Option<&'a str> {
     env.iter().rev().find(|(kk, _)| kk == k).map(|(_, v)| v.as_str())
 }

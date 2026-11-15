@@ -16,6 +16,7 @@ protocol, and streams the QEMU framebuffer to the browser as raw RGB (drawn on a
   POST /power  on|off|toggle [update|test] -> power the emulator (xdj-host); GET /power = state
                  (test = boot into the service manual's test mode, see _test_mode_boot)
   POST /log/note                 -> append a panel note to the sub-ucom log
+  POST /install-update  body=<path to .UPD/.zip> -> stick from it + cold boot into update mode
   GET  /leds                     -> Server-Sent Events: one "data: <40|42 hex>" per change of
                                     rbp's 20-byte LED/meter payload (SubTxData, xdj-panel.c (was patch 15);
                                     layout docs/subucom-led-map.md). /leds?once=1 = current JSON.
@@ -256,6 +257,30 @@ def _insert_pending(update):
             _logline("subucom", "·  queued %s insert failed: %s" % (slot, e))
 
 
+_standby = {"on": False}      # rbp signalled standby (TX 'S') and we're cutting power
+
+
+def _standby_cut():
+    """The panel MCU's half of the power-off handshake (as app/host/src/panel.rs): rbp
+    sends 'S' (TX byte 0x11) once it has prepared for standby; the MCU cuts power.
+    Covers a POWER-key press and rbp's own AUTO STANDBY alike."""
+    st = _power_cmd("status")
+    if not st or not st.startswith("on"):
+        return
+    _logline("subucom", "·  rbp is ready for standby (TX 'S'): the panel MCU cuts power")
+    _logline("console", "──────── standby: power off ────────")
+    _power_cmd("off")
+    _leds_off()
+    with _sock_lock:
+        for k in ("ctrl", "key"):
+            try:
+                if _conn[k]:
+                    _conn[k].close()
+            except Exception:
+                pass
+            _conn[k] = None
+
+
 def _leds_update(hexstr):
     # "<40 hex>" = SubTxData; QEMU (xdj-board.c (was patch 17)) appends " <2 hex>" = source-key LEDs
     # (GPIO 162..165: bit0 rekordbox, bit1 MIDI, bit2 USB1, bit3 USB2). Served as one
@@ -271,6 +296,9 @@ def _leds_update(hexstr):
             _leds["seq"] += 1
             _leds["t"] = time.time()
             _leds_cv.notify_all()
+    if hexstr[34:36] == "53" and not _standby["on"]:
+        _standby["on"] = True
+        threading.Thread(target=_standby_cut, daemon=True).start()
 
 
 def _leds_file_loop():
@@ -931,6 +959,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if want == "toggle":
                 want = "off" if cur.startswith("on") else "on"
             if want == "on":
+                _standby["on"] = False                 # fresh power cycle: POWER key up
+                with _browse_lock:
+                    if _held.pop((0x5d, 0x01), None):
+                        _push()
                 if test:
                     # The keys must be down at rbp's first frame: cold boot with them held.
                     if cur.startswith("on"):
@@ -950,6 +982,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if has_pending:
                     threading.Thread(target=_insert_pending, args=(upd,), daemon=True).start()
             else:
+                # POWER key -> panel MCU -> rbp prepares (code 0x8001) -> 'S' -> _standby_cut.
+                # Only while rbp runs; otherwise, or with no answer in 10 s, a plain power cut.
+                if cur == "on" and _console_has("commandline read: rbp"):
+                    _logline("subucom", "·  POWER key: asking rbp to prepare for standby")
+                    with _browse_lock:
+                        _apply_lines(["B 5d 01"])
+                        _push()
+                    t0 = time.time()
+                    while time.time() - t0 < 10 and _power_cmd("status") != "off":
+                        time.sleep(0.2)
+                    with _browse_lock:
+                        _held.pop((0x5d, 0x01), None)
+                    if _power_cmd("status") == "off":
+                        self._send(200, "text/plain", b"off"); return
+                    _logline("subucom", "·  no standby answer from rbp in 10 s: cutting power")
                 st = _power_cmd("off")
                 _leds_off()
                 with _sock_lock:
@@ -963,6 +1010,50 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 _logline("subucom", "·  POWER OFF")
                 _logline("console", "──────── power off ────────")
             self._send(200, "text/plain", (st or "?").encode()); return
+        if path == "/install-update":
+            # File > Install Firmware Update (same as panel.rs): build a FAT16 stick with the
+            # .UPD in the runtime dir, power-cycle into update mode, insert it on USB1 when the
+            # initramfs asks. Needs xdj-host (power) like the other power routes.
+            upd_path = body.strip()
+            cur = _power_cmd("status")
+            if cur is None:
+                self._send(503, "text/plain", b"power control unavailable (not run by xdj-host)"); return
+            if not os.path.isfile(upd_path):
+                self._send(404, "text/plain", ("no such file: " + upd_path).encode()); return
+            try:
+                import sys as _sys
+                _sys.path.insert(0, os.path.join(HERE, "..", "..", "qemu"))
+                _sys.path.insert(0, os.path.join(HERE, "..", ".."))
+                import xdj_update_stick, xdjrx_upd
+                data, _ = xdjrx_upd.read_upd_bytes(upd_path)
+                _, model, _ = xdjrx_upd.split_container(data)
+                if not model.startswith("XDJAERO"):
+                    raise ValueError("%r is not an XDJ-RX firmware (model must start with XDJAERO)" % model)
+                stick = os.path.join(os.path.dirname(CTRL_SOCK or CTRL), "install-update.img")
+                xdj_update_stick.build(data, stick)
+            except BaseException as e:      # xdjrx_upd uses sys.exit for bad input
+                _logline("subucom", "·  install update: %s" % e)
+                self._send(400, "text/plain", str(e).encode()); return
+            if cur.startswith("on"):
+                _power_cmd("off")
+                _leds_off()
+                with _sock_lock:
+                    for k in ("ctrl", "key"):
+                        try:
+                            if _conn[k]:
+                                _conn[k].close()
+                        except Exception:
+                            pass
+                        _conn[k] = None
+            with _power_lock:
+                _pending_usb["usb1"] = stick
+            st = _power_cmd("on update")
+            ver = model[len("XDJAERO"):]
+            _logline("subucom", "·  INSTALL FIRMWARE UPDATE %s: power on (firmware update mode), stick on USB1" % ver)
+            _logline("console", "──────── install firmware update %s (update mode) ────────" % ver)
+            threading.Thread(target=_insert_pending, args=(True,), daemon=True).start()
+            self._send(200, "text/plain", ("installing firmware %s (%s): follow the update screen, then power off/on"
+                                           % (ver, st)).encode()); return
         if path == "/usb":
             parts = body.strip().split(" ", 1)
             if (len(parts) == 2 and parts[0] in ("usb1", "usb2") and os.path.exists(parts[1].strip())

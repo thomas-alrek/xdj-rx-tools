@@ -8,7 +8,9 @@
 > inside `xdj-host`; no SD image and no e2fsprogs in the app (a blank unit is provisioned with the
 > firmware's own ALL update, so §5.2's ext4 problem no longer applies to the app). The SD image builder
 > and the Python scripts remain dev tools. Current architecture: [standalone-app.md](standalone-app.md)
-> §4/§4a/§7. Still open: Windows/Linux, notarization, a shared Rust CLI to retire the dev scripts.
+> §4/§4a/§7. The shared Rust crate + `xdj` CLI (`crates/xdj-fw`) now covers decrypt/pack/prepare/stick/NAND and
+> custom-firmware builds (`docs/custom-firmware.md`). Still open: Windows/Linux, notarization, retiring
+> `fetch_key.py` / `build-nand.py`.
 
 **Status: IN PROGRESS — Phases 1 (control socket) + 2 (Tauri shell + orchestrator) done 2026-11-12, Phase 3 (firmware drag-drop + app-data) done 2026-11-13; Phase 3b (USB media) plumbing done with a deferred enumeration issue, Phase 4 (audio backend pick) done, Phase 5 macOS .app done (ad-hoc signed; notarization pending). The key prompt, a rebuilt copyright-free panel, native file dialogs, and panel-driven USB LOAD all landed 2026-11-13. Phase 5 Windows/Linux + the Python→Rust port remain.**
 

@@ -137,6 +137,12 @@ with `XDJ_AUDIO_STATS=1` for a 5 s line: `underruns`/`gap` (host ran dry), `minf
 (`ch_n.routed_src`: deck=n, line=n+3). Idle default = LINE (ch0→3, ch1→4) until the source
 switch is held to DECK.
 
+## Regression test — `docs/testing.md`
+`tools/test/regress.py` boots a throwaway unit end to end (prep, provision, boot, panel, USB, test
+mode, custom firmware install) with private ports/runtime dir; run it before merging emulator/host/
+panel/firmware changes. Panel facts it encodes: MENU must be **held** to open UTILITY; the browser
+shows **USB1**.
+
 ## Service modes (test mode / update mode) — `docs/service-modes.md`
 - **Test mode** (8 sub-modes: versions, LED/LCD all off/on, LCD patterns, KEY/LED, SW, VR/fader
   values in hex, rotary counters): hold DECK 1 MEMORY + TEMPO RANGE *from power-on* —

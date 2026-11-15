@@ -168,7 +168,8 @@
   /* POWER switch (desktop app): red LED = powered on */
   .btn.pwr{display:flex;align-items:center;justify-content:center;gap:.5cqw;transition:none}   /* no transition: visibility must flip instantly */
   .pwrled{width:.62cqw;height:.62cqw;border-radius:50%;background:#3a1416;box-shadow:inset 0 1px 1px #0008;flex:0 0 auto}
-  .btn.pwr.on .pwrled{background:#ff3b30;box-shadow:0 0 .5cqw #ff3b30,0 0 .15cqw #ff8a80}
+  .btn.pwr.on .pwrled,.pwrled.lit{background:#ff3b30;box-shadow:0 0 .5cqw #ff3b30,0 0 .15cqw #ff8a80}
+  .btn.withled{display:flex;align-items:center;justify-content:center;gap:.5cqw}   /* MASTER REC: red dot like POWER */
   .btn.pwr.busy{opacity:.6}
   #screen.off::after,#screen.popped::after{content:'';position:absolute;inset:0;background:#000}
   /* channel INPUT SELECT switch: blue = DECK, amber = LINE/PHONO */
@@ -201,21 +202,21 @@ const C = {
   mic1:{l:'MIC1'}, mic2:{l:'MIC2'},
   miceqhi:{l:'HI',t:'knob',spec:'A 46',v:512}, miceqlow:{l:'LOW',t:'knob',spec:'A 44',v:512},
   micsw:{l:'MIC',t:'switch',off:0x5b,mask:0xc0,pos:['OFF','ON','TALK'],bits:[0x40,0x00,0x80],v:1},
-  usb1stop:{l:'USB1 STOP',spec:'B 5e 10'}, usb1load:{l:'USB1 LOAD',usb:'usb1'},
-  usb2stop:{l:'USB2 STOP',spec:'B 5e 08'}, usb2load:{l:'USB2 LOAD',usb:'usb2'},
+  usb1stop:{l:'USB1 STOP',spec:'B 5e 10',led:[0x03,7]}, usb1load:{l:'USB1 LOAD',usb:'usb1'},
+  usb2stop:{l:'USB2 STOP',spec:'B 5e 08',led:[0x07,7]}, usb2load:{l:'USB2 LOAD',usb:'usb2'},
   booth:{l:'BOOTH',t:'knob',spec:'A 48',v:512}, masterlvl:{l:'MASTER',t:'knob',spec:'A 4a',v:512},
-  mrec:{l:'MASTER REC'}, tmark:{l:'TRACK MARK',spec:'B 5e 02'},
+  mrec:{l:'MASTER REC',spec:'B 5e 04',led:[0x0a,7],dot:true}, tmark:{l:'TRACK MARK',spec:'B 5e 02'},
   // display keys (top-panel MAIN-UCOM GPIOs) + quantize
   // display source keys: their LEDs are rbp GPIO outputs 162-165, appended as LED byte 0x14
   src_rb:{l:'rekordbox',gpio:159,led:[0x14,0],ledc:'#39b3ff'}, src_midi:{l:'MIDI',gpio:161,led:[0x14,1],ledc:'#39b3ff'},
   src_usb1:{l:'USB1',gpio:160,led:[0x14,2],ledc:'#39b3ff'}, src_usb2:{l:'USB2',gpio:158,led:[0x14,3],ledc:'#39b3ff'},
   quant:{l:'QUANTIZE',spec:'B 5e 20'}, deck12:{l:'DECK 1/2',gpio:149}, timemd:{l:'TIME MODE',gpio:146},
   // browse section
-  browse:{l:'BROWSE',spec:'B 5f 08'}, taglist:{l:'TAG LIST',spec:'B 5f 04'},
-  info:{l:'INFO',spec:'B 5f 02'}, menu:{l:'MENU',spec:'B 5f 01'},
+  browse:{l:'BROWSE',spec:'B 5f 08',led:[0x0b,7]}, taglist:{l:'TAG LIST',spec:'B 5f 04',led:[0x0b,6]},
+  info:{l:'INFO',spec:'B 5f 02',led:[0x0b,5]}, menu:{l:'MENU',spec:'B 5f 01',led:[0x0b,4]},
   back:{l:'BACK',spec:'B 5e 01'}, tagtrk:{l:'TAG TRK',spec:'B 5d 80',tip:'TAG TRACK'},
   enc:{l:'BROWSE',t:'encoder',pushSpec:'B 5d 10'},
-  loadL:{l:'◄ LOAD',spec:'B 5d 40',tip:'LOAD to deck 1'}, loadR:{l:'LOAD ►',spec:'B 5d 20',tip:'LOAD to deck 2'},
+  loadL:{l:'◄ LOAD',spec:'B 5d 40',tip:'LOAD to deck 1',led:[0x13,5]}, loadR:{l:'LOAD ►',spec:'B 5d 20',tip:'LOAD to deck 2',led:[0x13,4]},
   // channel strips
   // channel INPUT SELECT (DECK <-> LINE/PHONO), frame bits 0x33.7 / 0x43.7 via POST /input.
   // (The rear LINE/PHONO EXT-TYPE toggle, GPIO 119/120, is not emulated: no external audio.)
@@ -247,7 +248,7 @@ const C = {
     pos:['1','2','MIC','CF.1','CF.2','MASTER']},
   fxtime:{l:'TIME',t:'counter',spec:'A 56'},
   fxlev:{l:'DEPTH',tip:'LEVEL/DEPTH',t:'knob',spec:'A 4c',v:512},
-  fxon:{l:'ON/OFF',spec:'B 5b 04',round:true,led:[0x13,6,1],ledc:'#ffcc33',steady:true}, fxtap:{l:'TAP',spec:'B 5b 08',round:true},
+  fxon:{l:'ON/OFF',spec:'B 5b 04',round:true,led:[0x13,6,1],ledc:'#ffcc33',steady:true}, fxtap:{l:'TAP',spec:'B 5b 08',round:true,led:[0x13,7]},
 };
 
 function deckControls(n){ const o=(n-1)*0x10, h=v=>(v+o).toString(16).padStart(2,'0'), p='d'+n;
@@ -452,8 +453,10 @@ function btnCell(id){ const c=C[id];
   const el=d('btn'+(c.round?' round':'')+(c.big?' jogbtn':'')+(c.pad?' pad':'')+(c.play?' play':''));
   const mapped=!!(c.spec||c.gpio||c.usb||c.srcCh!=null); if(!mapped) el.classList.add('unmapped');
   if(c.srcCh!=null){ el.id='src'+c.srcCh; el.classList.add('srcsw','deck'); }
-  if(c.led){ LEDS.push({el,b:c.led[0],m:1<<c.led[1],low:!!c.led[2],steady:!!c.steady,t:null}); if(c.ledc) el.style.setProperty('--led',c.ledc); }
-  EL[id]=el; setLabel(el,c.l); const name=c.tip||c.l;
+  // dot: a separate red indicator LED (like POWER's) instead of lighting the whole button
+  const dot=c.dot?document.createElement('span'):null; if(dot){ dot.className='pwrled'; el.classList.add('withled'); }
+  if(c.led){ LEDS.push({el:dot||el,b:c.led[0],m:1<<c.led[1],low:!!c.led[2],steady:!!c.steady,t:null}); if(c.ledc) el.style.setProperty('--led',c.ledc); }
+  EL[id]=el; setLabel(el,c.l); if(dot) el.prepend(dot); const name=c.tip||c.l;
   el.title=name+(c.spec?('  ['+c.spec+']'):(c.gpio?('  [gpio '+c.gpio+']'):(c.usb?'  (mount a USB image/device)':(c.srcCh!=null?'  [B '+(c.srcCh?'43':'33')+' 80 = DECK]':'  (not in the panel frame)'))));
   // Real-hardware semantics: the bit is HELD for as long as the button is down
   // (so long-press, SHIFT combos and hold-to-scan work), released by name on up.
@@ -792,6 +795,7 @@ const MENU=[
   ['File',[
     ['Power On / Off',()=>powerToggle()],
     ['Power On in Test Mode',()=>powerTest()],
+    ['Install Firmware Update…',()=>installUpdate()],
     {check:'updateMode',text:'Enter Firmware Update Mode (at next power on)'},
     {check:'powerOnLaunch',text:'Power On at Launch'}, '-',
     ['Load USB1 Image…',()=>mountUsb('usb1')], ['Load USB2 Image…',()=>mountUsb('usb2')], '-',
@@ -822,7 +826,7 @@ const MENU=[
     ['Master Level',LVL('masterlvl')], ['Booth Monitor',LVL('booth')], '-',
     ['Mic',[['Off',()=>setW('micsw',0)],['On',()=>setW('micsw',1)],['Talk Over',()=>setW('micsw',2)]]],
     ['Reset Mic EQ',()=>{ setW('miceqhi',512); setW('miceqlow',512); }], '-',
-    ['Track Mark',()=>tap('tmark')] ]],
+    ['Master Rec (to USB2)',()=>tap('mrec')], ['Track Mark',()=>tap('tmark')] ]],
   ['View',[
     ['rekordbox',()=>tap('src_rb')], ['MIDI',()=>tap('src_midi')], ['USB1',()=>tap('src_usb1')], ['USB2',()=>tap('src_usb2')], '-',
     ['Browse',()=>tap('browse')], ['Tag List',()=>tap('taglist')], ['Info',()=>tap('info')], ['Menu (Utility)',()=>tap('menu')],
@@ -855,6 +859,20 @@ async function powerSet(on){ if(!POWER.available) return; const b=EL.power; if(b
 const powerToggle=()=>powerSet(POWER.state!=='on');
 // Service-manual test mode: the sidecar cold-boots with DECK 1 MEMORY + TEMPO RANGE held
 // (power-cycling first if on) and lets go once rbp has read them.
+// File > Install Firmware Update…: pick a .UPD (or Pioneer .zip); the server puts it on a
+// virtual USB stick and cold-boots the unit into update mode with it on USB1.
+async function installUpdate(){ if(!POWER.available){ log('install update: needs the desktop app (power control)'); return; }
+  let path=null; const D=window.__TAURI__ && window.__TAURI__.dialog;
+  if(D && D.open){
+    try{ const p=await D.open({multiple:false,directory:false,title:'Select an XDJ-RX firmware update (.UPD)',
+        filters:[{name:'XDJ-RX firmware',extensions:['UPD','upd','zip']},{name:'All files',extensions:['*']}]});
+      if(!p){ log('install update cancelled'); return; } path=Array.isArray(p)?p[0]:p;
+    }catch(e){ log('✖ file dialog failed: '+e); return; }
+  } else { const p=prompt('Install firmware update\nPath to an XDJ-RX .UPD (or a Pioneer .zip):',''); if(p==null) return; path=p.trim(); }
+  if(!path) return;
+  const b=EL.power; if(b) b.classList.add('busy'); log('install firmware update: '+path);
+  try{ const r=await fetch('/install-update',{method:'POST',body:path}); log((r.ok?'⏻ ':'✖ ')+await r.text()); }catch(e){ log('✖ '+e); }
+  setTimeout(pushInitialState,400); await powerPoll(); if(b) b.classList.remove('busy'); }
 async function powerTest(){ if(!POWER.available) return; const b=EL.power; if(b) b.classList.add('busy');
   try{ await fetch('/power',{method:'POST',body:'on test'}); }catch(_){}
   setTimeout(pushInitialState,400);
