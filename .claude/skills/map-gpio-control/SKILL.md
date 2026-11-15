@@ -24,17 +24,17 @@ FUN_0002be28(obj, gpio_num, direction, period, callback, 0x1e)
 - `callback` (param 5): non-zero = an **observer** object; on a level change the reader
   `FUN_0002bd6c` calls `observer->vtable[+8](observer, gpio_num, level)`. Zero = polled / no observer.
 
-Run `procedure_callers(FUN_0002be28)` and read each caller's args. Baseline inventory
-(2026-11, rbp sha `4f62aa71…`) — re-verify, addresses are stable for this binary:
+Run `procedure_callers(FUN_0002be28)` and read each caller's args. Inventory for rbp sha
+`4f62aa71…` (addresses are stable for this binary):
 
 | caller | gpios | dir | meaning |
 |---|---|---|---|
 | `FUN_00066688` (mixer master) | 117,118 | out | analog-mux command (NOT the switch input) |
 | `_INIT_72` | 134,135 | out | global control lines |
-| `FUN_0021a4ac` (PanelComController) | 162-165 | out | **source-key LEDs** rekordbox/MIDI/USB1/USB2 (active-high, one-hot; live-verified; `xdj-board.c` (was patch 17) mirrors them) |
-| `FUN_0024e834` (deck/Player ctor) | 126 / 204 | in | USB fault flag USB1/USB2, active-low (LOW on a mounted slot → "USB Error. Remove the device."; NOT insert-detect) |
+| `FUN_0021a4ac` (PanelComController) | 162-165 | out | **source-key LEDs** rekordbox/MIDI/USB1/USB2 (active-high, one-hot; `xdj-board.c` appends them to the LED line as byte `0x14`) |
+| `FUN_0024e834` (deck/Player ctor) | 126 / 204 | in | USB fault flag USB1/USB2 (GPIO4_IO30 / GPIO7_IO12, gpiodrv ids `0x7e`/`0xcc`), active-low (LOW on a mounted slot → "USB Error. Remove the device."; NOT insert-detect — insert with `device_add` only, `docs/usb.md`) |
 | `FUN_0023b5e8` (ISetting/SwitchTestMode) | 119,120 | in | **EXT TYPE (LINE/PHONO) rear switch** ch0/ch1: `+0xa0/+0xb0 = (level != 0)` (`0x23bd1c`), and SW TEST shows `0`→LINE, `≠0`→PHONO (`0x2409d0`) ⇒ **HIGH = PHONO, LOW = LINE** (static; runtime path is code `0x1013` `LinePhonoSW`, not traced). Not emulated — no external audio. |
-| `FUN_00274a38` | 119,120,146,149,158-161 | in | main-ucom top-panel keys |
+| `FUN_00274a38` | 119,120,146,149,158-161 | in | main-ucom top-panel keys (idle HIGH, pressed LOW): rekordbox 159, MIDI 161, USB1 160, USB2 158, DECK 1/2 149, TIME MODE 146 |
 
 GpioManager object layout: `+0x54` gpio num, `+0x58` cached level (byte), `+0x5c` fd,
 `+0x60` direction (1=output), `+0x64` observer. Helpers: `FUN_0002c058` = set direction
@@ -52,27 +52,29 @@ is the one the SW TEST screen (`FUN_002404ac`) reads as `*(page+0x44)+0xNN`.
 If an input GPIO's observer is null and the owner never reads it, the level is sampled
 once (e.g. at init) — note that; a live drive then won't re-trigger.
 
-## 3. Drive it emulator-side (`xdj-panel.c` (was patch 09) mechanism)
+## 3. Drive it emulator-side (`qemu/xdj/xdj-board.c` + `xdj-panel.c`)
 
-`qemu/xdj/xdj-board.c` (was patch 09) already captures every i.MX6 GPIO bank in
-`g_xdj_gpio[8]` and drives pins:
+`qemu/xdj/xdj-board.c` captures every i.MX6 GPIO bank in `g_xdj_gpio[8]`
+(`xdj_imx6_gpio_post_realize`), and pins are driven with:
 ```c
 qemu_set_irq(qdev_get_gpio_in(g_xdj_gpio[gpio>>5], gpio & 31), level); // level 1=HIGH 0=LOW
 ```
-- **Momentary** keys use `/tmp/mainkey` (number = press LOW, remove = release HIGH).
-- **Reset level** is set per bank via the `psr-reset` property in realize (so the line is
-  correct from power-on, before rbp samples it).
-- For a **persistent/held level** (a slide switch) add a file hook that drives the pin and
-  does not auto-release (see the `/tmp/xdj_input` scaffold added to `fsl-imx6.c`).
+- **Momentary** keys: `echo <gpio> > /tmp/mainkey` (press = LOW; empty/removed = release HIGH),
+  or the `xdjkey` chardev in socket mode (hook in `xdj-panel.c`; panel `POST /mainkey`).
+- **Reset level** is set per bank via the `psr-reset` property in `xdj_imx6_gpio_pre_realize`
+  (so the line is correct from power-on, before rbp samples it) — e.g. the key/fault pull-ups and
+  the update-mode strap GPIO3_IO30 (`XDJ_BOOT_UPDATE=1`).
+- For a **persistent/held level** (a slide switch) add a hook that drives the pin and does not
+  auto-release, modelled on the `/tmp/mainkey` hook.
 
-Build-tree source: `build/qemu-src/qemu-11.1.0/hw/arm/fsl-imx6.c`. Rebuild with
-`ninja -C build/qemu-src/qemu-11.1.0/build qemu-system-arm`.
+Edit `qemu/xdj/*.c` in the repo and rebuild with `qemu/build-qemu.sh` (syncs into the build tree +
+ninja); never edit the copy under `build/qemu-src/` (skill [qemu-imx6-patches]).
 
 ### Mapping an rbp OUTPUT (e.g. an LED) — cheapest method
 Read every bank's `DR`/`GDIR` over the monitor (`xp/1wx <base>` / `<base>+4`), perform the action
 (press a key, change a mode), read again, and diff the `GDIR`-set bits. That is how 162–165 were
 identified as the source-key LEDs. To expose an output to the panel, `qdev_connect_gpio_out()` the
-bank's pin to a `qemu_allocate_irq()` handler (see `xdj-board.c` (was patch 17)) — the i.MX GPIO model raises it on
+bank's pin to a `qemu_allocate_irq()` handler (see `xdj-board.c`) — the i.MX GPIO model raises it on
 every `DR` write while `GDIR` is set.
 Static RE without REA: `pip install capstone pyelftools` in a venv and disassemble rbp (ARM mode,
 non-PIE); resolve `ldr rX, [pc, #imm]` literals to find string/object references.
@@ -97,7 +99,8 @@ status). `python3 mon.py "xp/1wx 0x020a8008"`.
 - Linux gpio number ≠ a sub-ucom offset. GPIOs are a different plane from the 100-byte frame.
 
 ## References
-- `docs/subucom-frame-map.md` (control map), `docs/deck-line-switch-handover.md`,
-  `docs/rbp-and-panel-protocol.md`, `qemu/xdj/xdj-board.c` + `qemu/xdj/xdj-panel.c` (the `/tmp/mainkey` hook).
+- `docs/subucom-frame-map.md` ("Controls that are not in this frame"), `docs/usb.md`,
+  `docs/rbp-and-panel-protocol.md`, `docs/subucom-led-map.md`, `qemu/xdj/xdj-board.c` +
+  `qemu/xdj/xdj-panel.c` (the `/tmp/mainkey` hook).
 - Tools: `tools/xdj-panel/debug/{mon.py,rsp.py,tables.py}`.
-- Sibling skills: [map-subucom-button], [map-subucom-fader], [map-subucom-knob], [map-subucom-rotary].
+- Sibling skills: [map-subucom-button], [map-subucom-fader], [map-subucom-knob], [map-subucom-rotary], [qemu-imx6-patches].

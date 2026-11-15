@@ -7,20 +7,19 @@
 Build the XDJ-RX SD/nand test image that boots the firmware to its on-screen UI
 in QEMU -- WITHOUT Docker.
 
-This is a pure-Python rewrite of the old qemu/build-nand.sh container recipe.
 The only native dependency is e2fsprogs (mke2fs + debugfs), used to create the
-ext4 filesystems and to inject the /dev device nodes.  Everything the container
-previously needed root/Linux for is done here without root:
+ext4 filesystems and to inject the /dev device nodes.  Nothing needs root or
+Linux:
 
-  * ISO extraction            -> pycdlib            (was: container)
+  * ISO extraction            -> pycdlib
   * cramfs -> directory tree  -> qemu/cramfs_extract.py
   * tar payloads              -> tarfile
-  * /dev device nodes         -> debugfs 'mknod'     (was: mknod, needs root)
-  * uid/gid 0 ownership       -> debugfs 'sif'       (was: implicit, ran as root)
-  * ext4 images               -> mke2fs -d           (was: in container)
-  * u-boot env blob           -> pure Python crc32   (was: mkenvimage)
-  * MBR partition table       -> pure Python         (was: sfdisk)
-  * image assembly            -> pure Python         (was: dd)
+  * /dev device nodes         -> debugfs 'mknod'     (no host mknod / root)
+  * uid/gid 0 ownership       -> debugfs 'sif'
+  * ext4 images               -> mke2fs -d
+  * u-boot env blob           -> pure Python crc32   (no mkenvimage)
+  * MBR partition table       -> pure Python         (no sfdisk)
+  * image assembly            -> pure Python         (no dd)
 
 Install e2fsprogs if needed:
     macOS:  brew install e2fsprogs       (keg-only; this script finds it)
@@ -64,7 +63,7 @@ import pycdlib
 # --- layout -----------------------------------------------------------------
 REPO = Path(__file__).resolve().parent.parent
 # Input ISO + output dir default to the build/ layout (run.sh / watch.sh); the
-# standalone app (Phase 3) overrides them with XDJ_ISO / XDJ_OUT to build into a
+# standalone app overrides them with XDJ_ISO / XDJ_OUT to build into a
 # per-firmware app-data dir. nand.img lands in XDJ_OUT.
 ISO = Path(os.environ["XDJ_ISO"]) if os.environ.get("XDJ_ISO") else REPO / "build" / "XDJRX.iso"
 Q = Path(os.environ["XDJ_OUT"]) if os.environ.get("XDJ_OUT") else REPO / "build" / "qemu"
@@ -170,7 +169,7 @@ def extract_cramfs(img, tree):
                    check=True)
 
 
-# --- rootfs test-bed adaptations (equivalent to the old sed edits) ----------
+# --- rootfs test-bed adaptations (sed-style line inserts) ------------------
 def insert_after(path, pattern, new_line):
     """Insert new_line immediately after the first line matching `pattern`
     (anchored, like `sed '/re/a\\ ...'`).  Applying several inserts that target
@@ -268,8 +267,8 @@ def build_ext4(tree, out_img, blocks, mke2fs, debugfs, add_dev_nodes):
 
     # Build one debugfs command batch: create /dev nodes (mke2fs -d can't, and we
     # can't mknod on the host without root), then normalise every inode to uid/gid
-    # 0 -- the old recipe ran as root so everything was root-owned; reproduce that
-    # (also makes any setuid binary setuid-root, as intended).
+    # 0 -- everything in the image is root-owned, as on the unit (this also makes
+    # any setuid binary setuid-root, as intended).
     cmds = []
     if add_dev_nodes:
         # NOTE: this e2fsprogs 'mknod' only links the node when given a RELATIVE
@@ -278,8 +277,8 @@ def build_ext4(tree, out_img, blocks, mke2fs, debugfs, add_dev_nodes):
         for name, typ, major, minor in DEV_NODES:
             cmds.append(f"mknod {name} {typ} {major} {minor}")
         cmds.append("cd /")
-        # debugfs 'mknod' leaves mode 0000; the old `mknod` left 0644 (0666 & ~umask).
-        # Match it -- the mode field includes the type bits, so OR them back in.
+        # debugfs 'mknod' leaves mode 0000; set 0644 (what `mknod` gives with the
+        # default umask) -- the mode field includes the type bits, so OR them back in.
         for name, typ, _major, _minor in DEV_NODES:
             type_bits = 0o020000 if typ == "c" else 0o060000
             cmds.append(f"sif /dev/{name} mode 0{type_bits | 0o644:o}")
@@ -328,7 +327,7 @@ def rev_env_entries(d):
     writes the same set with fw_setenv, but names the sub version `rev_subucom`; an
     ALL-provisioned unit has only rev_panelcom, so that is what we seed.
     The SD test bed never runs the updater, so without this the screen reads
-    "Ver --.--".  qemu/xdj_nand.py provisioning gets these from the real updater."""
+    "Ver --.--".  A NAND unit gets these from the real updater (`xdj nand init` + an ALL update)."""
     release = (d / "release.txt").read_text(encoding="latin1").splitlines()[0].strip()
     system = _last_changed_rev(d / "system.rev")
     apl = _last_changed_rev(d / "rbp.rev")
@@ -395,7 +394,7 @@ def assemble_image(out, env_blob, mbr, p1, p2):
 # --- main -------------------------------------------------------------------
 def main():
     if not ISO.exists():
-        die(f"need {ISO} -- run: python3 xdjrx_upd.py decrypt <firmware> -o {ISO}")
+        die(f"need {ISO} -- run: crates/xdj-fw/target/release/xdj fw decrypt <firmware> -o {ISO}")
 
     mke2fs = find_tool("mke2fs")
     debugfs = find_tool("debugfs")
@@ -442,7 +441,7 @@ def main():
     try:
         shown = final.relative_to(REPO)
     except ValueError:
-        shown = final                      # app-data build (Phase 3): outside the repo
+        shown = final                      # app-data build: outside the repo
     log(f"built {shown}  ->  boots to the UI")
 
 

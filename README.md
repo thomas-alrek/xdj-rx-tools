@@ -1,370 +1,201 @@
-# Pioneer XDJ-RX firmware — reverse engineering notes
+# XDJ-RX emulator & firmware toolkit
 
-Goal: understand the XDJ-RX firmware structure, architecture, and update
-mechanism, with a view to **adding exFAT USB support** and, as a first
-milestone, **booting the firmware in QEMU**. Work is done on hardware the owner
-possesses, using Pioneer's own publicly-published GPL source, for
-interoperability and preservation.
+[![License: GPL v2+](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
+[![Platform: macOS (Apple Silicon)](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Apple%20Silicon-lightgrey.svg)](#platform-support)
+[![QEMU 11.1.0](https://img.shields.io/badge/QEMU-11.1.0-orange.svg)](https://www.qemu.org/)
+[![Rust](https://img.shields.io/badge/Rust-stable-dea584.svg)](https://www.rust-lang.org/)
+[![Firmware: XDJ-RX 2.21](https://img.shields.io/badge/firmware-XDJ--RX%202.21-black.svg)](#2-get-the-firmware-and-its-key)
+[![Version: 1.0.0](https://img.shields.io/badge/version-1.0.0-brightgreen.svg)](#)
 
-- **Device:** Pioneer XDJ-RX (internal platform name **`XDJAERO`**)
-- **Firmware analysed:** `2.21` (built 2017-10-18, the last XDJ-RX release)
-- **SoC:** NXP/Freescale **i.MX6Q** (`MCIMX6U6…`), dual Cortex-A9 @ 800 MHz
-- **Kernel:** Linux **3.0.35** (Freescale BSP `L3.0.35_4.1.0`), U-Boot 2009.08
-- **Storage:** GPMI NAND (layout below), plus the panel microcontroller
+Run the **Pioneer DJ XDJ-RX**'s own, unmodified firmware on your Mac — the real rekordbox UI,
+both decks, the mixer, USB libraries, firmware updates — and build and test **custom firmware**
+for it.
 
----
+The XDJ-RX is an i.MX6-based all-in-one DJ system. This project emulates its board in a patched
+QEMU (display, audio, front panel, USB, NAND flash, the panel microcontroller's bootloader), wraps it
+in a desktop app with a virtual control surface, and provides `xdj`, a toolkit for unpacking,
+modifying and repacking the firmware's `.UPD` update files.
 
-## Milestone: the firmware boots to its UI in QEMU
+> **Interoperability and preservation on hardware you own.** No Pioneer/AlphaTheta firmware,
+> firmware contents or keys are included here: you download the official firmware yourself, and
+> the decryption key comes from Pioneer's own published GPL source release.
 
-The **unmodified** `2.21` firmware boots on an emulated i.MX6 (QEMU `-M sabrelite`,
-patched to the XDJ-RX's real SABRE-SD board) all the way to its on-screen UI. No
-firmware or kernel changes — the i.MX6 bring-up (IPU vsync, framebuffer scanout,
-panel-MCU SPI, thermal/GPU stubs) is modelled on the QEMU side. The boot splash
-renders at 32bpp; the app then switches the framebuffer to 16bpp RGB565 and the
-main screen comes up. Both are decoded live from the IPU display stride.
+## Features
 
-![XDJ-RX boot splash in QEMU](docs/img/boot-splash.png)
-Boot splash (32bpp)
+- **Stock firmware, unmodified**: boots to the live rekordbox UI; decks play, the mixer works, and
+  audio reaches your speakers.
+- **Virtual front panel**: every deck, mixer and browse control (except the microphone), with the
+  LEDs, level meters and jog rings driven by the firmware.
+- **Scriptable over MCP**: an AI agent or test harness can load firmware, press any control, insert
+  USB images and take screenshots.
+- **A real unit, not a test rig**: the app emulates the NAND flash and installs the firmware with
+  Pioneer's own updater, exactly as a factory-fresh unit. UTILITY → VERSION No. reads the real
+  version.
+- **rekordbox USB sticks**: load a disk image (or a real stick) into USB1/USB2; browse and play its
+  library; MASTER REC records the mix to USB2.
+- **Service modes**: test mode (versions, LED/switch/fader oracles), firmware-update mode, and a
+  power button that performs the unit's real standby handshake.
+- **Custom firmware**: `xdj fw unpack` → edit → `xdj fw repack`, then *File → Install Firmware
+  Update…* — Pioneer's updater installs it on the emulated unit like an official release.
+- **Reverse-engineering docs** for the firmware's main application, the front-panel protocol and
+  the hardware it drives.
 
- ![XDJ-RX main UI in QEMU](docs/img/main-ui.png)
- Main UI (16bpp RGB565)
+## Getting started (macOS, from scratch)
 
-*Actual emulator framebuffer (800×480) captured from the running QEMU instance —
-see [`qemu/watch.sh`](qemu/watch.sh).*
+Assumes a Mac with Apple Silicon and **nothing installed**. Expect ~20 minutes, mostly compiling.
 
----
-
-## 1. The `.UPD` file format (fully reverse-engineered)
-
-`XDJRX.UPD` is an **ISO9660 image encrypted with Linux `cryptoloop`** (the
-`losetup -e aes` scheme), followed by a small plaintext footer:
-
-```
-+-------------------------------------------------------------+
-| encrypted body : N × 512 bytes   (cryptoloop AES-256-CBC)   |
-+-------------------------------------------------------------+
-| model string   : 12 bytes        "XDJAERO2.21\0"            |
-| body CRC32      : 4 bytes, little-endian  = crc32(body)     |
-+-------------------------------------------------------------+
-```
-
-For 2.21: `48,363,536` bytes = `94,460 × 512` (body) + `16` (footer).
-
-### Crypto parameters (verified against source)
-
-| Parameter | Value | Source of truth |
-|-----------|-------|-----------------|
-| Cipher / mode | `cbc(aes)`, **AES-256** | `linux-3.0.35/drivers/block/cryptoloop.c` (`cms` → `cbc(aes)`) |
-| Key | 32 bytes: first line of `aes256.key`, bytes **`[0:31]` + one `0x00`** | `util-linux-ng-2.13/mount/lomount.c` + `include/xstrncpy.h` (`strncpy(dst,src,31); dst[31]=0`), `LO_KEY_SIZE=32` |
-| Per-sector IV | **`LE32(sector_index) ‖ 12×0x00`**, incrementing every 512 B from body start | `cryptoloop.c` (`iv[0]=cpu_to_le32(IV)`) + `loop.c` (`IV = offset>>9`, offset 0) |
-| Footer CRC | `zlib.crc32(encrypted_body)`, stored little-endian | measured, byte-exact |
-
-The on-device decrypt routine that reveals all of this is
-`initramfs/decrypt_update.sh`:
+### 1. Install the tools
 
 ```sh
-cat /usr/local/pioneer/aes256.key | losetup -e aes -p 0 $dev $filename
-mount $dev /mnt/iso          # inner volume is ISO9660, label "UsbAuto"
-./update USB ${language}      # run the updater from inside the image
+# Apple's command-line developer tools (compilers, git, python3)
+xcode-select --install
+
+# Homebrew (https://brew.sh) — then follow the two "Next steps" lines it prints
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Rust (https://rustup.rs) — accept the defaults, then open a new terminal
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Libraries QEMU links against, plus the packaging/dev tools
+brew install meson ninja pkg-config glib pixman libslirp gnutls libusb capstone \
+             jpeg-turbo libpng zstd dylibbundler node uv
 ```
 
-### Where the key comes from (and why this is legitimate)
+### 2. Get the firmware and its key
 
-The XDJ-RX runs embedded Linux, so Pioneer must publish the GPL/LGPL source.
-That public release **contains the key**:
+```sh
+git clone https://github.com/thomas-alrek/xdj-rx-tools.git
+cd xdj-rx-tools
+mkdir -p build
 
-> `pioneer_xdj_rx.tar.gz` → `pioneer_xdj_rx/initramfs.tar.gz` →
-> `initramfs/usr/local/pioneer/aes256.key`
+# The official XDJ-RX 2.21 firmware update (from AlphaTheta's support site)
+curl -fSL -o build/XDJ-RX_v221.zip \
+  https://downloads.support.alphatheta.com/firmwares/all-in-one-dj-systems/XDJ-RX/XDJ-RX_v221.zip
 
-Download: Pioneer "GNU Open Source License & GPL/LGPL Source Code" page →
-**XDJ-RX** (v1.00 / 1.40 / 1.50). The parts are `deflate64` ZIPs wrapping
-`pioneer_xdj_rx.tar.gz.00` / `.01`; concatenate then `tar xzf`. The AES key is
-unchanged across firmware versions, so the 1.50-era key decrypts 2.21.
-
-**The key is never stored in this repo.** [`fetch_key.py`](fetch_key.py)
-resolves it on demand and writes it to `.env` (git-ignored) as
-`XDJRX_AES_KEY=<64 hex>`. It uses a cached `build/aes256.key` if present,
-otherwise downloads the GPL parts, unwraps the deflate64 ZIPs, streams the two
-nested tars, extracts `aes256.key`, and derives the 32-byte key. Everything the
-scripts pull or generate lands under `build/`; both `.env` and `build/` are
-git-ignored.
-
----
-
-## 2. Reusable tool — `xdjrx_upd.py`
-
-**Setup** — install dependencies once:
-
-```bash
-python3 -m venv .venv && source .venv/bin/activate   # optional but recommended
-pip install -r requirements.txt
+# The AES key: pulled from Pioneer's published GPL source (~280 MB download, cached).
+# Writes .env (XDJRX_AES_KEY=…) and build/aes256.key — both git-ignored.
+uv run tools/fetch_key.py
 ```
 
-Or skip manual setup entirely with [uv](https://docs.astral.sh/uv/) — the scripts
-carry [PEP 723](https://peps.python.org/pep-0723/) inline metadata, so
-`uv run xdjrx_upd.py …` / `uv run fetch_key.py` resolve and install deps in an
-ephemeral environment automatically.
+### 3. Build the emulator (QEMU) and the app
 
-```bash
-# First time only: resolve the AES key into .env (see §1)
-python3 fetch_key.py          # or: uv run fetch_key.py
-#   fast if build/aes256.key exists; otherwise downloads ~280 MB of GPL source
-#   (that download path needs inflate64 — covered by requirements.txt / uv)
-
-# The .UPD argument may also be the Pioneer-shipped .zip that contains it —
-# the tool finds and unwraps the .UPD member automatically:
-#   python3 xdjrx_upd.py info  XDJ-RX_v2.21.zip
-#   python3 xdjrx_upd.py decrypt XDJ-RX_v2.21.zip -o build/XDJRX.iso
-
-# Inspect (verifies key + footer CRC, finds the ISO9660 magic)
-python3 xdjrx_upd.py info XDJRX.UPD
-
-# Decrypt to an ISO you can mount/inspect
-python3 xdjrx_upd.py decrypt XDJRX.UPD -o build/XDJRX.iso
-
-# Decrypt AND unpack the ISO tree — pure-Python (pycdlib), cross-platform,
-# no mounting; falls back to 7z / bsdtar / hdiutil only if pycdlib is absent
-python3 xdjrx_upd.py extract XDJRX.UPD -d build/contents
-
-# Re-pack a modified ISO into a flashable .UPD (re-encrypt + fix footer CRC)
-python3 xdjrx_upd.py pack modified.iso -o XDJRX_custom.UPD --model XDJAERO2.21
-
-# Use your own key file instead of the built-in key
-python3 xdjrx_upd.py --key-file build/aes256.key decrypt XDJRX.UPD
+```sh
+qemu/build-qemu.sh                 # downloads QEMU 11.1.0, applies our patches, builds (~10 min)
+packaging/build-macos-app.sh       # builds the app and assembles dist/XDJ-RX.app
+open dist/XDJ-RX.app
 ```
 
-`pack` is byte-exact: re-packing the untouched ISO reproduces the original
-`.UPD` bit-for-bit — so a modified image will be a valid update file.
+### 4. First run
 
-> ⚠️ Flashing a custom `.UPD` to real hardware is at your own risk. The device
-> has **A/B kernel banks** (see below) which gives some brick resistance, but
-> there is no guarantee. Validate in QEMU / on a sacrificial unit first.
+1. **Add the key** — drop `build/aes256.key` on the key box (or paste the 64 hex characters from
+   `.env`).
+2. **Drop the firmware** — drag `build/XDJ-RX_v221.zip` onto the window. The app prepares it
+   (a few seconds), then powers the unit on and **installs the firmware** with Pioneer's own
+   updater, like a new unit from the factory (about a minute).
+3. When the update screen says *"Firmware update is complete"*, the app boots the unit from its
+   flash by itself. You'll see the rekordbox home screen; from then on the app just boots it (*File → Power
+   On at Launch* is on by default).
 
----
+### 5. Use it
 
-## 3. What's inside the firmware (`build/contents/`)
+- **Controls**: click and drag the virtual panel. Hold **MENU** for UTILITY. Everything is also in
+  the menu bar (Mixer, Deck 1/2, FX, Master…).
+- **USB**: *File → Load USB1/USB2 Image…* (a `.img`/`.dmg` rekordbox stick image, or a real
+  device). The browser shows USB1; MASTER REC records to USB2. Build an image from a rekordbox
+  collection with `tools/build-rb-usb.sh`.
+- **Power**: the POWER button asks the firmware to shut down cleanly (as on the unit).
+  *File → Power On in Test Mode* opens the service test mode.
+- **Updates**: *File → Install Firmware Update…* takes any `.UPD` (official or your own).
+- **Logs**: *View → Sub uCom Log* (panel traffic and LEDs) / *View → System Log* (the Linux console).
+- **Automation (MCP)**: while the app runs, an MCP server at `http://127.0.0.1:8765/mcp` exposes the
+  unit to AI agents and scripts — power, `load_firmware`, every control by name, USB, screenshots,
+  LEDs, console. Claude Code: `claude mcp add --transport http xdj-rx http://127.0.0.1:8765/mcp`.
+  Tools: [docs/standalone-app.md §7a](docs/standalone-app.md#7a-mcp-server-automation).
 
-Decrypted ISO (volume `UsbAuto`) — the updater and everything it flashes:
+## Custom firmware
 
-| Path | What it is |
-|------|------------|
-| `update` | ARM ELF updater (dynamically linked, not stripped) — the update orchestrator |
-| `mot2bin` | Motorola S-record → binary converter (for the panel MCU image) |
-| `lib/`, `usr/lib/`, `gui/` | shared libs + GUI assets used by `update` itself |
-| `images/uImage` | **Linux kernel** — `Linux-3.0.35-2666-gbdde708`, ARM, uncompressed, load/entry `0x10008000` |
-| `images/u-boot.bin.nand` | U-Boot bootloader (NAND build) |
-| `images/rootfs.cramfs` | **root filesystem**, CRAMFS, ~17 MB, 1075 files (contains `fuse.ko`, `libfuse`, `fusermount`, udev rules) |
-| `images/pioneer.tar.gz` | Pioneer application payload |
-| `images/gui.tar.gz` | GUI resources |
-| `images/user.tar.gz`, `images/data.tar.gz` | user/data overlays |
-| `images/PANELCOM.mot` | **panel microcontroller** firmware (S-record) |
-| `images/fw_env.txt` | U-Boot environment (boot flow + NAND partition map) |
-| `images/release.txt`, `*.rev` | version `2.21`, SVN build provenance |
+```sh
+cd crates/xdj-fw && cargo build --release && cd ../..     # the `xdj` tool
+X=crates/xdj-fw/target/release/xdj
 
-### Boot flow & NAND layout (from `fw_env.txt`)
-
-```
-bootcmd = run bootcmd_nand
-bootcmd_nand = run bootargs_base bootargs_nand bootargs_nand_${kernel_bank}; bootm
-  → nand read 0x10800000 0x500000 0x500000   (kernel bank A @ 5 MiB)
-bootargs = console=ttymxc0,115200 ... mtdparts=... consoleblank=0 video=mxcfb0 rootwait
-```
-
-NAND partitions (`mtdparts`):
-`3M(boot) 1M(bb1) 1M(env) 10M(kernel_a) 10M(kernel_b) 30M(rootfs) 10M(data)
-8M(pioneer) 5M(bb2) 10M(core) 40M(gui) 122M(quickboot) 5M(bb2) 1M(bbt)`
-
-Notes:
-- **Dual kernel banks A/B** → safer updates (fall back if one is bad).
-- U-Boot env also defines **MMC** (`rootfstype=ext4`) and **NFS** boot paths —
-  the NFS path (`root=/dev/nfs nfsroot=…`) is the most practical for dev/QEMU.
-- Console is **`ttymxc0` @ 115200**, 8N1.
-
----
-
-## 4. exFAT support — feasibility
-
-**USB drives are mounted as `vfat` only.** The updater's mount helper
-(`initramfs/mount_usb.sh`) does `mount -t vfat …`; the main app mounts USB media
-via a udev rule `12-usb-memory-auto-mount.rules` in the rootfs. The kernel
-(3.0.35, 2012) predates mainline exFAT (5.4, 2019) — **no native exFAT** and
-`NTFS`/`exFAT` are both off in the config. But:
-
-- `CONFIG_FUSE_FS=m` **and the rootfs already ships FUSE** (`fuse.ko`,
-  `libfuse.so`, `fusermount`, `fuse.conf`, `99-fuse.rules`). The device already
-  uses FUSE (e.g. `simple-mtpfs`).
-
-**Recommended route: userspace `fuse-exfat` (relan/exfat).**
-1. Cross-compile `fuse-exfat` (`mount.exfat-fuse`) for armv7-hf against this
-   BSP's toolchain/libfuse.
-2. Inject the binary + libs into `rootfs.cramfs` (rebuild the cramfs).
-3. Patch the mount path (the udev rule + any `mount -t vfat` call sites) to try
-   `exfat` when `vfat` fails — the natural hook is
-   `12-usb-memory-auto-mount.rules`.
-4. Re-pack with `xdjrx_upd.py pack`.
-
-Alternative: backport a kernel exFAT driver (Samsung `sdFAT` / staging `exfat`)
-as a `.ko` for 3.0.35 — faster at runtime, but a bigger porting job and needs a
-kernel rebuild. Start with FUSE.
-
-> Open question worth checking early: whether the Pioneer app enumerates the
-> USB filesystem itself (and only understands FAT) rather than just relying on
-> the mounted path. If so, the app's expectations — not just the mount — may
-> need attention. Inspect `pioneer.tar.gz` + the `update`/app binaries next.
-
----
-
-## 5. QEMU boot — **the live UI runs** (see [QEMU.md](QEMU.md))
-
-The **unmodified firmware boots in QEMU all the way to its live UI** — the
-Pioneer DJ / rekordbox splash, then the main deck screen (DECK1/DECK2, BEAT
-EFFECTS, BPM/TEMPO). One command does everything from scratch:
-
-```bash
-./run.sh      # download firmware → key → decrypt → build QEMU → build nand.img → launch
+$X fw unpack build/XDJ-RX_v221.zip build/unpacked          # iso/ rootfs/ pioneer/ gui/ data/ user/
+$EDITOR build/unpacked/rootfs/etc/rc.d/rcS                 # change, add, delete files
+$X fw diff   build/XDJ-RX_v221.zip build/unpacked          # review what changed
+$X fw repack build/XDJ-RX_v221.zip build/unpacked --release 2.31 -o build/MY.UPD
 ```
 
-`run.sh` is idempotent (skips finished steps). The individual steps:
+Then *File → Install Firmware Update…* → `build/MY.UPD`. The firmware's update check is only a CRC
+and a model prefix — there is no signature — so Pioneer's updater installs a rebuilt image like an
+official one. Best practices, the overlay workflow and the formats: [docs/custom-firmware.md](docs/custom-firmware.md).
+Never commit firmware contents.
 
-```bash
-./run.sh            # or, by hand:
-qemu/build-qemu.sh                                         # patched QEMU (once, ~15 min)
-python3 xdjrx_upd.py decrypt XDJRX.UPD -o build/XDJRX.iso  # decrypt firmware
-python3 qemu_prepare.py                                    # kernel boot blobs
-qemu/build-nand.sh                                         # nand image (needs e2fsprogs)
-qemu/watch.sh                                              # live display + serial console
-```
+## Repository layout
 
-What it took (all **emulator-side, firmware untouched** except one removed file):
-- **Machine-id trampoline** — QEMU's `-M sabrelite` passes board-id `-1`; this
-  ATAG kernel rejects it (silent spin in `dump_machine_table`). A tiny trampoline
-  supplies the real board's machine id **3980 (SABRE-SD)** + hand-built ATAGs
-  (incl. `ATAG_REVISION=0x500`, which binds the `sub-ucom` panel MCU) via
-  `-device loader`.
-- **Nineteen i.MX6 QEMU patches** (`qemu/patches/01..05` + `qemu/xdj/`) — self-clearing SRC GPU-reset
-  bits; a Vivante GPU register stub + a live framebuffer scanout (reads the IPU
-  display stride, decodes 32bpp splash / 16bpp RGB565 UI) + IPU vsync IRQ; the
-  SABRE-SD board wiring (uSDHC3 nand, ECSPI2 sub-ucom slave); the sub-ucom inject
-  harness and its LED back-channel; USB fault flags/hub/wakeup; main-ucom GPIO keys and
-  source-key LEDs; the audio SDMA/SSI/AUDMUX path with an evenly paced period clock; the
-  I2C4 MFi auth-chip responder; and an update-mode boot strap. See the
-  `qemu-imx6-patches` skill for the full list.
-- **nand image** (`qemu/build-nand.sh`) — assembled from the firmware's own
-  payloads (`rootfs.cramfs` + `pioneer.tar.gz` + `gui.tar.gz`) as a 256 MB ext4
-  image. The **one** change vs. a byte-for-byte rootfs: the Vivante GAL DirectFB
-  gfxdriver (`libdirectfb_gal.so`) is removed so DirectFB software-renders without
-  `/dev/galcore` — QEMU can't emulate the i.MX6 DDR bus-frequency DVFS the GPU
-  driver needs, and the GPU does no work in the idle UI anyway. See
-  [docs/emulator-status.md](docs/emulator-status.md).
+| path | what |
+|---|---|
+| [`app/`](app) | the desktop app: `shell/` (Tauri window), `host/` (`xdj-host`: runs QEMU, the virtual-panel server, firmware prep, the NAND unit), `ui/` |
+| [`crates/xdj-fw/`](crates/xdj-fw) | the firmware toolkit and `xdj` CLI: `.UPD` crypto, ISO9660/cramfs/tar codecs, custom builds, the NAND image |
+| [`qemu/`](qemu) | the emulator: `xdj/` (XDJ-RX device models), `patches/` (changes to stock QEMU files), `build-qemu.sh`; plus the SD-card test bed (`build-nand.*`, `watch.sh`) |
+| [`tools/`](tools) | `xdj-panel/` (panel pages, dev server, RE/debug helpers), `test/regress.py`, `fw/make-test-upd.sh`, `fetch_key.py`, `build-rb-usb.sh` |
+| [`packaging/`](packaging) | `build-macos-app.sh`, `collect-licenses.py` |
+| [`docs/`](docs) | technical documentation (below) |
+| `run.sh` | developer quick start: build and boot the SD-card test bed in a QEMU window |
 
----
+## Documentation
 
-## 6. Repro: rebuilding from Pioneer's GPL source
+| doc | covers |
+|---|---|
+| [docs/standalone-app.md](docs/standalone-app.md) | the desktop app: architecture, provisioning, power, packaging, debugging |
+| [docs/custom-firmware.md](docs/custom-firmware.md) | building, installing and verifying custom firmware |
+| [docs/emulator-status.md](docs/emulator-status.md) | what works, what doesn't, open items |
+| [docs/subucom-frame-map.md](docs/subucom-frame-map.md) | the front-panel control map (every button, fader, knob, encoder) |
+| [docs/subucom-led-map.md](docs/subucom-led-map.md) | LEDs, level meters, jog rings |
+| [docs/service-modes.md](docs/service-modes.md) | test mode, factory reset, update mode, the power/standby handshake |
+| [docs/firmware-update-and-nand.md](docs/firmware-update-and-nand.md) | the updater, the panel MCU bootloader, NAND flash emulation |
+| [docs/usb.md](docs/usb.md) | USB slots, images and the insert rules |
+| [docs/rbp-and-panel-protocol.md](docs/rbp-and-panel-protocol.md) | the firmware's main app (`rbp`) and the panel protocol |
+| [docs/debug-console-protocol.md](docs/debug-console-protocol.md) | `rbp`'s built-in debug console |
+| [docs/version-display-and-override.md](docs/version-display-and-override.md) | where the displayed version comes from |
+| [docs/testing.md](docs/testing.md) | the test suites and when to run them |
 
-```bash
-# 1. Download XDJ-RX GPL parts (deflate64 ZIPs) from Pioneer's GPL/LGPL page.
-# 2. Unwrap each ZIP (ditto/7z fail on deflate64; use python 'inflate64'):
-pip install inflate64
-#    -> pioneer_xdj_rx.tar.gz.00 / .01
-cat pioneer_xdj_rx.tar.gz.00 pioneer_xdj_rx.tar.gz.01 > pioneer_xdj_rx.tar.gz
-tar xzf pioneer_xdj_rx.tar.gz
-tar xzf pioneer_xdj_rx/initramfs.tar.gz      # -> initramfs/usr/local/pioneer/aes256.key
-```
+## Development
 
-Source tree of note:
-`BUILD/linux-3.0.35/` (kernel + `.config`), `BUILD/u-boot-2009.08/`,
-`BUILD/busybox-1.20.2/`, `tools/` (fuse, simple-mtpfs, util-linux, hfsprogs…),
-`config/platform/imx/imx6q.cf`.
+- **SD-card test bed** (a QEMU window, root shell on the console, gdb): `./run.sh` builds and boots
+  it from scratch (also needs `brew install e2fsprogs`). Debug launcher with gdb/monitor sockets:
+  `tools/xdj-panel/debug/relaunch.sh`.
+- **App in development**: `(cd app/host && cargo build) && (cd app/shell && cargo run)`
+  (first `cd app/ui && npm install`).
+- **Tests** ([docs/testing.md](docs/testing.md)): `cargo test --release` in `crates/xdj-fw`;
+  `tools/xdj-panel/test_panel_parity.py`; the end-to-end suite `tools/test/regress.py`
+  (`--app dist/XDJ-RX.app` tests the packaged app).
+- [CLAUDE.md](CLAUDE.md) is the orientation file for AI-assisted sessions; `.claude/skills/` holds
+  task-specific how-tos (mapping controls, QEMU patches, packaging, custom firmware…).
 
----
+## Platform support
 
-## Files in this folder
-
-Tracked in git (the whole repository):
-
-```
-run.sh                   one command: download → key → decrypt → build → launch
-xdjrx_upd.py             decrypt / info / extract / pack the .UPD (reads key from .env)
-fetch_key.py             resolve the AES key from Pioneer's GPL source -> .env
-qemu_prepare.py          build the QEMU kernel boot blobs (kernel, trampoline, ATAGs)
-requirements.txt         Python deps (pip install -r; also PEP 723 in each script)
-README.md / QEMU.md      this document / the QEMU bring-up writeup
-.gitignore               excludes .env, build/ and the firmware image
-docs/img/                bring-up screenshots used in this README
-qemu/build-qemu.sh       build the patched QEMU (applies qemu/patches/*.patch)
-qemu/build-nand.sh       assemble the nand image (uses cramfs_extract.py)
-qemu/cramfs_extract.py   extract the firmware's rootfs.cramfs
-qemu/watch.sh            launch the emulator — live UI on the real SABRE-SD board
-qemu/patches/            01 SRC GPU-reset · 02 i.MX6 GPU/IPU/scanout stubs · 03 SABRE-SD SD
-```
-
-You supply (not in git — Pioneer's copyrighted firmware):
-
-```
-XDJRX.UPD                the original encrypted firmware (2.21), from your device/update
-```
-
-Generated by the scripts (git-ignored, see `.gitignore`):
-
-```
-.env                     XDJRX_AES_KEY=<hex>   (created by fetch_key.py)
-build/aes256.key         passphrase cached from the GPL source
-build/XDJRX.iso          decrypted ISO9660 image (mountable)
-build/qemu/              kernel, boot blobs, nand.img, reference logs
-build/qemu-src/          the patched QEMU source + build
-```
-
-## Status / next steps
-
-- [x] `.UPD` format fully specified; decrypt + byte-exact re-pack working
-- [x] Update mechanism, boot flow, NAND layout, component inventory mapped
-- [x] **Firmware boots in QEMU to its live UI** (one gfxdriver removed) — [QEMU.md](QEMU.md)
-- [x] **GUI bringup** done: IPU display model, framebuffer scanout, app runs (software render)
-- [~] **Panel input**: Sub-ucom SPI frame injection working; browse encoder (push + rotate),
-  USB STOP, nav keys, channel faders/EQ/trim/color/master/crossfader, and the per-channel
-  **DECK/LINE source switch** (`rbp[0x33].7`/`[0x43].7`) mapped and live-verified.
-  Full control map in [docs/subucom-frame-map.md](docs/subucom-frame-map.md); remaining
-  deck transport/jogs need a loaded track — see [docs/rx3-panel-crossref.md](docs/rx3-panel-crossref.md).
-- [x] **Audio**: i.MX6 SDMA/SSI/AUDMUX modelled (`xdj-audio.c` (was patch 11)); **real deck audio to the host**,
-  both decks, stutter fixed by an evenly paced period clock (`xdj-audio.c` (was patch 16)) — see
-  [docs/audio-handover.md](docs/audio-handover.md).
-- [x] **Panel LEDs, meters, jog rings** (rbp's `SubTxData`, `xdj-panel.c` (was patch 15); source-key LEDs, `xdj-board.c` (was patch 17))
-  — [docs/subucom-led-map.md](docs/subucom-led-map.md).
-- [x] **Service modes**: test mode (hold MEMORY + TEMPO RANGE from boot) and firmware-update mode
-  (`XDJ_BOOT_UPDATE=1`) reachable; E-7206 auth-chip error fixed (`xdj-mfi.c` (was patch 18)) —
-  [docs/service-modes.md](docs/service-modes.md).
-- [x] **Desktop app** (`app/`): window = the virtual deck only; native menu bar for all controls,
-  pop-out screen (double-click), Sub uCom / System log windows — skills `build-xdj-app`,
-  `xdj-virtual-panel`.
-- [ ] exFAT mod: patch `12-usb-memory-auto-mount.rules`; cross-compile `fuse-exfat`
-
-> For AI sessions: see **[CLAUDE.md](CLAUDE.md)** and the task skills in `.claude/skills/`
-> (`run-xdj-emulator`, `map-{gpio,subucom-*}-control`, `rbp-binary-internals`,
-> `upd-firmware-format`, `qemu-imx6-patches`, `xdj-virtual-panel`, `build-xdj-app`,
-> `build-xdj-sd-image`).
-
-## Acknowledgements / references
-
-- **[nzoschke/xdj-emu](https://github.com/nzoschke/xdj-emu)** — an emulator for the
-  *XDJ-RX3* (a different, later model). Its [`docs/xdj-rx3-panel.md`](https://github.com/nzoschke/xdj-emu/blob/main/docs/xdj-rx3-panel.md)
-  panel write-up was the key reference for cracking our browse encoder: it documents the RX3
-  browse control as a **16-bit signed counter in the panel frame** (RX3 EUP bytes 84–85) and
-  the encoder push at byte 93 bit 4 — byte offsets that turned out to match the original
-  XDJ-RX exactly (`0x54/0x55` counter, `0x5d` bit 4 push). That insight let us drive the
-  rotate (increment = scroll down, decrement = up) after an earlier edge-trigger dead end.
-  The RX3 panel byte/bit tables are now a working hypothesis source for the rest of our
-  mappings — see [docs/rx3-panel-crossref.md](docs/rx3-panel-crossref.md). The two models'
-  firmwares and key codes differ, so every mapping is verified against the live XDJ-RX.
+| | status |
+|---|---|
+| macOS, Apple Silicon | ✅ supported (app ad-hoc signed — on another Mac, right-click → Open the first time) |
+| macOS, Intel | ⬜ untested (the build scripts assume Homebrew in `/opt/homebrew`) |
+| Linux | 🔶 the code is largely portable; no packaging script yet |
+| Windows | ⬜ not yet (the host talks to QEMU over Unix sockets) |
 
 ## License
-This repository is licensed under the **GNU General Public License, version 2 or (at your option)
-any later version** (`GPL-2.0-or-later`; full text in [LICENSE](LICENSE)). GPLv2 compatibility
-matters because the emulator's device models (`qemu/xdj/`) and patches (`qemu/patches/`) are built
-into QEMU, which is GPLv2.
 
-**Not covered, and never committed or bundled:** Pioneer/AlphaTheta firmware, its contents, and the
-firmware AES key. Users supply their own `.UPD` and key.
+`GPL-2.0-or-later` — see [LICENSE](LICENSE). GPLv2 compatibility matters because the device models
+(`qemu/xdj/`) and patches (`qemu/patches/`) are built into QEMU. The packaged app redistributes
+third-party software under its own licenses ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md));
+every license text ships inside the app in `Contents/Resources/licenses/`.
 
-The packaged desktop app also redistributes third-party software (QEMU, shared libraries, noVNC,
-Rust crates) under their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The app
-bundle carries every license text in `Contents/Resources/licenses/`.
+Not covered and never included: Pioneer/AlphaTheta firmware, its contents and the firmware key.
+"Pioneer DJ", "XDJ-RX" and "rekordbox" are trademarks of their owners; this project is not
+affiliated with or endorsed by them.
+
+## Acknowledgements
+
+- [QEMU](https://www.qemu.org/), [noVNC](https://novnc.com/), [Tauri](https://tauri.app/) and
+  [audio-knobs](https://www.npmjs.com/package/audio-knobs).
+- [nzoschke/xdj-emu](https://github.com/nzoschke/xdj-emu), an emulator for the later XDJ-RX3: its
+  panel write-up (the browse encoder as a 16-bit counter in the panel frame) pointed the way for the
+  XDJ-RX's encoder and several other panel fields.
+- Pioneer DJ's published GPL/LGPL source release for the XDJ-RX (kernel, u-boot, drivers).

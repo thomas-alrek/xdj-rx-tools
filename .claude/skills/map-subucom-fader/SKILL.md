@@ -5,36 +5,35 @@ description: Find the sub-ucom frame offset + control code for a linear XDJ-RX F
 
 # Mapping a sub-ucom FADER (linear 16-bit analog)
 
-A fader is a **16-bit little-endian** value in the frame, scaled `÷1023.0` to a 0..1 float,
-decoded into a `0x50xx`/`0x44xx`/`0x600f` control code, then applied by a C++ setter leaf.
+A fader is a **16-bit little-endian** value in the frame (`0..0x3ff`), scaled `÷1023.0` to a 0..1
+float, decoded into a `0x50xx`/`0x44xx`/`0x600f` control code, then applied by a C++ setter leaf.
 
 ## Sub-ucom fundamentals (shared)
 - ONE 100-byte frame over `/dev/subucom_spi1.0`; parsed by `PanelComController` (`FUN_0021a4ac`),
   decoders at **~0x282000-0x28b000**.
-- **Inject harness** (`xdj-panel.c`, was patches 02/07) reads `/tmp/subucom_ctrl` each frame, rewrites the field,
-  recomputes CRC. `A <off> <val16>` = hold a 16-bit analog (`0x3ff`≈full, `0x200`≈center, `0`=min);
-  `a` = one-shot. Offsets are rbp frame offsets.
+- **Inject harness** (`qemu/xdj/xdj-panel.c`) reads `/tmp/subucom_ctrl` (or the `xdjctrl`
+  chardev) each frame, rewrites the field, recomputes CRC. `A <off> <val16>` = hold a 16-bit analog
+  (`0x3ff`≈full, `0x200`≈center, `0`=min); `a` = one-shot. Offsets are rbp frame offsets.
 - Tools: `tools/xdj-panel/debug/{inj.py,mon.py,rsp.py,tables.py,relaunch.sh}`. `inj.py pulse`
   preserves other holds (writing a bare line to the ctrl file replaces all holds and zeroes the mix).
 
-## Fader-specific anchors (confirmed)
+## Known faders (`docs/subucom-frame-map.md`)
 | rbp off (d1/d2) | code | control | setter leaf |
 |---|---|---|---|
 | `0x2c` / `0x3c` | `0x5011` | CH FADER | `FUN_00083fcc` setChannelFader |
 | `0x4e` | `0x600f` | CROSSFADER | `FUN_00066c2c` |
-| `0x04`/`0x0a` (+`0x14`/`0x1a` d2) | — | TEMPO/pitch fader (dual-complementary pair) | — |
+| `0x04`+`0x0a` / `0x14`+`0x1a` | — | TEMPO fader, complementary pair (`0x0a` = 1023 − `0x04`; send both) | — |
 | `0x4a` | `0x4405` | MASTER LEVEL | `FUN_00066bb8` setMasterVolume |
 | `0x48` | `0x440c` | BOOTH MONITOR | — |
-| `0x50` | `0x4403` | HP LEVEL | — |
-| `0x4c` | `0x448b` | LEVEL DEPTH | — |
+| `0x50` | `0x4403` | HEADPHONES LEVEL | — |
+| `0x4c` | `0x448b` | BEAT FX LEVEL/DEPTH | — |
 
 - Continuous-analog decoder: **`FUN_002adee8`** region `~0x282400-0x282800`; the mixer analog
-  **block decoder at `0x282800`** emits per-block codes (see [map-subucom-knob] for the block layout).
-- Many channel faders are **dual-complementary** (a main field + an inverted copy); the decoder
-  reads both. The TEMPO fader is a known complementary pair.
+  **block decoder at `0x282800`** emits per-block codes (block layout: [map-subucom-knob]).
+- A complementary pair must be sent together — forcing only one side reads as a pegged fader.
 
 ## Method
-0. **Test-mode oracle (no gdb):** boot into test mode (skill `run-xdj-emulator`, "Service modes"),
+0. **Test-mode oracle (no gdb):** boot into test mode (skill [run-xdj-emulator], "Service modes"),
    go to **Mode 7**: rbp prints every pot/fader's raw value as `000–3FF` hex. Hold your candidate
    `A <off> <val>` and read which label changes — confirms offset + raw value in one look.
 1. **Inject + setter breakpoint (most precise):** `A <off> 3ff` hold, then gdb-RSP breakpoint on
@@ -42,17 +41,18 @@ decoded into a `0x50xx`/`0x44xx`/`0x600f` control code, then applied by a C++ se
    **float** (soft-float ABI: the float is an IEEE-754 bit pattern in a core reg; `1.0f`=`0x3f800000`,
    `0.5f`=`0x3f000000`). That identifies the control + confirms scaling. Resume via monitor `cont`.
 2. **Screen-diff (no gdb):** inject a ramp (0x000→0x3ff) and `screendump`; watch the on-screen
-   level meter / TEMPO % / crossfader move. Good for coarse identification.
+   level meter / TEMPO % / crossfader move. The LED level meters (`docs/subucom-led-map.md`) also
+   follow channel fader + MASTER.
 3. **New fader:** sweep candidate even offsets with `A <off> 3ff` holds and watch the target UI
    element or the audio gate; confirm 16-bit by checking `<off>` and `<off>+1` both move it.
-4. Record `(off_d1, off_d2, code, control, setter, confidence)` in `docs/subucom-frame-map.md`.
+4. Record `(off_d1, off_d2, code, control, setter)` in `docs/subucom-frame-map.md`.
 
 ## Gotchas
 - Audio **on-air gate `FUN_00065028`** needs master>22, level set, EQ not all-zero, fader≥6,
   crossfader — set sane gains (CH fader + master + xfader center + EQ center) or nothing is audible.
+  Auto-level (`xdj-panel.c`) asserts these defaults for every control you don't hold.
 - Don't hammer RSP (rbp real-time watchdog → crash). Prefer screen-diff; use single/spaced gdb stops.
 
 ## References
-`docs/subucom-frame-map.md` (Analog continuous table), `docs/rbp-and-panel-protocol.md`,
-`docs/rx3-panel-crossref.md`. Sibling skills: [map-subucom-knob], [map-subucom-button],
-[map-subucom-rotary], [map-gpio-control].
+`docs/subucom-frame-map.md`, `docs/rbp-and-panel-protocol.md`, `docs/service-modes.md`.
+Sibling skills: [map-subucom-knob], [map-subucom-button], [map-subucom-rotary], [map-gpio-control].

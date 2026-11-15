@@ -3,7 +3,7 @@
 # Build the QEMU that runs the UNMODIFIED Pioneer XDJ-RX firmware (QEMU is changed,
 # never the firmware).
 #
-# Layout (2026-11-16 consolidation; replaces the old stack of 21 patches):
+# Layout:
 #   qemu/xdj/          the XDJ-RX device models as real source files -- edit these.
 #                      Synced into hw/arm/xdj/ of the QEMU tree on every run:
 #     xdj-board.c      GPIO reset levels/captures, realize dispatcher
@@ -20,8 +20,8 @@
 #     03-sabresd-board            SABRE-SD wiring: SD rootfs on uSDHC3, panel on ECSPI2
 #     04-usb-chipidea-hub         high-speed hub, OTG VBUS, ChipIdea PSPD/SRI/uframe polling
 #     05-macos-submillisecond-poll  sub-ms main-loop timers on macOS (no ppoll)
-# History of the individual fixes: docs/emulator-status.md and the
-# qemu-imx6-patches skill. Patches target QEMU $VER exactly (checksum-pinned).
+# Feature status: docs/emulator-status.md; details: the qemu-imx6-patches skill.
+# Patches target QEMU $VER exactly (checksum-pinned).
 #
 # Usage:  qemu/build-qemu.sh      # -> build/qemu-src/qemu-<ver>/build/qemu-system-arm
 # Then:   qemu/build-nand.sh && qemu/watch.sh

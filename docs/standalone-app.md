@@ -1,11 +1,10 @@
-# Standalone XDJ-RX app — architecture & development handover
+# Standalone XDJ-RX app — developer guide
 
-This document is a **developer handover**: enough to take over the standalone desktop app with no
-prior context. It covers what the app is, how the pieces fit, the runtime data flow, how to build /
-run / debug / package it, and the pitfalls that have already bitten us.
+Enough to work on the standalone desktop app with no prior context: what the app is, how the
+pieces fit, the runtime data flow, how to build / run / debug / package it, and the pitfalls to
+avoid.
 
-For the *plan and status*, see [standalone-app-roadmap.md](standalone-app-roadmap.md). For the
-operational cheat-sheets, see the skills `build-xdj-app` and `xdj-virtual-panel` in
+For the operational cheat-sheets, see the skills `build-xdj-app` and `xdj-virtual-panel` in
 `.claude/skills/`. The hard constraint from [../CLAUDE.md](../CLAUDE.md) applies throughout:
 **never modify the guest (`rbp`, kernel, rootfs)** — everything here is host-side.
 
@@ -19,8 +18,8 @@ operational cheat-sheets, see the skills `build-xdj-app` and `xdj-virtual-panel`
 > - **dialog / capability / ACL** wiring or the Tauri major version — §9, `capabilities/default.json`;
 > - **packaging** (bundle layout, signing, relocation) — §13, `packaging/build-macos-app.sh`;
 > - **startup/teardown** behaviour — §3, §10.
-> Version-specific claims (e.g. "remote capabilities are stable on Tauri 2.12") are true as of the
-> commit that added them — re-verify on a Tauri upgrade.
+> Version-specific claims (e.g. "remote capabilities are stable on Tauri 2.12") must be
+> re-verified on a Tauri upgrade.
 
 ---
 
@@ -68,9 +67,9 @@ Keeping them separate means the emulator plumbing has no Tauri dependency and is
 | `app/host/` | `xdj-host` orchestrator. `src/main.rs` = Config, preflight, prep, spawn/supervise, USB insert, VNC-WS bridge. |
 | `app/ui/` | `index.html` (the setup page), vendored `novnc/`, `node_modules/audio-knobs` (knobs lib). |
 | `tools/xdj-panel/` | `panel.html` / `logs.html` (the control UI, served by `app/host/src/panel.rs`) + `server.py` (the same server in Python, for the dev/debug launcher; `test_panel_parity.py` keeps the two in step). See skill `xdj-virtual-panel`. |
-| `packaging/build-macos-app.sh` | Assembles `dist/XDJ-RX.app`. |
-| `crates/xdj-fw` (`firmware.rs`, `nand.rs`, ...) | Firmware prep (decrypt, ISO read, kernel blobs, update stick) + the unit's NAND (init / installed? / load kernel), in-process. Shared library (also the `xdj` CLI, and custom-firmware builds: `docs/custom-firmware.md`). Ports of `xdjrx_upd.py`, `qemu_prepare.py`, `qemu/xdj_update_stick.py`, `qemu/xdj_nand.py` (still the dev tools); `qemu/test_rust_parity.sh` checks they agree byte for byte. |
-| `qemu/` | The patched-QEMU build scripts + `patches/01..05` + `qemu/xdj/`. |
+| `crates/xdj-fw` (`firmware.rs`, `nand.rs`, ...) | Firmware prep (decrypt, ISO read, kernel blobs, update stick) + the unit's NAND (init / installed? / load kernel), in-process. Shared library of `xdj-host` and the `xdj` CLI (`xdj fw …`, `xdj prepare`, `xdj nand …`; custom-firmware builds: [custom-firmware.md](custom-firmware.md)). |
+| `qemu/` | The patched-QEMU build script (`build-qemu.sh`) + `patches/01..05` (stock QEMU files) + `qemu/xdj/` (the device models). |
+| `packaging/` | `build-macos-app.sh` (assembles `dist/XDJ-RX.app`), `collect-licenses.py`. |
 
 App-data (runtime, never in the repo): `~/Library/Application Support/XDJ-RX/` on macOS
 (`$XDG_DATA_HOME/xdj-rx` elsewhere). Contains `key/aes256.key`, per-firmware cache dirs keyed by
@@ -91,11 +90,11 @@ hash, `run/` (sockets + logs when packaged), `host.log`, `last-firmware`.
 4. → **`start_host`** spawns `xdj-host` with `XDJ_FW_DIR=<dir>`, redirects its stdio to
    `app-data/host.log`, and waits up to 60 s for the panel port (8765) to open (`wait_port`).
 5. `xdj-host` (run mode): `preflight` → start the in-process panel server (`panel.rs`) → the VNC→WS bridge and
-   the `power.sock` listener → supervise. **A blank unit is provisioned at once** (§6a): a
+   the `power.sock` listener → supervise. **A blank unit is provisioned at once** (§4a): a
    firmware just dropped powers on into the firmware's own ALL update, then boots from NAND. An
    installed unit: the shell passes `XDJ_AUTOSTART=0`, so QEMU waits for the panel's POWER switch /
    File > Power, or the *Power On at Launch* preference (**on by default**), to send `on`.
-   Without `XDJ_AUTOSTART=0` (CLI use) it powers on at once and runs `maybe_insert_usb` as before.
+   Without `XDJ_AUTOSTART=0` (CLI use) it powers on at once and runs `maybe_insert_usb` (§8).
    The panel binds :8765 at once, so `wait_port` returns and the shell opens the **main**
    window at `http://127.0.0.1:8765/?vnc=ws://127.0.0.1:6080/`.
 6. The panel (`panel.html`) connects to the screen over noVNC (the `?vnc=` WebSocket) and drives
@@ -121,6 +120,12 @@ prep-v3.stamp` already exist there, it's a **cache hit** (instant). Otherwise, i
 `PREP_STAMP` (`prep-vN.stamp`) versions the layout: bump it (and the shell's `fw_complete`) when
 prep's output changes, so older caches fall back to the drop screen and get rebuilt.
 
+**Contract that matters:** `xdj-host prep` prints **only the prepared dir path** to stdout (the
+shell reads stdout as `XDJ_FW_DIR`); all diagnostics go to **stderr**. The shell additionally
+reads the **last non-empty stdout line** defensively. Anything else on stdout on a cache miss
+becomes a bad `XDJ_FW_DIR`, preflight then fails, and the app shows "panel didn't come up" on the
+first run only.
+
 ## 4a. The unit: provisioning and NAND boot (`BootKind`)
 
 The app emulates the real unit: **no SD card**, everything lives in the emulated NAND
@@ -130,13 +135,16 @@ The app emulates the real unit: **no SD card**, everything lives in the emulated
 - **Provision** (no installed system; every power-on until one succeeds): `nand::init`
   (erased NAND + the firmware's `fw_env.txt` = u-boot's default env), erased MCU flash, boot the
   prep blobs with `XDJ_BOOT_UPDATE=1 XDJ_UPDATE_TYPE=20` (ALL). `provision_watch` inserts the stick
-  on USB1 2 s after the console's `### USB update mount. ###`, then waits for
-  `### USB update success.` → kill QEMU, write `provisioned.stamp`, boot **Normal**. On
-  `### USB update error.` QEMU is left running (the screen shows the updater's error). The ALL
-  update also writes `release`/`rev_*` into the env, which UTILITY → VERSION No. shows.
+  on USB1 2 s after the console's `### USB update mount. ###`, then waits for the install to
+  finish: the NAND env gains `release=` (the ALL update's last write, `finEnv`; the console's
+  `### USB update success.` also counts but never prints in practice — the updater's final
+  `umount /mnt/usb` stays busy). 10 s later → kill QEMU, write `provisioned.stamp`, boot
+  **Normal**. On `### USB update error.` QEMU is left running (the screen shows the updater's
+  error). The env's `release`/`rev_*` are what UTILITY → VERSION No. shows.
+  Details of the updater, the MCU bootloader and the NAND model:
+  [firmware-update-and-nand.md](firmware-update-and-nand.md).
 - **Installed?** `provisioned.stamp`, else the NAND env has `release=` (written by the ALL update's
-  last step; the factory env lacks it) — the updater ends on "turn off the power", so the console
-  success line usually never prints and this is what catches a finished install.
+  last step; the factory env lacks it).
 - **Normal / Update**: each power-on runs `nand::boot` → `<dir>/nand-boot` (u-boot's
   `bootcmd_nand` host-side: `kernel_bank` → that bank's uImage → blobs + bootargs), so a firmware
   update done inside the emulator boots the new kernel. Update = `XDJ_BOOT_UPDATE=1`.
@@ -156,22 +164,16 @@ The app emulates the real unit: **no SD card**, everything lives in the emulated
   QEMU on the ctrl-socket connect, before rbp's first frame. Released 5 s after rbp's first
   non-blank LED frame (`_test_mode_boot`).
 
-**Contract that matters:** `xdj-host prep` prints **only the prepared dir path** to stdout (the
-shell reads stdout as `XDJ_FW_DIR`). The Python steps' own stdout is redirected to **stderr** so it
-can't pollute that path. The shell additionally reads the **last non-empty stdout line** defensively.
-> This was the "fails the first time, works the second" bug: on a cache miss the scripts flooded
-> stdout, the shell used the whole blob as `XDJ_FW_DIR`, and the launch's preflight then couldn't
-> find the nand. Keep stdout clean.
-
 ---
 
 ## 5. Firmware decryption key
 
 Pioneer `.UPD` files are AES-encrypted. The key is **user-supplied and never bundled**. Stored at
-`app-data/key/aes256.key`, content-sniffed at use: a 64-hex string → passed as `XDJRX_AES_KEY`;
-anything else → treated as a passphrase file (`--key-file`). The setup page's key box (paste 64-hex
-→ `set_key_hex`, or drop/Browse a file → `store_key_file`) writes it. In dev, a repo `.env` is a
-fallback (`xdjrx_upd.py` reads it). No key anywhere → a clear "add your key" error.
+`app-data/key/aes256.key`, content-sniffed at use (`resolve_firmware_key`): a 64-hex string is the
+key itself; anything else is treated as a losetup passphrase file. The setup page's key box (paste
+64-hex → `set_key_hex`, or drop/Browse a file → `store_key_file`) writes it. In dev, without that
+file, `XDJRX_AES_KEY` in the environment or `XDJRX_AES_KEY=` in the repo's `.env` (written by
+`tools/fetch_key.py`) is used. No key anywhere → a clear "add your key" error.
 
 ---
 
@@ -207,7 +209,7 @@ the host's own power channel. It is a port of `tools/xdj-panel/server.py`'s sock
 stays as the dev/debug-launcher server (`/tmp` file mode, HMP screendump, calibration); after
 changing either, run `tools/xdj-panel/test_panel_parity.py` (same scripted session against both,
 every snapshot / reply / LED / log line compared). The UI (`panel.html`) is an original,
-copyright-free design (the old device-photo background was removed). Full detail is in the
+copyright-free design (no device photography). Full detail is in the
 **`xdj-virtual-panel`** skill; the essentials:
 - Screen = noVNC over the `?vnc=` WebSocket (the host's VNC-unix→WS bridge on :6080).
 - Controls = HTTP POSTs (`/ctrl`, `/browse`, `/input`, `/mainkey`, `/usb`) → the control channels.
@@ -221,15 +223,54 @@ copyright-free design (the old device-photo background was removed). Full detail
 
 ---
 
+## 7a. MCP server (automation)
+
+The panel server also speaks **MCP** (Model Context Protocol, Streamable HTTP, stateless JSON
+responses) at `POST http://127.0.0.1:8765/mcp` — `app/host/src/mcp.rs`. It is up whenever the app
+(or `xdj-host`) runs, so an AI agent or a test script can drive the unit:
+
+```sh
+claude mcp add --transport http xdj-rx http://127.0.0.1:8765/mcp
+```
+
+Every tool goes through the panel's own routes, so an automated press is exactly a click on the
+virtual panel (same state model, snapshots, logs).
+
+| tool | does |
+|---|---|
+| `status` | power state, active firmware dir, installed release (NAND env), rbp running, LED payload |
+| `power` | `on` / `off` (the standby handshake) / `on_update` / `on_test` |
+| `load_firmware` | prepare a `.UPD`/`.zip` and boot it: it becomes the active firmware (its own NAND unit, provisioned first if blank) and the app's firmware on next launch |
+| `install_firmware_update` | File > Install Firmware Update: the updater installs a `.UPD` on the current unit |
+| `list_controls` | every control name with its frame field |
+| `press` | a named button (`deck1.play`, `menu`, `master_rec`, `rekordbox`…) or `B <off> <mask>`, held `hold_ms` (MENU: ~2000 for UTILITY) |
+| `set` | a fader/knob (`ch1.fader`, `crossfader`, `deck1.tempo`…) to 0..1023 |
+| `send_raw` / `release` | raw frame lines (`docs/subucom-frame-map.md`) / release holds |
+| `browse`, `jog`, `input_select` | the browse encoder, a jog wheel (turn/touch), channel DECK/LINE |
+| `insert_usb` | a disk image or `/dev/diskN` into USB1/USB2 (queued while off) |
+| `screenshot` | the 800×480 screen as a PNG image |
+| `leds` | rbp's LED/meter payload (`docs/subucom-led-map.md`) |
+| `console`, `wait_for_console` | the guest console (tail / grep), wait for a marker (`Resolve xrun` = firmware up) |
+
+Names: deck 1/2 buttons `deck<N>.<name>`, mixer `ch<N>.<eq_hi|eq_mid|eq_low|trim|fader|color>`,
+master section and centre buttons by name, top-panel keys `rekordbox midi usb1 usb2 deck_select
+time_mode`. Localhost only, no authentication (the panel routes have none either). The port follows
+`XDJ_PANEL_PORT`.
+
+---
+
 ## 8. USB media
 
 **At boot:** `maybe_insert_usb` (host) optionally inserts `XDJ_USB` on `XDJ_USB_SLOT` once `rbp` is
-polling (hub ports 1.2=usb1, 1.1=usb2). The attach alone wakes HOST1 (`xdj-usbnc.c` (was patch 10)). It does **not**
-write `/tmp/usb_insert` / `/tmp/usb2_insert` (it clears them): `xdj-panel.c` (was patch 06)'s files drive rbp's
-active-low USB fault flags, and asserting one causes "USB Error. Remove the device.". **At runtime:** the panel's USB LOAD buttons POST `/usb <slot> <path>`
-and the server does the same `drive_add`/`device_add` over QMP, **ejecting any previous insertion
-first** (USB STOP only unmounts in the firmware; the QEMU device stays plugged). Read-only
-(`snapshot=on`) by default. See `docs/usb-mount-howto.md`, `docs/usb-slot-topology.md`.
+polling — the console's `Resolve xrun` plus `XDJ_USB_DELAY` (default 6 s) — at hub port 1.2 = USB1
+or 1.1 = USB2. The attach alone wakes HOST1 (`xdj-usbnc.c`). It never creates `/tmp/usb_insert` /
+`/tmp/usb2_insert` (it deletes them): `xdj-panel.c`'s files drive `rbp`'s active-low USB fault flags,
+and asserting one causes "USB Error. Remove the device.". **At runtime:** the panel's USB LOAD
+buttons POST `/usb <slot> <path>` and the server does the same `drive_add`/`device_add` over QMP,
+**ejecting any previous insertion first** (USB STOP only unmounts in the firmware; the QEMU device
+stays plugged). Loads made while powered off are queued and inserted once the guest is ready.
+Read-only (`snapshot=on`) unless `XDJ_USB_WRITE=1` (boot-time insert only). The browser shows
+USB1; MASTER REC records to USB2. Full detail: [usb.md](usb.md).
 
 ---
 
@@ -277,11 +318,15 @@ noted; sensible defaults for both dev (repo) and packaged (`XDJ_RESOURCES`) layo
 | `XDJ_RUNTIME_DIR` | Sockets/logs dir (default: app-data `run/` packaged, `build/run` dev). Keep it short — macOS unix socket paths ≤ 104 chars. |
 | `XDJ_PARENT_PID` | Shell PID; the host exits if it dies (orphan cleanup). |
 | `XDJ_PANEL_PORT` / `XDJ_VNC_WS_PORT` | Default 8765 / 6080. |
-| `XDJ_USB` / `XDJ_USB_SLOT` / `XDJ_USB_DELAY` | Boot-time USB auto-insert. |
-| `XDJAUDIO` / `XDJSMP` | Audio backend / vCPU count. |
+| `XDJ_USB` / `XDJ_USB_SLOT` / `XDJ_USB_DELAY` / `XDJ_USB_WRITE` | Boot-time USB auto-insert: image or `/dev/diskN`, `usb1`/`usb2` (default `usb2`), settle seconds (default 6), `1` = persist writes. |
+| `XDJAUDIO` / `XDJSMP` | Audio backend / vCPU count (default 2; a NAND boot needs ≥ 2). |
 | `XDJ_AUTOSTART` | `0` = start powered off (the shell sets this); default/other = power on at start. |
 | `XDJ_CAL_REF` | Dev-only: reference photo for the panel's `?cal` calibration overlay (served at `/cal-ref`; 404 if unset). |
 | `XDJ_FORCE_SETUP` | Shell: always show the drop screen (testing). |
+
+The host sets the QEMU-side variables itself per power-on: `XDJ_BOOT_MEDIA=nand`, `XDJ_NAND_IMG`,
+`XDJ_PANELCOM_IMG`, and `XDJ_BOOT_UPDATE` / `XDJ_UPDATE_TYPE` for update mode and provisioning
+([firmware-update-and-nand.md](firmware-update-and-nand.md) §6).
 
 ---
 
@@ -328,11 +373,11 @@ qemu (`qemu/build-qemu.sh`), `dylibbundler`.
 shell to change them.
 
 This is **ad-hoc**, not Developer-ID signed or notarized: it runs locally but Gatekeeper will warn
-other users. Notarization is deferred (§14).
+other users (§15).
 
 ---
 
-## 14. Known pitfalls (all were real bugs — don't regress)
+## 14. Known pitfalls (don't regress)
 
 - **prep stdout must be only the dir path** (§4). Anything else → bad `XDJ_FW_DIR` → "panel didn't come up", first run only.
 - **`blocking_pick_file` freezes the app** on macOS — use the non-blocking callback form (§9).
@@ -345,17 +390,17 @@ other users. Notarization is deferred (§14).
 
 ---
 
-## 15. Deferred / next steps
+## 15. Not yet
 
-- **Notarization + Developer-ID signing** so non-dev users can run it without Gatekeeper warnings.
-- **Windows & Linux packaging** (the orchestrator is mostly portable; qemu bundling and the
+- **Notarization + Developer-ID signing**, so other users can run it without Gatekeeper warnings.
+- **Windows and Linux packaging** (the orchestrator is mostly portable; QEMU bundling and the
   dialog/socket bits need per-OS work).
-- **USB enumeration polish** — the cold-plug mount race is worked around (hub-only boot + delayed
-  insert), but see `docs/usb-accept-handover.md` for the deeper story.
-- **Retire the remaining Python dev scripts** (`fetch_key.py`, `build-nand.py`): firmware/NAND code is now the shared crate `crates/xdj-fw` (library for `xdj-host` + the `xdj` CLI).
+- **An Intel (x86_64) macOS build** — the bundle contains native binaries of the machine that
+  built it, which in practice is Apple Silicon.
 
 ## 16. See also
 Skills: `build-xdj-app`, `xdj-virtual-panel`, `run-xdj-emulator`, `qemu-imx6-patches`,
-`upd-firmware-format`, `build-xdj-sd-image`. Docs: [standalone-app-roadmap.md](standalone-app-roadmap.md),
-[usb-mount-howto.md](usb-mount-howto.md), [usb-slot-topology.md](usb-slot-topology.md),
-[emulator-status.md](emulator-status.md).
+`upd-firmware-format`, `custom-firmware`. Docs: [usb.md](usb.md),
+[firmware-update-and-nand.md](firmware-update-and-nand.md), [custom-firmware.md](custom-firmware.md),
+[service-modes.md](service-modes.md), [subucom-led-map.md](subucom-led-map.md),
+[testing.md](testing.md), [emulator-status.md](emulator-status.md).

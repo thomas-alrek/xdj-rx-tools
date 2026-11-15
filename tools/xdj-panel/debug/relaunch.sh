@@ -7,16 +7,16 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../../.."   # repo root
 Q=build/qemu
 QEMU=build/qemu-src/qemu-11.1.0/build/qemu-system-arm
 # Boot blobs (vmlinux/atags/tramp): XDJ_BOOT_DIR overrides build/qemu -- e.g. the output of
-# `qemu/xdj_nand.py boot <nand.img> <dir>` for a NAND boot (docs/update-path-plan.md).
+# `xdj nand boot <nand-flash.img> <dir>` for a NAND boot (docs/firmware-update-and-nand.md).
 B="${XDJ_BOOT_DIR:-$Q}"
-# SD card: build/qemu/nand.img (legacy SD test bed) unless XDJ_SD=none (a NAND unit has none).
+# SD card: build/qemu/nand.img (the dev SD test bed) unless XDJ_SD=none (a NAND unit has none).
 SD_ARGS=(-drive if=none,id=xdjsd,file="$Q/nand.img",format=raw,snapshot=on)
 [ "${XDJ_SD:-}" = "none" ] && SD_ARGS=()
 
-# Phase 1 control sockets (opt-in). Set XDJ_RUNTIME_DIR to push panel controls over
+# Control sockets (opt-in). Set XDJ_RUNTIME_DIR to push panel controls over
 # the QEMU chardevs (id=xdjctrl = sub-ucom snapshot, id=xdjkey = mainkey GPIO) per
 # instance, instead of the global /tmp/subucom_ctrl + /tmp/mainkey files. UNSET =
-# today's /tmp-file behavior (inj.py / sweep_*.py and the rest of the file-based
+# the /tmp-file behavior (inj.py / sweep_*.py and the rest of the file-based
 # debug suite keep working unchanged -- the chardev's presence is what switches the
 # harness into socket mode, so we add it only when asked). The monitor/serial stay
 # on their /tmp paths so mon.py/rsp.py and the panel screendump are unaffected.
@@ -32,7 +32,7 @@ fi
 # /tmp/xdj_console.log, which the panel's View > System log tails.
 
 # USB stick backend (id=usbstick) for the post-boot device_add -- only when the image exists.
-USBIMG="${XDJUSB:-test/usb/rekordbox_new.img}"
+USBIMG="${XDJUSB:-$(ls test/usb/*.img 2>/dev/null | head -1)}"
 USB_ARGS=()
 if [ -f "$USBIMG" ]; then
   USB_ARGS=(-drive if=none,id=usbstick,file="$USBIMG",format=raw,snapshot=on)

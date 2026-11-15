@@ -15,27 +15,27 @@ published GPL/LGPL source release for the XDJ-RX, at:
 
 This script resolves the key with the least work possible:
 
-  1. If ./aes256.key already exists  -> derive the key from it.          (instant)
+  1. If build/aes256.key exists       -> derive the key from it.          (instant)
   2. Else download the GPL source parts from Pioneer, unwrap the
      deflate64 ZIPs, stream just the two nested tars, pull aes256.key,
-     derive the key, and cache ./aes256.key.                            (~280 MB)
+     derive the key, and cache build/aes256.key.                        (~280 MB)
 
-The derived 32-byte AES-256 key is written to ./.env as:
+The derived 32-byte AES-256 key is written to the repo-root .env as:
 
     XDJRX_AES_KEY=<64 hex chars>
 
-which xdjrx_upd.py reads. Nothing Pioneer-owned is committed: .env and
+which the `xdj` CLI (and the desktop app in dev) reads. Nothing Pioneer-owned is committed: .env and
 aes256.key are git-ignored.
 
-    python3 fetch_key.py                 # resolve + write .env
-    python3 fetch_key.py --force         # re-fetch even if .env has a key
-    python3 fetch_key.py --version 1.40  # use a different GPL source version
+    python3 tools/fetch_key.py                 # resolve + write .env
+    python3 tools/fetch_key.py --force         # re-fetch even if .env has a key
+    python3 tools/fetch_key.py --version 1.40  # use a different GPL source version
 
 Downloading/unwrapping needs:  pip install inflate64
 """
 import argparse, io, os, sys, tarfile, urllib.request
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the repo root (this is tools/)
 WORKDIR = os.path.join(HERE, "build")          # all downloaded/extracted files live here (git-ignored)
 ENV_PATH = os.path.join(HERE, ".env")
 KEY_FILE = os.path.join(WORKDIR, "aes256.key")
@@ -154,7 +154,7 @@ def main():
     key = derive_key(get_passphrase(args.version))
     write_env(key)
     print(f"\nWrote {ENV_VAR} to {os.path.relpath(ENV_PATH)}  ({key.hex()})")
-    print("xdjrx_upd.py will now pick up the key automatically.")
+    print("The `xdj` CLI will now pick up the key automatically.")
 
 
 if __name__ == "__main__":

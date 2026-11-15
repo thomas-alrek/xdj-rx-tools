@@ -9,10 +9,10 @@
 # Board specifics handled on the QEMU side (firmware untouched; all via the
 # bootloader-style cmdline/atags and the patched machine, qemu/patches/):
 #   - ATAG_REVISION=0x500 (system_rev) so the board registers the subucom + AK4387
-#     spi_board_info (see qemu_prepare.py).
+#     spi_board_info (see `xdj prepare`, crates/xdj-fw/src/firmware.rs).
 #   - console on ttymxc0 (sabresd's early-console UART) -> serial 0 here.
 #   - video=mxcfb0:dev=ldb (SABRE-SD panel is LVDS) so /dev/fb0 comes up.
-#   - the nand image is attached to uSDHC3 via -drive id=xdjsd (03-sabresd-board (was patch 03)).
+#   - the nand image is attached to uSDHC3 via -drive id=xdjsd (03-sabresd-board).
 #
 # The boot splash renders at 32bpp, then the app switches the framebuffer to
 # 16bpp RGB565 and the main deck UI comes up. The QEMU scanout
@@ -32,7 +32,7 @@ QEMU="${QEMU:-$(ls build/qemu-src/*/build/qemu-system-arm 2>/dev/null | head -1 
 QEMU="${QEMU:-qemu-system-arm}"
 SD="${1:-$Q/nand.img}"
 for f in vmlinux.bin tramp.bin atags.bin; do
-  [ -f "$Q/$f" ] || { echo "missing $Q/$f — run: python3 qemu_prepare.py" >&2; exit 1; }
+  [ -f "$Q/$f" ] || { echo "missing $Q/$f — run: crates/xdj-fw/target/release/xdj prepare build/XDJRX.iso" >&2; exit 1; }
 done
 [ -f "$SD" ] || { echo "no nand image: $SD  (run qemu/build-nand.sh)" >&2; exit 1; }
 SMP="${XDJSMP:-2}"            # dual-core by default = real XDJ-RX config (boots fine now,
@@ -62,13 +62,9 @@ if [ "$NIC" != "user" ] && [ "$(uname)" = "Darwin" ] && [ "$(id -u)" != "0" ]; t
   echo "net: '$NIC' needs root on macOS (vmnet) — re-run with sudo, or unset XDJNIC for user-mode NAT" >&2
 fi
 
-# Optional USB mass-storage (a rekordbox-formatted disk image). Cold-plug only:
-# the EHCI hotplug path leaves the port connected-but-not-enabled, so the stick
-# must be present at boot to enumerate. Enable with XDJUSB=path/to/image.img.
-# NOTE: rbp currently crashes rendering rekordbox USB content (stubbed GPU 2D
-# path) -- see docs/emulator-status.md feature D -- so this is for bring-up, not
-# yet a working browse.
-USB_ARGS=()
+# Optional USB mass-storage at boot (a rekordbox-formatted disk image), cold-plugged on the
+# OTG bus -- for quick checks only. The front slots USB1/USB2 sit behind the hub and must be
+# inserted after rbp polls (tools/xdj-panel/debug/relaunch.sh + device_add, docs/usb.md):
 if [ -n "${XDJUSB:-}" ]; then
   [ -f "$XDJUSB" ] || { echo "XDJUSB=$XDJUSB not found" >&2; exit 1; }
   USB_ARGS=(-drive if=none,id=usbstick,file="$XDJUSB",format=raw
@@ -77,7 +73,7 @@ if [ -n "${XDJUSB:-}" ]; then
 fi
 
 # Audio: route the deck's master output to a host sink so you actually hear it.
-# The deck playhead (and the PCM) is slaved to the audio clock (xdj-audio.c (was patch 11)), and the
+# The deck playhead (and the PCM) is slaved to the audio clock (xdj-audio.c), and the
 # guest's ALSA ring is tiny (~2.9ms). QEMU's audio mixer polls voices on a timer
 # whose default period (10ms) is far too coarse to pace that ring -- the guest
 # then refills at ~27% of real time and the stream starves (very slow / silent).
@@ -92,10 +88,10 @@ AUDIO_OPT="${XDJAUDIO:-$AUDIO_DEF}"
 AUDIO_ARGS=()
 [ "$AUDIO_OPT" != "none" ] && AUDIO_ARGS=(-audio "$AUDIO_OPT")
 
-# Phase 1 control sockets (opt-in, per-instance). Set XDJ_RUNTIME_DIR to push panel
+# Control sockets (opt-in, per-instance). Set XDJ_RUNTIME_DIR to push panel
 # controls over the QEMU chardevs (id=xdjctrl = sub-ucom snapshot, id=xdjkey =
 # mainkey GPIO) instead of the global /tmp/subucom_ctrl + /tmp/mainkey files. UNSET =
-# today's behavior: no chardevs, so the harness falls back to the /tmp files (or
+# no chardevs, so the harness falls back to the /tmp files (or
 # XDJ_CTRL_PATH/XDJ_KEY_PATH), and existing panel/inject workflows are unchanged.
 CTRL_ARGS=()
 if [ -n "${XDJ_RUNTIME_DIR:-}" ]; then

@@ -1,8 +1,7 @@
 # XDJ-RX emulator debug tooling
 
 Raw helpers for poking the running emulator over its control sockets and the QEMU gdbstub,
-**without a host gdb** (macOS has no ARM gdb). Built while tracing the DECK/LINE routing — see
-`docs/deck-line-switch-handover.md` and `docs/subucom-frame-map.md`.
+**without a host gdb** (macOS has no ARM gdb). Control map: `docs/subucom-frame-map.md`.
 
 Endpoints the debug launcher exposes: monitor `/tmp/d_mon4.sock`, guest serial `/tmp/d_con4.sock`,
 gdb RSP `tcp::1234`. Audio debug (`XDJ_AUDIO_DEBUG=1`) prints `[sdma-au] master=.. peak=..` to the
@@ -11,7 +10,7 @@ launcher's stdout — `peak>0` means the master bus has signal.
 ## Files
 - **`relaunch.sh`** — launch the emulator in debug mode (single-core, cocoa window, the three sockets,
   audio-debug). Hub-only USB (do the post-boot `device_add` + `touch /tmp/usb2_insert`, per
-  `docs/usb-mount-howto.md`). Boots in ~30–60s; occasionally hangs — relaunch if no `[sdma-au]` after ~90s.
+  `docs/usb.md`). Boots in ~30–60s; occasionally hangs — relaunch if no `[sdma-au]` after ~90s.
 - **`rsp.py`** — minimal GDB-RSP client (ARM LE). Library + CLI:
   - `RSP().read_mem/write_mem/rd32/wr32` — guest memory R/W (virtual addresses; works while rbp is the
     current MMU context, which it is at any halt).

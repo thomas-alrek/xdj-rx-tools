@@ -3,7 +3,7 @@ name = "xdj-host"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-2.0-or-later"
-description = "XDJ-RX emulator orchestrator: supervises QEMU (per-instance QMP/VNC/control sockets), runs the panel sidecar, and bridges noVNC (WebSocket) to QEMU's raw-TCP/unix VNC. Phase 2 of the standalone-app roadmap."
+description = "XDJ-RX emulator orchestrator: supervises QEMU (per-instance QMP/VNC/control sockets), serves the virtual panel, prepares firmware, provisions and boots the emulated NAND unit, and bridges noVNC (WebSocket) to QEMU's VNC."
 
 [[bin]]
 name = "xdj-host"
@@ -16,6 +16,9 @@ tokio-tungstenite = "0.24.0"
 futures-util = "0.3.31"
 sha2 = "0.10.8"
 axum = { version = "0.7", default-features = false, features = ["http1", "tokio"] }
+serde_json = "1"
+flate2 = "1"
+crc32fast = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

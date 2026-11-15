@@ -48,10 +48,9 @@
  * attaches no SPI slave, so the driver reads zeros and the handshake never
  * completes.
  *
- * This is the traffic-capture stage: an SSI slave on each ECSPI bus that logs
- * every byte the driver clocks out (SUBUCOM_TRACE=1) so the panel_protocol
- * frame format can be reverse-engineered from real traffic, and returns a
- * placeholder 0xff on MISO.  The protocol response is filled in next.
+ * This SSI slave is that MCU: on every ECSPI burst it presents the control frame
+ * on MISO (xdj_subucom_frame_start) and captures rbp's MOSI LED payload;
+ * SUBUCOM_TRACE=1 logs every byte the driver clocks out.
  */
 #define TYPE_XDJ_SUBUCOM "xdj-subucom"
 OBJECT_DECLARE_SIMPLE_TYPE(XdjSubucom, XDJ_SUBUCOM)
@@ -99,7 +98,7 @@ DeviceState *g_xdj_gpio[8];
  * with each 32-bit word byte-swapped first (FUN_0028259c reads words and REVs
  * them, then calls the table CRC at 0x3f7f4; the length method 0x2859b8 returns
  * start+96). Decoding happens ONLY when this matches -- so a valid CRC is the
- * real gate for buttons, not the frame header. (RE 2026-11-05.)
+ * real gate for buttons, not the frame header.
  */
 static uint16_t xdj_crc16_tab[256];
 static int xdj_crc16_ready;
@@ -189,22 +188,22 @@ static bool xdj_autolevel_armed(void)
 }
 
 /*
- * Phase 1 control channel (XDJ-RX standalone-app roadmap). Read panel control
- * input from a QEMU chardev instead of polling a /tmp file every SPI frame. Two
- * independent channels, each a socket the harness (server.py now, the Tauri host
- * later) connects to and writes:
+ * Control channel. Read panel control input from a QEMU chardev instead of
+ * polling a /tmp file every SPI frame. Two independent channels, each a socket
+ * the harness (the app's xdj-host, or tools/xdj-panel/server.py in dev) connects
+ * to and writes:
  *   id=xdjctrl -> the sub-ucom snapshot (same text spec as /tmp/subucom_ctrl:
  *                 "B 12 08", "A 54 <hex>", one-shots "b"/"a")
  *   id=xdjkey  -> the MAIN-UCOM key GPIO int (same as /tmp/mainkey)
  * Framing: each write is the ENTIRE desired state (one snapshot) terminated by a
  * NUL byte; an empty record (a lone NUL) releases. One NUL record == one atomic
- * ctrl-file write today, so the file model's "the whole snapshot replaces the held
- * set" semantics are preserved. On client disconnect the last snapshot is kept
+ * ctrl-file write, so the file model's "the whole snapshot replaces the held set"
+ * semantics hold on both inputs. On client disconnect the last snapshot is kept
  * (mirrors "the file stays until removed"), so holds/auto-level survive a harness
  * restart.
  *
  * If a channel's chardev is absent, the frame hook falls back to its file path
- * (XDJ_CTRL_PATH / XDJ_KEY_PATH, else the legacy /tmp names) -- the env override
+ * (XDJ_CTRL_PATH / XDJ_KEY_PATH, else the default /tmp names) -- the env override
  * also makes the file path per-instance.
  *
  * Thread-safety: the chardev frontend handlers and xdj_subucom_frame_start (called
@@ -296,8 +295,8 @@ static void xdj_ctrl_chan_write(XdjCtrlChan *c, const uint8_t *buf, int len)
  * the /tmp/subucom_ctrl file) into the hold arrays. Returns the number of holds.
  * If a one-shot ("b"/"a") line is present, fills the inj_off/inj_val/inj_bit
  * out-params from the first one and sets has_oneshot (the caller fires it, so
- * an in-flight one-shot is never clobbered). Parsing matches the old inline
- * fopen/fgets loop byte-for-byte -- only the input source changed.
+ * an in-flight one-shot is never clobbered). The /tmp/subucom_ctrl file and the
+ * xdjctrl chardev share this parser, so both inputs behave identically.
  */
 static int xdj_parse_ctrl(const char *text, int maxhold,
                           int *hold_off, long *hold_val, int *hold_bit,
@@ -368,7 +367,7 @@ static int xdj_parse_ctrl(const char *text, int maxhold,
 
 /* Source-key LEDs (rekordbox / MIDI / USB1 / USB2). Not in SubTxData: rbp drives
  * them as GPIO outputs 162..165 (GPIO6_IO02..05, active-high, one-hot, verified
- * live 2026-11-15). Mirrored here (bit0 = rekordbox .. bit3 = USB2) and appended
+ * live). Mirrored here (bit0 = rekordbox .. bit3 = USB2) and appended
  * to every published LED line as a 21st byte. */
 static uint8_t g_xdj_srcled;
 
@@ -470,9 +469,8 @@ void xdj_srcled_set(void *opaque, int n, int level)
  * Called by the ECSPI (imx_spi_flush_txfifo) at the start of every SPI burst so
  * the panel's SubRxData frame is presented byte-aligned on MISO. We build the
  * frame in rbp's buffer coordinates (rbp_buf[j]), compute the CRC rbp expects,
- * then shift it by +3 into the MISO buffer (the kernel drops 3 MISO bytes during
- * the command prefix, so rbp_buf[j] == slave frame[j+3]).
- * `touch /tmp/subucom_menu` injects one menu-button press.
+ * then present it on MISO with each 32-bit word byte-reversed (the ECSPI shifts
+ * words MSB-first). File mode only: `touch /tmp/subucom_menu` = one MENU press.
  */
 static int xdj_subucom_version(void);   /* SUB bootloader block, below */
 
@@ -575,7 +573,7 @@ void xdj_subucom_frame_start(void)
      *   "A <off> <value>"    -> HOLD an LE 16-bit analog value while the file exists
      * Offsets/values are hex. Uppercase B/A = persistent hold (lets a tester observe
      * held/analog/momentary states and fader positions; release by removing the file).
-     * `touch /tmp/subucom_menu` is the legacy one-shot MENU shortcut.
+     * `touch /tmp/subucom_menu` is a one-shot MENU shortcut.
      */
     /*
      * Up to MAXHOLD simultaneous persistent holds (A/B lines), parsed from ALL
@@ -609,7 +607,7 @@ void xdj_subucom_frame_start(void)
             } else if (!has_os) {
                 xdj_ctrl_chan.fresh = false;    /* nothing to fire; consume freshness */
             }                                   /* has_os & press>0: keep fresh, retry */
-        } else {                                /* fallback: XDJ_CTRL_PATH / legacy file */
+        } else {                                /* fallback: XDJ_CTRL_PATH / /tmp file */
             const char *path = getenv("XDJ_CTRL_PATH");
             FILE *cf;
             if (!path || !path[0]) {
@@ -637,7 +635,7 @@ void xdj_subucom_frame_start(void)
          * initial mixer state "just works" for testing while the web panel / inj
          * can still override ANY individual control at runtime (its hold for that
          * offset wins) -- and an unrelated leftover hold (e.g. a browse-encoder
-         * value) can no longer silence the deck by suppressing the whole set.
+         * value) cannot silence the deck by suppressing the whole set.
          */
         if (xdj_autolevel_armed()) {
             int d;
@@ -656,9 +654,9 @@ void xdj_subucom_frame_start(void)
             }
         }
         nhold = newn;
-        /* legacy MENU one-shot shortcut (only when no ctrl input is present) */
+        /* MENU one-shot shortcut (only when no ctrl input is present) */
         if (!had_input && s->press == 0 && access("/tmp/subucom_menu", F_OK) == 0) {
-            inj_off = 0x1b; inj_bit = 0x01; inj_val = -1; /* MENU (code 0x20a) */
+            inj_off = 0x5f; inj_bit = 0x01; inj_val = -1; /* MENU (0x5f.0, code 0x20a) */
             s->press = 30; remove("/tmp/subucom_menu");
         }
     }
@@ -743,9 +741,8 @@ void xdj_subucom_frame_start(void)
      * Present the frame on MISO.  The ECSPI shifts each 32-bit word MSB-first,
      * so the wire byte at position p lands in rbp's logical read buffer B at
      * index (p & ~3) + (3 - (p & 3)) -- a per-32-bit-word byte reversal, with
-     * NO linear byte drop (gdb calibration against live rbp, 2026-11-06,
-     * confirmed to the byte; the earlier +3 "kernel drops 3 MISO bytes" was a
-     * misreading of this word swap).  This is exactly the swap rbp's CRC
+     * NO linear byte drop (calibrated with gdb against live rbp, confirmed to
+     * the byte; it is a word swap, not a dropped-byte offset).  This is exactly the swap rbp's CRC
      * routine (FUN_0028259c) reverses before hashing.  So to make rbp's buffer
      * equal our logical frame rbp[] -- CRC at rbp_buf[0x62], control sections
      * at 0x04/0x14/0x24/0x34/0x44 -- we transmit rbp[] with each word reversed:
@@ -772,7 +769,7 @@ void xdj_subucom_frame_start(void)
  * ---- SUB bootloader: the panel MCU's flash update protocol --------------------------
  * Used by the firmware's `update` program (SpiDownloader / SubucomRequestManager) to
  * reflash the panel MCU from images/PANELCOM.mot. Protocol (RE'd from the unstripped
- * updater + GPL kernel subucom_spi.c / gpiodrv.c; docs/update-path-plan.md):
+ * updater + GPL kernel subucom_spi.c / gpiodrv.c; docs/firmware-update-and-nand.md):
  *  - The updater stops the subucom driver's periodic timer; SPI bursts then happen only
  *    on its write() (request) and read() (16-byte response). It word-reverses its
  *    buffers and the ECSPI shifts words MSB-first, so the wire carries the logical bytes.

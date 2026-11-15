@@ -10,12 +10,11 @@ human-facing counterpart to the `map-*` skills: once a control's frame spec is k
 here. Runs two ways: standalone in a browser (dev, `server.py`), and inside the Tauri desktop app (served by `xdj-host`'s in-process `panel.rs`)
 (see skill [build-xdj-app]).
 
-## Design (post-rebuild, late 2026-11)
-The panel was **rebuilt as an original flat design** — the old version used a copyrighted Pioneer
-device **photo** as its background; that photo was deleted and must never ship again. Current
-`panel.html`:
+## Design
+`panel.html` is an **original flat design**: a dark console drawn with decorative section boxes
+(`ZONES`) + real widgets. **Never use a Pioneer device photo or artwork** (copyrighted) — not as a
+background, not as a shipped calibration reference.
 
-- **No photo.** A dark console drawn with decorative section boxes (`ZONES`) + real widgets.
 - **Widgets** = npm **`audio-knobs`** (MIT, HowdyMoto/Knobs), vendored to `/knobs/`: `Kn.Knob`
   (pots; FX SELECT / CH SELECT as a **stepped** bounded knob), `Kn.createInfiniteKnob` (the browse
   encoder, BEAT FX TIME). Jogs, faders and the
@@ -25,7 +24,7 @@ device **photo** as its background; that photo was deleted and must never ship a
   pointer-angle → jog spec. Faders =
   div track + thumb (`vfader`/`vfader-c`/`xfader`). CUE/PLAY = round `.jogbtn` (play tinted green).
   Browse encoder = infinite knob with a centre **PUSH** button.
-- **Interaction conventions (2026-11-15):**
+- **Interaction conventions:**
   - **Double-click resets**: TEMPO faders + crossfader → centre (`centerDrag()`; these drag
     *relative* to the grab point, no jump on press, so a double-click doesn't nudge the value);
     TRIM / HI / MID / LOW / COLOR knobs → mid (`mid:true` in `C`). Channel faders have no reset.
@@ -38,13 +37,13 @@ device **photo** as its background; that photo was deleted and must never ship a
     sizes), so `setLabel()` draws every `◄` as a mirrored `►` (`.flip`).
 - **Channel INPUT SELECT** (DECK ↔ LINE/PHONO, frame bits `0x33.7`/`0x43.7`) is the toggle in each
   channel strip (`srcCh` entries `deck1src`/`deck2src`, ids `src0`/`src1`, blue DECK / amber LINE;
-  `toggleSrc` → `POST /input`). It used to be in the header. The rear **LINE/PHONO** EXT-TYPE switch
+  `toggleSrc` → `POST /input`). The rear **LINE/PHONO** EXT-TYPE switch
   (GPIO 119/120) is deliberately **not** on the panel — there's no external audio to switch.
 - **Layout notes:** LEVEL meters are one centred bank (`t:'meterbank'`: CH1 | MASTER | CH2 between
   the LOAD keys and XF CURVE, like the device; MASTER is one column — rbp sends one master level, and
   no dB scale is drawn since the segment→dB mapping is unknown). BROWSE/TAG LIST/INFO/MENU are evenly
   spaced; the display keys right of the screen use the left column's pitch, top-aligned.
-- **Layout = grid in design units (late 2026-11 overhaul).** Positions are written in units of a
+- **Layout = grid in design units.** Positions are written in units of a
   `W×H = 2142×1184` canvas via helpers `put/btn/knob/round(id,cx,cy,w,h)` into `L`, then converted to
   percent `COORDS` of the fixed-aspect `#stage` (`aspect-ratio: 2142/1184`, sized with `min(100cqw,
   100cqh·aspect)` so it never distorts). Bands/zones are constants (`D1_X`, `D2_X`, `MIX_X`, `MAIN_Y`…);
@@ -55,7 +54,7 @@ device **photo** as its background; that photo was deleted and must never ship a
   `const C = {}` is the control registry (`l` label, `t` type, `spec`/`gpio`/`specUp`…).
 - **Screen**: noVNC (`?vnc=ws://host/`, RFB over WebSocket) in the app, or `/raw` screendump poll
   in dev. `#screen,#screen *{cursor:default!important}` keeps the pointer visible (noVNC hides it).
-- **The window is only the virtual deck** (2026-11-15): no header bar, no log strip, no in-page
+- **The window is only the virtual deck**: no header bar, no log strip, no in-page
   menu (by request — don't add one). Everything else lives in the **native menu bar** (app only):
   `MENU` in `panel.html` = File | Edit | Mixer | Deck 1 | Deck 2 | Color FX | FX | Master | View |
   Window, built with `window.__TAURI__.menu` (`buildAppMenu`, needs `core:menu:default`) and set as
@@ -70,9 +69,11 @@ device **photo** as its background; that photo was deleted and must never ship a
   system log tails the guest console (`--console`; default `console.log` beside `--ctrl-sock` = the
   app's runtime dir, else `/tmp/xdj_console.log`, which `relaunch.sh` writes via chardev `logfile=`).
 - **POWER switch** (top-left, `t:'power'`, red LED = on; hidden unless `GET /power` says
-  `available`, i.e. run by `xdj-host`). Click = `POST /power on[ update|test]|off` (`off` while rbp runs =
-  the standby handshake: press POWER `0x5d.0`, rbp answers TX `0x11='S'`, then cut; see service-modes.md) (panel → host
-  `power.sock`, see [build-xdj-app]). File menu: *Power On / Off*, *Power On in Test Mode* (`POST /power on test`), *Install Firmware
+  `available`, i.e. run by `xdj-host`). Click = `POST /power on[ update|test]|off` (panel → host
+  `power.sock`, see [build-xdj-app]). `off` while rbp runs = the **standby handshake**: press POWER
+  `0x5d.0` (active-low; the harness inverts it), wait ≤ 10 s for rbp's TX byte `0x11 = 'S'`, then
+  cut (`standby_cut` / `_standby_cut`; also fires on rbp's own AUTO STANDBY; `docs/service-modes.md`).
+  *Power On in Test Mode* holds MEMORY + TEMPO RANGE and releases them after `ALSA: Resolve xrun`. File menu: *Power On / Off*, *Power On in Test Mode* (`POST /power on test`), *Install Firmware
   Update…* (`POST /install-update <path>`: stick from the .UPD + update-mode boot, both servers), check items *Enter Firmware Update
   Mode (at next power on)* and *Power On at Launch* (both `localStorage` prefs `xdj.updateMode` /
   `xdj.powerOnLaunch`). Powered off: LED stream sends `off` (panel darkens everything) and `#screen`
@@ -100,8 +101,9 @@ device **photo** as its background; that photo was deleted and must never ship a
 ### Checking layout changes
 Serve with `python3 tools/xdj-panel/server.py --port 8799` and screenshot headless Chrome
 (`--headless --window-size=1760,1150 --screenshot=out.png --virtual-time-budget=2500`), **and** in
-WebKit (the app's engine) — a tiny Swift `WKWebView.takeSnapshot` tool works. The old `?cal=` photo
-overlay (`XDJ_CAL_REF`, `/cal-ref`, 404s if unset) still exists but no longer matches the grid layout.
+WebKit (the app's engine) — a tiny Swift `WKWebView.takeSnapshot` tool works. A dev-only `?cal=1`
+overlay (`XDJ_CAL_REF` → `/cal-ref`, 404 if unset) can underlay a local reference image; it is never
+shipped.
 
 ## The panel server: two implementations, kept identical
 - **In the app: `app/host/src/panel.rs`**, in-process in `xdj-host` (axum, :8765): socket mode only
@@ -109,6 +111,9 @@ overlay (`XDJ_CAL_REF`, `/cal-ref`, 404s if unset) still exists but no longer ma
 - **Dev / debug launcher: `tools/xdj-panel/server.py`**: the same routes plus `/tmp`-file mode, the HMP
   screendump (`/raw`) and calibration. Run: `python3 tools/xdj-panel/server.py --port 8765 --mon
   /tmp/d_mon4.sock`.
+- **MCP** (`app/host/src/mcp.rs`, `POST /mcp`, app only — not in `server.py`): agent tools layered on
+  the routes below (`press`, `set`, `browse`, `insert_usb`, `screenshot`…). A newly mapped control
+  also goes into its `controls()` name table.
 - **Change both, then run `tools/xdj-panel/test_panel_parity.py`**: it plays one scripted session
   against each (fake chardev sockets record every snapshot) and diffs snapshots, HTTP replies, LEDs and
   the control log. Byte-for-byte quirks matter (e.g. `%02x` of negatives, unknown `/jog` verbs = ok).
@@ -124,16 +129,17 @@ overlay (`XDJ_CAL_REF`, `/cal-ref`, 404s if unset) still exists but no longer ma
 | `POST /usb` | `<usb1\|usb2> <path>` | mount a disk image/device on a front slot (see below) |
 | `GET /raw` | — | framebuffer (`X-Width`/`X-Height` headers, body `w*h*3`) |
 | `GET /power` | — | `{available, state:on/off, update, pending:{slot:path}}` (host power control) |
-| `POST /power` | `on` / `on update` / `off` / `toggle` | power the emulator via `xdj-host` (503 when not run by it) |
+| `POST /power` | `on` / `on update` / `on test` / `off` / `toggle` | power the emulator via `xdj-host` (503 when not run by it) |
+| `POST /install-update` | `<path to .UPD/.zip>` | build a stick from it, cold-boot into update mode, insert on USB1 |
 | `GET /log/subucom` `/log/console` | — | **SSE** log lines (backlog first); page `GET /logs.html?src=…` |
 | `POST /log/note` | text | append a panel note to the sub-ucom log |
 | `GET /leds` | — | **SSE** stream of rbp's 20-byte LED payload (`data: <40 hex>` per change); `?once=1` = JSON |
 | `GET /cal-ref` | — | dev calibration overlay image (`XDJ_CAL_REF`; 404 if unset) |
 
-## Inject/hold model (important — reworked 2026-11-14)
+## Inject/hold model (important)
 The QEMU harness treats each snapshot as the **whole** frame state (an omitted field falls back
 to the auto-level default / 0). So `server.py` keeps the panel's **full state** and re-sends all
-of it on every write (`_compose_ctrl`):
+of it on every write (`_compose_ctrl` / its `panel.rs` twin):
 - `_analog {off: val}` — every fader/knob moved (persistent; `A` lines).
 - `_held {(off,mask)}` — buttons currently down; **many at once** (SHIFT combos), OR-merged per
   byte. `B` line on press, `POST /release` with that same line on release (empty body = all).
@@ -141,10 +147,10 @@ of it on every write (`_compose_ctrl`):
   CH SELECT, XF CURVE, MIC — they share byte `0x5a`/`0x5b` with buttons.
 - `_jog` per deck — counter `+0x0e`, period `+0x0c`, flags `+0x10` (touch/reverse); `POST /jog`
   `"<deck> move <deg> <sec>"` / `"<deck> touch <0|1>"`; an idle thread zeroes the period.
-- browse counter (`0x54`) and INPUT SELECT holds, as before. One-shot `a`/`b` ride on top.
+- browse counter (`0x54`) and INPUT SELECT holds. One-shot `a`/`b` ride on top.
 Buttons are **held while pressed** (real-hardware semantics), not one-shots. The panel sends all
 analog/switch defaults once at load (`pushInitialState`) so the emulator matches the UI. Needs
-`xdj-panel.c` (was patch 14)** (frame hook + `MAXHOLD` 64). The control table `C` in `panel.html` is
+`xdj-panel.c` (frame hook + `MAXHOLD` 64). The control table `C` in `panel.html` is
 runtime-verified — see the top table in `docs/subucom-frame-map.md` before changing a spec.
 
 ## USB mount from the panel (`/usb`, LOAD buttons)
@@ -152,19 +158,21 @@ runtime-verified — see the top table in `docs/subucom-frame-map.md` before cha
 (in the app, via the Tauri dialog plugin — `window.__TAURI__.dialog.open`; dev browser falls back to
 a typed-path prompt), then POSTs `<slot> <path>` to `/usb`. `mount_usb()`:
 1. **Ejects first** (`device_del` + `drive_del` of the previous panel insert *and* the boot
-   auto-insert id) and removes any stale `xdj-panel.c` (was patch 06) fault file — USB STOP is only a firmware unmount, the QEMU
+   auto-insert id) and removes any stale `xdj-panel.c` fault file — USB STOP is only a firmware unmount, the QEMU
    device stays plugged, so a second LOAD would hit "Duplicate ID" / port-in-use.
 2. Symlinks the image to a space-free path, `drive_add`+`device_add` on the hub (port **1.2** = usb1,
    **1.1** = usb2) with a **fresh unique id**, read-only (`snapshot=on`) by default.
 3. Does **not** write `/tmp/usb_insert` / `/tmp/usb2_insert` (it removes any stale one). Those
-   `xdj-panel.c` (was patch 06) files drive rbp's active-low USB **fault** flags — asserting one causes "USB Error.
-   Remove the device." The attach alone wakes HOST1 (`xdj-usbnc.c` (was patch 10)). Mirrors the host's `maybe_insert_usb`
-   (docs/usb-mount-howto.md, usb-slot-topology.md). Monitor access: QMP `human-monitor-command`
-   when `--qmp` is set, else raw HMP on `--mon`.
+   `xdj-panel.c` files drive rbp's active-low USB **fault** flags — asserting one causes "USB Error.
+   Remove the device." The attach alone wakes HOST1 (`xdj-usbnc.c`). Mirrors the host's `maybe_insert_usb`
+   (`docs/usb.md`). Monitor access: QMP `human-monitor-command` when `--qmp` is set, else raw HMP
+   on `--mon`.
+The BROWSE screen lists **USB1**; MASTER REC (`B 5e 04` = `0x5e.2`, code `0x401`) records the master
+to the **USB2** stick, and its LED `0x0a.7` blinks while recording.
 
-## LEDs, meters, jog rings (`/leds`, `xdj-panel.c` (was patch 15))
+## LEDs, meters, jog rings (`/leds`, `xdj-panel.c`)
 rbp sends the panel MCU its LED state in the MOSI half of every sub-ucom burst (`SubTxData`).
-`xdj-panel.c` (was patch 15) publishes each change as `T <40 hex>\n`: **socket mode** = back up the `xdjctrl`
+`xdj-panel.c` publishes each change as `T <40 hex>\n`: **socket mode** = back up the `xdjctrl`
 connection (the server's `_leds_sock_loop` shares `_conn["ctrl"]` with `_sock_send`); **file
 mode** = `/tmp/subucom_tx` (`XDJ_TX_PATH`), polled by `_leds_file_loop`. The server fans it out
 over SSE; `panel.html` `startLeds()` → `applyLeds(hex)`:
@@ -177,7 +185,7 @@ over SSE; `panel.html` `startLeds()` → `applyLeds(hex)`:
 - `t:'meter'` cells (`meter:<byte>`) = 12-segment bars from a 16-bit LE bitmask (CH1 `0x0e`,
   CH2 `0x0c`, MASTER `0x08`). Grid rows, not flex (WKWebView flex-fill collapse).
 - jog cells get a `.jogled` ring: byte `0x00`/`0x04` = 1..36 position, 0 = full ring, else off.
-- **byte `0x14`** (`xdj-board.c` (was patch 17), the 21st byte) = source-key LEDs from GPIO 162–165: bit0 rekordbox,
+- **byte `0x14`** (`xdj-board.c`, the 21st byte) = source-key LEDs from GPIO 162–165: bit0 rekordbox,
   bit1 MIDI, bit2 USB1, bit3 USB2 — the `src_*` keys use `led:[0x14,n]` like any other LED.
   `server.py` accepts 40 or 42 hex.
 Map + open items: `docs/subucom-led-map.md`. Map a new LED with `debug/ledprobe.py` (file mode).
@@ -189,7 +197,8 @@ Map + open items: `docs/subucom-led-map.md`. Map a new LED with `debug/ledprobe.
    (design units, see Layout above). `t` ∈ `knob|vfader|vfader-c|xfader|rotary|
    encoder|jog|` (default = button). Buttons: `spec` (sub-ucom), `gpio` (mainkey), `pad`/`big`/
    `round` styling, `longpress`, `usb`, `led:[byte,bit,low]`/`ledc` (LED from `/leds`).
-3. JS helpers in `panel.html`: `sctrl(spec)`, `release()`, `mainkey(n)`, `post(path,body)`,
+3. Give it a name in `app/host/src/mcp.rs` `controls()` (MCP `press`/`set`).
+4. JS helpers in `panel.html`: `sctrl(spec)`, `release()`, `mainkey(n)`, `post(path,body)`,
    `doMount(slot,path)`. `cell(id)` dispatches by `t`.
 
 ## Gotchas
@@ -213,7 +222,13 @@ Map + open items: `docs/subucom-led-map.md`. Map a new LED with `debug/ledprobe.
 - Loading the panel page **pushes its full default state** (`pushInitialState`) — opening a second
   panel tab or a headless snapshot resets the emulator's mixer to the panel defaults.
 
+- **MENU must be held** (~2 s) to open UTILITY on the device; a short tap leaves it. The panel's
+  MENU button is a real hold (press = `B`, release = `POST /release`); the native menu's `tap(id)`
+  presses for only 160 ms, i.e. a short tap.
+
 ## References
-`tools/xdj-panel/{server.py,panel.html,logs.html}`, `app/ui/{node_modules/audio-knobs,novnc}`.
-Skills: [build-xdj-app], [run-xdj-emulator], [map-subucom-button/fader/knob/rotary],
-[map-gpio-control]. Docs: `docs/subucom-frame-map.md`, `docs/subucom-led-map.md`, `docs/usb-mount-howto.md`. Memory: [[photo-panel]].
+`tools/xdj-panel/{server.py,panel.html,logs.html,test_panel_parity.py,README.md}`,
+`app/host/src/panel.rs`, `app/ui/{node_modules/audio-knobs,novnc}`, `tools/test/regress.py`
+(stage `panel`). Skills: [build-xdj-app], [run-xdj-emulator], [map-subucom-button/fader/knob/rotary],
+[map-gpio-control]. Docs: `docs/subucom-frame-map.md`, `docs/subucom-led-map.md`, `docs/usb.md`,
+`docs/service-modes.md`.

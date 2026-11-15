@@ -36,7 +36,7 @@ live screen.
 ## Mapping status (colour)
 
 - 🟢 **verified** (green underline) — confirmed on screen: TEMPO faders & TEMPO RANGE
-  (both decks), BEAT FX ROLL/TAP. See [`docs/xdj-rx-control-map.md`](../../docs/xdj-rx-control-map.md).
+  (both decks), BEAT FX ROLL/TAP. See [`docs/subucom-frame-map.md`](../../docs/subucom-frame-map.md).
 - 🟡 **best-guess** (amber) — plausible offsets/bits not yet confirmed (deck transport,
   mixer, browser/nav, most beat-FX). Press them and watch the screen to confirm or
   correct; audio-only controls (EQ/faders/crossfader/mic) won't change the screen — those

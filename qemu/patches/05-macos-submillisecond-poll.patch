@@ -4,7 +4,7 @@ qemu_poll_ns() rounded every timeout UP to whole milliseconds when ppoll is
 unavailable, so on macOS every sub-ms QEMU timer fired ~1 ms late (EHCI microframe
 polling, any other fine-grained device timer). Poll for the whole milliseconds,
 then nanosleep the remainder and poll once more without blocking. Linux hosts
-(ppoll) are unaffected. (Was patch 21.)
+(ppoll) are unaffected.
 
 --- a/util/qemu-timer.c
 +++ b/util/qemu-timer.c

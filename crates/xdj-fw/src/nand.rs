@@ -1,5 +1,4 @@
-//! The unit's NAND image (was qemu/xdj_nand.py, which stays as the dev tool; keep the
-//! two in step). The image is the raw flash qemu/xdj/xdj-nand.c stores: 131072 pages
+//! The unit's NAND image (`xdj nand …`). The image is the raw flash qemu/xdj/xdj-nand.c stores: 131072 pages
 //! of 2048+64 bytes, page-major, OOB included, in the i.MX6 GPMI/BCH layout:
 //!
 //!   raw page = [10-byte metadata][512 data0][13 ecc0][512 data1][13 ecc1]...[512 data3]

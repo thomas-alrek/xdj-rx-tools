@@ -2,14 +2,17 @@
 """
 Local bridge for the virtual XDJ-RX panel.
 
-Serves index.html and turns panel actions into the emulator's control-injection
-protocol, and streams the QEMU framebuffer to the browser as raw RGB (drawn on a
-<canvas>) — no per-frame image encoding, over a persistent monitor connection:
+Serves panel.html (at / and /panel.html) plus logs.html, /assets, /novnc and /knobs,
+turns panel actions into the emulator's control-injection protocol, and streams the
+QEMU framebuffer to the browser as raw RGB (drawn on a <canvas>) — no per-frame image
+encoding, over a persistent monitor connection:
 
   POST /ctrl     body="A 2c 3ff" / "B 12 08" / "b 5e 01" / "S 5a e0 20"
                  -> set analog / hold button / one-shot / set switch field
   POST /release  body="B 12 08" (or empty = all)          -> let go of held button(s)
   POST /jog      body="1 move <deg> <sec>" | "1 touch 1"  -> jog wheel (counter/period/flags)
+  POST /input    body="<0|1> DECK|LINE"   POST /browse body="<signed detents>"
+  POST /mainkey  body="<gpio>" / /mainkey_release          POST /usb body="<usb1|usb2> <path>"
   GET  /raw                      -> latest framebuffer as raw RGB
                                     (headers X-Width / X-Height; body w*h*3 bytes)
   GET  /logs.html?src=subucom|console -> log window page; GET /log/<src> = its SSE stream
@@ -18,32 +21,32 @@ protocol, and streams the QEMU framebuffer to the browser as raw RGB (drawn on a
   POST /log/note                 -> append a panel note to the sub-ucom log
   POST /install-update  body=<path to .UPD/.zip> -> stick from it + cold boot into update mode
   GET  /leds                     -> Server-Sent Events: one "data: <40|42 hex>" per change of
-                                    rbp's 20-byte LED/meter payload (SubTxData, xdj-panel.c (was patch 15);
+                                    rbp's 20-byte LED/meter payload (SubTxData, xdj-panel.c;
                                     layout docs/subucom-led-map.md). /leds?once=1 = current JSON.
 
 A QEMU `screendump` of the 800x480 surface takes ~18 ms, so /raw back-to-back gives
 20-40 fps on localhost. The QEMU xdj-subucom harness reads /tmp/subucom_ctrl each
 frame: b/a = one-shot press+release ; B/A = hold while the file exists (release on rm).
 
-Control transport (standalone-app Phase 1): by default the control state is written to
+Control transport: by default the control state is written to
 the /tmp files (/tmp/subucom_ctrl, /tmp/mainkey) that the QEMU harness polls. Pass
 --ctrl-sock / --key-sock to instead push it to the per-instance QEMU chardev sockets
 (id=xdjctrl / id=xdjkey) as NUL-terminated snapshots -- launch QEMU with XDJ_RUNTIME_DIR
-set (watch.sh / relaunch.sh) so those sockets exist. This is the reference client for the
-Phase 2 Rust host.
+set (watch.sh / relaunch.sh) so those sockets exist. The app's Rust host (app/host/src/
+panel.rs) speaks the same protocol; test_panel_parity.py checks the two agree.
 
 Usage:  python3 tools/xdj-panel/server.py [--port 8765] [--mon /tmp/d_mon4.sock]
                 [--ctrl-sock <dir>/ctrl.sock] [--key-sock <dir>/key.sock]
 Then open http://127.0.0.1:8765
 """
-import argparse, http.server, socketserver, socket, time, os, threading, json, subprocess
+import argparse, http.server, socketserver, socket, time, os, threading, json, subprocess, re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(HERE, "assets")
 CAL = os.path.join(ASSETS, "calibration.json")
 # Vendored noVNC (served at /novnc/* so panel.html's screen pane can use RFB-over-
-# WebSocket when launched with ?vnc=ws://... -- the standalone-app Phase 2 path).
-# XDJ_NOVNC_DIR overrides the dev repo path (the packaged .app sets it; Phase 5).
+# WebSocket when launched with ?vnc=ws://... -- as the desktop app does).
+# XDJ_NOVNC_DIR overrides the dev repo path (the packaged .app sets it).
 NOVNC = os.environ.get("XDJ_NOVNC_DIR") or os.path.normpath(
     os.path.join(HERE, "..", "..", "app", "ui", "novnc"))
 # The Knobs library (npm: audio-knobs), served at /knobs/* for the panel's knobs/faders.
@@ -56,13 +59,12 @@ MON = "/tmp/d_mon4.sock"
 QMP = None                      # QEMU QMP unix socket (the .app passes this; used for USB mount)
 PPM = "/tmp/xdjpanel_fb.ppm"
 
-# Phase 1 control transport. When --ctrl-sock / --key-sock are given, control state
+# Control transport. When --ctrl-sock / --key-sock are given, control state
 # is pushed to the QEMU chardev sockets (id=xdjctrl / id=xdjkey) as NUL-terminated
 # snapshots instead of the /tmp files -- QEMU is the server, we connect as a client.
 # Each record is the ENTIRE desired state (one snapshot); an empty record releases.
-# When unset we keep writing the /tmp files exactly as before (the env-path fallback
-# in the QEMU harness still lets those be per-instance). This is the reference client
-# for the Phase 2 Rust host.
+# When unset we write the /tmp files (the env-path fallback in the QEMU harness lets
+# those be per-instance).
 CTRL_SOCK = None
 KEY_SOCK = None
 _sock_lock = threading.Lock()
@@ -76,7 +78,7 @@ _CTYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
 
 _grab_lock = threading.Lock()
 
-# LED back-channel (xdj-panel.c (was patch 15)). rbp streams its LED / level-meter state to the
+# LED back-channel (xdj-panel.c). rbp streams its LED / level-meter state to the
 # panel MCU as a SubTxData frame; the harness forwards each change as "T <40 hex>\n" --
 # back up the xdjctrl socket in socket mode, or into TX_PATH in file mode. We keep the
 # latest payload here and fan it out to every /leds SSE client.
@@ -282,7 +284,7 @@ def _standby_cut():
 
 
 def _leds_update(hexstr):
-    # "<40 hex>" = SubTxData; QEMU (xdj-board.c (was patch 17)) appends " <2 hex>" = source-key LEDs
+    # "<40 hex>" = SubTxData; QEMU (xdj-board.c) appends " <2 hex>" = source-key LEDs
     # (GPIO 162..165: bit0 rekordbox, bit1 MIDI, bit2 USB1, bit3 USB2). Served as one
     # string: byte 0x14 of the panel's LED array.
     hexstr = hexstr.strip().lower().replace(" ", "")
@@ -675,7 +677,7 @@ def grab_raw():
 # ---- USB mount (drive_add/device_add on the hub; the attach itself wakes HOST1) ----
 # Mirrors the app/host `maybe_insert_usb` choreography so a panel LOAD button can mount
 # a disk image (or physical device) on the fly. Over QMP in the .app (--qmp), or the raw
-# HMP monitor in dev (--mon). docs/usb-mount-howto.md / usb-slot-topology.md.
+# HMP monitor in dev (--mon). See docs/usb.md.
 def _qmp_hmp(sock_path, cmds):
     """Run HMP command-lines via QMP human-monitor-command on a fresh connection."""
     s = socket.socket(socket.AF_UNIX); s.settimeout(5.0); s.connect(sock_path)
@@ -792,10 +794,10 @@ def mount_usb(slot, imgpath, write=False):
     if '"error"' in blob or "failed" in blob or "duplicate" in blob or "in use" in blob:
         raise RuntimeError("monitor rejected insert: %s" % outs)
     _usb_cur[slot] = (did, dev)
-    # Do NOT create the xdj-panel.c (was patch 06) file (/tmp/usb*_insert) here. Those GPIOs
+    # Do NOT create the xdj-panel.c file (/tmp/usb*_insert) here. Those GPIOs
     # (GPIO4_IO30 / GPIO7_IO12) are rbp's active-low USB *fault* flags, not
     # insert-detect lines; holding one low raises "USB Error. Remove the device."
-    # once the slot mounts. Host1 resume on attach comes from xdj-usbnc.c (was patch 10) (USBNC OWIR).
+    # once the slot mounts. Host1 resume on attach comes from xdj-usbnc.c (USBNC OWIR).
     # Clear a stale fault file left by an older build/tool so the flag stays OK.
     try:
         os.remove(fault)
@@ -837,8 +839,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path in ("/", "/panel.html"):
             self._send_file("panel.html")
-        elif path in ("/grid", "/index.html"):
-            self._send_file("index.html")
         elif path.startswith("/assets/"):
             self._send_file(path[len("/assets/"):], base=ASSETS)
         elif path.startswith("/novnc/"):
@@ -1020,20 +1020,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send(503, "text/plain", b"power control unavailable (not run by xdj-host)"); return
             if not os.path.isfile(upd_path):
                 self._send(404, "text/plain", ("no such file: " + upd_path).encode()); return
-            try:
-                import sys as _sys
-                _sys.path.insert(0, os.path.join(HERE, "..", "..", "qemu"))
-                _sys.path.insert(0, os.path.join(HERE, "..", ".."))
-                import xdj_update_stick, xdjrx_upd
-                data, _ = xdjrx_upd.read_upd_bytes(upd_path)
-                _, model, _ = xdjrx_upd.split_container(data)
-                if not model.startswith("XDJAERO"):
-                    raise ValueError("%r is not an XDJ-RX firmware (model must start with XDJAERO)" % model)
-                stick = os.path.join(os.path.dirname(CTRL_SOCK or CTRL), "install-update.img")
-                xdj_update_stick.build(data, stick)
-            except BaseException as e:      # xdjrx_upd uses sys.exit for bad input
-                _logline("subucom", "·  install update: %s" % e)
-                self._send(400, "text/plain", str(e).encode()); return
+            xdj = os.path.normpath(os.path.join(HERE, "..", "..", "crates", "xdj-fw", "target", "release", "xdj"))
+            if not os.path.exists(xdj):
+                self._send(503, "text/plain", ("build the xdj CLI first: (cd crates/xdj-fw && cargo build --release)").encode()); return
+            stick = os.path.join(os.path.dirname(CTRL_SOCK or CTRL), "install-update.img")
+            info = subprocess.run([xdj, "fw", "info", upd_path], capture_output=True, text=True)
+            m = re.search(r'model string: "([^"]*)"', info.stdout)
+            model = m.group(1) if m else ""
+            err = None
+            if not model.startswith("XDJAERO"):
+                err = "%r is not an XDJ-RX firmware (model must start with XDJAERO)" % (model or upd_path)
+            else:
+                st_ = subprocess.run([xdj, "fw", "stick", upd_path, stick], capture_output=True, text=True)
+                if st_.returncode:
+                    err = (st_.stderr or st_.stdout).strip()
+            if err:
+                _logline("subucom", "·  install update: %s" % err)
+                self._send(400, "text/plain", err.encode()); return
             if cur.startswith("on"):
                 _power_cmd("off")
                 _leds_off()

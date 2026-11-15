@@ -1,386 +1,247 @@
-# XDJ-RX sub-ucom frame → control map (authoritative, from the firmware's section decoders)
+# XDJ-RX sub-ucom frame map (panel MCU → rbp, `SubRxData`)
 
-> The **other direction** (rbp → panel MCU: LEDs, level meters, jog ring) is the MOSI
-> `SubTxData` frame — see [subucom-led-map.md](subucom-led-map.md).
+The authoritative map of every front-panel control the panel MCU ("sub-ucom") reports to the
+main application `rbp`. The other direction (rbp → MCU: LEDs, level meters, jog ring) is the
+`SubTxData` payload, mapped in [subucom-led-map.md](subucom-led-map.md).
 
-The XDJ-RX panel MCU sends ONE 100-byte frame over `/dev/subucom_spi1.0` (single channel —
-there is no SUB channel; every control is in this frame). rbp decodes it in three decoders,
-each an unrolled `ldrb [cur,#OFF]; ldrb [prev,#OFF]; eor; tst #MASK; …` pattern:
+Every entry in the map below was injected into a running rbp and the event it produced was
+captured at the panel event dispatcher (`0x2a47c0`). The codes were named with rbp's own
+debug-console vocabulary ([debug-console-protocol.md](debug-console-protocol.md)); switch
+positions were read off the LCD. The virtual panel (`tools/xdj-panel/panel.html`, the `C`
+object: each control's `spec`) drives exactly these offsets.
 
-- **Center/nav/beat-fx/source buttons** → code-emitting decoder `~0x282c00–0x283880`;
-  `rbp_off = 0x44 + decoder_OFF`; emits 16-bit codes consumed by `FUN_0026ae7c`.
-- **Deck buttons** → decoder `~0x2845xx–0x284d40`; `rbp_off = 0x04 + decoder_OFF` (deck1),
-  **deck2 = deck1 + 0x10**; emits codes `0x41xx/0x42xx`. **Runtime note (2026-11-11):** the
-  code→handler is NOT `FUN_00222188` as previously written — gdb breakpoints on `0x222188`
-  do **not** fire for SYNC / TEMPO-RANGE / PLAY / CUE even though all four produce LCD
-  reactions, so `FUN_00222188` is a *deck-engine state object*, not the button dispatch. The
-  real deck-button handler is still TBD. Deck buttons ARE delivered and decoded correctly
-  (verified by LCD effect); the earlier static "routed via FUN_00222188" was an unconfirmed
-  inference.
-- **Mixer/analog continuous** → decoder near `0x282400–0x282800`; 16-bit LE ÷1023.0 → codes
-  `0x50xx/0x60xx` via `FUN_002adee8`. *(offsets being finalized)*
+## Frame format
 
-## ✅ 2026-11-14 — RUNTIME-VERIFIED MAP (supersedes the tables below where they differ)
+The XDJ-RX has **one** sub-ucom channel: a 100-byte full-duplex SPI burst on
+`/dev/subucom_spi1.0` (ECSPI slave, bus 1 / CS 0). Its MISO half is this control frame.
 
-Method: every frame bit / analog field was injected into a running rbp (`xdj-panel.c` (was patch 14) build) and the
-event it produced was captured at the panel dispatcher **`0x2a47c0`** `(obj, code, state, deck, …)`
-(`state` 0 = press, 2 = release, 3 = relative, 4 = absolute value). Codes were then named with
-rbp's own debug-console vocabulary (`button`/`knob`/`rotary` handlers `FUN_0001ec50`/`0001e69c`/
-`0001e49c`, see `docs/debug-console-protocol.md`), and switch positions were read off the LCD.
-**Earlier positional labels were wrong in several places** (DEL/MEM, LOOP IN/OUT, REV, SLIP,
-SEARCH, CALL, EQ MID/LOW, MIC, HP, USB STOP, QUANTIZE, CUE1/2, BROWSE/INFO/TAG LIST).
-
-**Deck** (deck 1 shown; **deck 2 = +0x10**):
-| rbp | control (code) |
+| offset | content |
 |---|---|
-| `0x04`/`0x0a` | TEMPO fader, complementary pair |
-| `0x06` | VINYL SPEED ADJ TOUCH/BRAKE knob (`0x411d`, ÷1023) — `0x08` unused |
-| `0x0c` / `0x0e` | **JOG**: pulse period (speed = 416.67/period; 0/0xffff = stopped) / 16-bit position counter (fw diffs it, wraps at 65535) → `0x4306` via `FUN_00283dc4` |
-| `0x10` | .0 JOG TOUCH (`0x430e`) · .1 jog direction (reverse) · .4 pad D · .5 pad C · .6 pad B · .7 pad A (`0x411a..17`) |
-| `0x11` | .0 SLIP (`0x4116`) · .1 LOOP SLICE (`0x4115`) · .2 BEAT LOOP (`0x4114`) · .3 HOT CUE (`0x4113`) · .4 SEARCH ►► (`0x411b`) · .5 SEARCH ◄◄ (`0x411c`) · .6 TRACK ►►\| (`0x421b`) · .7 TRACK \|◄◄ (`0x421c`) |
-| `0x12` | .0 SHIFT · .1 REV · .2 MASTER TEMPO · .3 TEMPO RANGE · .4 MASTER · .5 SYNC · .6 VINYL · .7 RELOOP/EXIT |
-| `0x13` | .0 LOOP OUT (`0x410f`) · .1 LOOP IN (`0x410d`) · .2 MEMORY (`0x4121`) · .3 DELETE (`0x4120`) · .4 CALL ► (`0x431e`) · .5 CALL ◄ (`0x431f`) · .6 PLAY · .7 CUE |
+| `0x00–0x01` | not decoded (the emulator sends 0) |
+| `0x02–0x03` | panel MCU firmware version word, LE. rbp keeps it from the first frame (`FUN_00282630` → `+0x94`) and shows it as "SUB Ver." (`%x.%02x`) in test mode; it rejects only `0xffff`. The emulator reports the version of the firmware in the emulated MCU flash (`$XDJ_PANELCOM_IMG`), 0 if none; `XDJ_SUBUCOM_VER=<hex>` overrides. |
+| `0x04–0x5f` | controls (map below) |
+| `0x62–0x63` | CRC, LE |
 
-**Mixer** (channel 1; **channel 2 = +0x10**): `0x24` EQ HI (`5008`) · `0x26` TRIM (`5007`) ·
-`0x28` EQ **LOW** (`500a`) · `0x2a` EQ **MID** (`5009`) · `0x2c` CH FADER (`5011`) · `0x2e` COLOR (`508b`) ·
-`0x33`.7/`0x43`.7 INPUT SELECT DECK (`0x5112`).
+- **Offsets** throughout are rbp buffer offsets ("logical"). On the wire each 32-bit word is
+  byte-reversed: wire byte `4w+j` = logical byte `4w+(3−j)`.
+- **CRC** = CRC-16/X-25 (reflected poly `0x8408`, init `0xffff`, xorout `0xffff`) over the first
+  **96** bytes after the per-word byte reversal, stored at `0x62`. rbp decodes a frame only when
+  the CRC matches; a bad CRC drops the whole frame.
+- **Buttons** are bits; an event fires when a bit **changes** against the previous frame.
+- **Analog** controls are 16-bit LE values `0..1023` (normalised `/1023.0`); an event fires on
+  change.
+- **Encoders** are 16-bit LE counters the firmware diffs frame to frame (wrapping at 65535).
 
-**Master / centre:**
-| rbp | control (code) |
+## How rbp decodes it
+
+- `FUN_00284d44` parses the frame (CRC via `FUN_0028259c`, which reads and byte-reverses the
+  words) and runs the section decoders in the cluster `0x282600–0x284d44`. Each decoder is an
+  unrolled `ldrb [cur,#OFF]; ldrb [prev,#OFF]; eor; tst #MASK` sequence that emits a 16-bit code:
+  - `FUN_00282800` — per-channel mixer analog, block base `0x24` (ch 1) / `0x34` (ch 2); codes
+    `0x50xx` via `FUN_002adee8`.
+  - `FUN_00282a98` — master analog block (base `0x44`) and the centre-section buttons (unrolled
+    through `~0x282c00–0x283880`; the POWER bit is decoded at `0x283678`).
+  - `FUN_00283dc4` — jog (code `0x4306`).
+  - `FUN_002841e4` — deck buttons and deck analog, section base `0x04` (deck 1) / `0x14` (deck 2);
+    codes `0x41xx/0x42xx/0x43xx`.
+- Every event reaches the dispatcher at **`0x2a47c0`** as `(obj, code, state, deck, …)`, with
+  `state` 0 = press, 2 = release, 3 = relative (encoder), 4 = absolute value (analog). Centre-section
+  codes are consumed by `FUN_0026ae7c`. The debug console's `button`/`knob`/`rotary` commands
+  (handlers `FUN_0001ec50`/`FUN_0001e69c`/`FUN_0001e49c`) dispatch the same codes.
+
+## Control map
+
+Notation: `0x12.5` = byte `0x12`, bit 5 (mask `0x20`). Codes in parentheses.
+
+### Deck (deck 1 shown; deck 2 = +0x10)
+
+| offset | control |
 |---|---|
-| `0x44` / `0x46` | MIC EQ **LOW** (`805`) / MIC EQ **HI** (`804`) — MIC *level* is not in this frame |
-| `0x48` `0x4a` `0x4c` `0x4e` `0x50` `0x52` | BOOTH · MASTER · BEAT FX LEVEL/DEPTH · CROSSFADER · HP LEVEL · HP MIX |
-| `0x54` / `0x56` | BROWSE encoder counter / BEAT FX **TIME** encoder counter (`0x448a`, relative) |
-| `0x59` | .4 FILTER · .5 CRUSH · .6 GATE · .7 NOISE (sound colour FX, `0x5095..98`) |
-| `0x5a` | .0 BEAT ► (`4494`) · .1 BEAT ◄ (`4493`) · bits 2-4 **CH SELECT** v → pos 5−v: 1, 2, MIC, CF.1, CF.2, MASTER (`448e`) · bits 5-7 **FX SELECT** v → pos 7−v: DELAY, ECHO, SPIRAL, REVERB, TRANS, FLANGER, PITCH, ROLL (`448d`) |
-| `0x5b` | .0 CUE CH2 · .1 CUE CH1 (`5014`) · .2 BEAT FX ON/OFF (`4487`) · .3 TAP (`4486`) · bits 4-5 XF CURVE (v1→0, v0→1, v2→2; `6010`) · bits 6-7 MIC switch OFF/ON/TALK (same encoding; `803`) |
-| `0x5d` | .0 **POWER key → standby request**, ACTIVE-LOW (`0x8001`; idle = 1 on hardware, the emulator sends 0 = held; see service-modes.md) · .4 BROWSE PUSH · .5 LOAD deck 2 · .6 LOAD deck 1 · .7 TAG TRACK |
-| `0x5e` | .0 BACK (`4206`) · .1 TRACK MARK (`409`) · .2 **MASTER REC** (`401`; records the master to the USB2 stick) · .3 USB2 STOP · .4 USB1 STOP (`8002`) · .5 QUANTIZE (`4488`) |
-| `0x5f` | .0 MENU (`20a`) · .1 INFO (`204`) · .2 TAG LIST (`209`) · .3 BROWSE (`208`) |
+| `0x04` / `0x0a` | TEMPO fader, a complementary pair (`0x04` negative side, `0x0a` positive side; `0x0a` = 1023 − `0x04`). Send both together: forcing only one reads as a pegged fader. |
+| `0x06` | VINYL SPEED ADJ TOUCH/BRAKE knob (`0x411d`). `0x08` is unused. |
+| `0x0c` / `0x0e` / `0x10.0–.1` | JOG — see [Jog](#jog) |
+| `0x10` | .4 pad D (`0x411a`) · .5 pad C (`0x4119`) · .6 pad B (`0x4118`) · .7 pad A (`0x4117`) |
+| `0x11` | .0 SLIP (`0x4116`) · .1 LOOP SLICE (`0x4115`) · .2 BEAT LOOP (`0x4114`) · .3 HOT CUE (`0x4113`) · .4 SEARCH ►► (`0x411b`) · .5 SEARCH ◄◄ (`0x411c`) · .6 TRACK SEARCH ►►\| (`0x421b`) · .7 TRACK SEARCH \|◄◄ (`0x421c`) |
+| `0x12` | .0 SHIFT (`0x4103`) · .1 REV (`0x4111`) · .2 MASTER TEMPO (`0x4109`) · .3 TEMPO RANGE (`0x4108`) · .4 MASTER (`0x4112`) · .5 SYNC (`0x410b`) · .6 VINYL (`0x4104`) · .7 RELOOP/EXIT (`0x4110`) |
+| `0x13` | .0 LOOP OUT (`0x410f`) · .1 LOOP IN (`0x410d`) · .2 MEMORY (`0x4121`) · .3 DELETE (`0x4120`) · .4 CUE/LOOP CALL ► (`0x431e`) · .5 CUE/LOOP CALL ◄ (`0x431f`) · .6 PLAY/PAUSE (`0x4101`) · .7 CUE (`0x4102`) |
 
-Visually confirmed on the LCD: FX/CH SELECT names, TEMPO RANGE, QUANTIZE, MASTER.
-**Prerequisite:** `xdj-panel.c` (was patch 14) (the ECSPI burst hook) — without it the slave sends all-zero
-frames and *no* control reaches rbp.
+Deck 2: TEMPO `0x14`/`0x1a`, VINYL SPEED ADJ `0x16`, jog `0x1c`/`0x1e`/`0x20.0–.1`, buttons
+`0x20–0x23`.
 
-Confidence: ✅ = screen-verified; ◆ = firmware-decoded + code matches RX3 (strong); ○ =
-firmware-decoded, RX-specific code / positional label (verify before trusting the label);
-inj = `b <rbp_off> <mask>` for buttons, `A <rbp_off> <val16>` for analog.
+### Jog
 
-## Center section (rbp 0x59–0x5f), code → FUN_0026ae7c
-| rbp.bit | code | control | conf |
-|---|---|---|---|
-| 0x5d.4 | 0x4205 | Browse encoder PUSH | ✅ |
-| 0x54/0x55 | (counter) | Browse encoder ROTATE (16-bit, inc=down) | ✅ |
-| 0x5d.0 | 0x8001 | USB1 STOP | ✅ |
-| 0x5d.1 | 0x8002 | USB2 STOP | ✅ |
-| 0x5d.5 / 0x5d.6 | 0x420d | LOAD1 / LOAD2 | ◆ |
-| 0x5d.7 | 0x420b | (center key, name TBD) | ○ |
-| 0x5e.0 | 0x203 | BACK | ✅ |
-| 0x5e.1 | 0x409 | TAG LIST | ✅ |
-| 0x5e.2 | 0x401 | MASTER REC (toggle; records to USB2) | ✅ |
-| 0x5e.4 | 0x8002 | (USB-class key, distinct from eject) | ○ |
-| 0x5e.5 | 0x4488 | BEAT FX (sticky) | ○ |
-| 0x5f.0 | 0x20a | MENU (in the browser: SORT; **held ~1 s+**: UTILITY menu, a short tap leaves it again — a short tap on the home screen does nothing) | ✅ |
-| 0x5f.1 | 0x204 | (center key, name TBD) | ○ |
-| 0x5f.2 | 0x209 | (center key, name TBD) | ○ |
-| 0x5f.3 | 0x208 | (switches browse view) | ○ |
-| 0x59.4–7 | 0x5095–8 | mixer/cue keys | ○ |
-| 0x5a.* | 0x4493/0x449x | BEAT FX select/channel | ○ |
-| 0x5b.1–3 | 0x5014/0x4487/0x4486 | mixer / BEAT FX ON·OFF·ROLL | ◆ (0x5b.2/3 screen-seen) |
-| 0x56 / 0x57 | — | BEAT FX beat◄/► + params (byte-confirmed) | ◆ |
+| offset (deck 1) | field |
+|---|---|
+| `0x0c` | pulse period, 16-bit. Speed = 416.67 / period; 0 or `0xffff` = stopped. |
+| `0x0e` | position counter, 16-bit; the firmware diffs it (wraps at 65535) |
+| `0x10.0` | JOG TOUCH (`0x430e`) — platter top touched |
+| `0x10.1` | direction: 1 = reverse |
 
-## Deck section (deck1 rbp 0x10–0x13; deck2 = +0x10 → 0x20–0x23), code → FUN_00222188
-| rbp.bit (d1) | code | control | conf |
-|---|---|---|---|
-| 0x10.7/.6/.5/.4 | 0x4117–a | HOT CUE pads A/B/C/D | ◆ (RX3-match) |
-| 0x11.0 | 0x4116 | BEAT JUMP mode | ◆ |
-| 0x11.1 | 0x4115 | SLIP LOOP mode | ◆ |
-| 0x11.2 | 0x4114 | BEAT/AUTO LOOP mode | ◆ |
-| 0x11.3 | 0x4113 | HOT CUE mode | ✅ ("NO HOT CUE POINT") |
-| 0x11.4/.5 | 0x411b/c | pad-row E/F | ○ |
-| 0x12.0 | 0x4103 | SHIFT | ◆ (RX3-match) |
-| 0x12.1 | 0x4111 | REV / MASTER | ○ |
-| 0x12.2 | 0x4109 | MASTER TEMPO | ○ |
-| 0x12.3 | 0x4108 | TEMPO RANGE | ✅ |
-| 0x12.4 | 0x4112 | MASTER (sync master) | ○ |
-| 0x12.5 | 0x410b | SYNC | ✅ ("SYNC ON") |
-| 0x12.6 | 0x4104 | VINYL | ◆ (RX3-match) |
-| 0x12.7 | 0x4110 | RELOOP/EXIT | ○ |
-| 0x13.0 | 0x410f | REV / DIRECTION | ◆ (RX3-match) |
-| 0x13.1 | 0x410d | LOOP OUT | ◆ (RX3-match) |
-| 0x13.2 | 0x4121 | VINYL SPEED ADJ | ◆ (RX3-match) |
-| 0x13.3 | 0x4120 | SEARCH ◄ (reverse) | ◆ (RX3-match) |
-| 0x13.4 | 0x431e | DELETE | ○ (positional) |
-| 0x13.5 | 0x431f | MEMORY | ○ (positional) |
-| 0x13.6 | 0x4101 | PLAY/PAUSE | ✅ received — deck reacts, but **position frozen** (audio-clock-gated, see below) |
-| 0x13.7 | 0x4102 | CUE | ◆ (RX3-match) |
+`FUN_00283dc4` turns these into code `0x4306`. Deck 2 = +0x10. The virtual panel (`POST /jog` in
+`server.py`) models 1024 counter ticks per platter turn, scales the period so 33⅓ rpm = speed 1.0,
+and drops the period to 0 shortly after the platter stops.
 
-## Analog continuous (16-bit LE, inj `A <off> <val16>`, ÷1023) — base 0x44 CONFIRMED (0x600f@0x4e)
-| rbp | code | control | conf |
-|---|---|---|---|
-| 0x04 / 0x0a (+ 0x14/0x1a d2) | — | TEMPO fader (dual complementary) | ✅ |
-| 0x24 / 0x34 | 0x5008 | EQ HI (d1/d2) | ◆ |
-| 0x26 / 0x36 | 0x5007 | TRIM | ○ (audio-only) |
-| 0x28 / 0x38 | 0x500a | EQ LOW | ◆ (was mislabelled MID) |
-| 0x2a / 0x3a | 0x5009 | EQ MID | ◆ (was mislabelled LOW) |
-| **0x2c / 0x3c** | **0x5011** | **CH FADER (d1/d2)** | ✅ **LIVE** (inject→`setChannelFader(ch,1.0)`) |
-| 0x2e / 0x3e | 0x508b | COLOR / FILTER pot | ◆ (block+0xa) |
-| 0x48 | 0x440c | BOOTH MONITOR | ○ |
-| **0x4a** | **0x4405** | **MASTER LEVEL** | ✅ **LIVE** (inject→`setMasterVolume(m,1.0)`; was mislabelled HP MIXING) |
-| 0x4c | 0x448b | LEVEL DEPTH | ○ (code 0x448b; was mislabelled HP LEVEL) |
-| 0x4e | 0x600f | CROSSFADER | ✅ (offset, 0x600f) |
-| 0x50 | 0x4403 | HP LEVEL | ○ (code 0x4403; was mislabelled MASTER LEVEL) |
-| 0x52 | 0x4402 | HP MIXING | ○ (code 0x4402; was mislabelled BOOTH/MASTER-BAL) |
-| 0x44 / 0x46 | 0x805/0x804 | MIC1 / MIC2 level | ○ (CH-fader ruled out — it's 0x2c/0x3c) |
+### Mixer (channel 1 shown; channel 2 = +0x10)
 
-*(All analog are audio-only — no emulator feedback — so these are firmware-decoded, not screen-verified.)*
+| offset | control |
+|---|---|
+| `0x24` | EQ HI (`0x5008`) |
+| `0x26` | TRIM (`0x5007`) |
+| `0x28` | EQ LOW (`0x500a`) |
+| `0x2a` | EQ MID (`0x5009`) |
+| `0x2c` | CHANNEL FADER (`0x5011`) → `setChannelFader` (`FUN_00083fcc`) |
+| `0x2e` | COLOR knob (`0x508b`) |
+| `0x33.7` | INPUT SELECT, 1 = DECK (`0x5112`) — see [Input select](#input-select-deck--linephono) |
 
-**2026-11-12 — per-channel mixer block decoded from the frame decoder (static RE).** The
-per-channel analog block is handled by the function at **VA 0x282800** (`push {r4,r5,r6,r7,lr}`;
-r5=cur-frame block ptr, r4=prev; emits on change via `FUN_002adee8(obj, code, value16, flag)`).
-It reads **block-relative** halfwords: EQ-HI block+0 (0x5008), TRIM block+2 (0x5007), EQ-LOW
-block+4 (0x500a), EQ-MID block+6 (0x5009), **CH FADER block+8 (0x5011)**, COLOR block+0xa
-(0x508b). Block base = **0x24 (ch1) / 0x34 (ch2)**, pinned by TRIM block+2 = the confirmed abs
-0x26/0x36. ⇒ **CH FADER = abs 0x2c/0x3c** (this corrects the long-standing "0x2c = COLOR pot"
-label; COLOR is 0x2e/0x3e). The master/booth/HP/**crossfader** block is the next function (VA
-0x282a98), base 0x44, crossfader 0x600f at block+0xa = abs 0x4e (unchanged). This matches the
-XDJ-RX3 field grouping (faders a distinct group from the EQ/trim block — see
-docs/rx3-panel-crossref.md). **Open:** a prior boot-frame sweep of 0x0c–0x5c did not move
-`ch+0x144`; with 0x2c now identified, retest = inject 16-bit **1023 at 0x2c** (and 0x3c) and
-watch `ch+0x144` via gdb. If still 0, the gate is the code→`setChannelFader` dispatch (the
-decoder emits 0x5011 only on *change*; the first accepted frame transitions via the
-complement-seeded history, so runtime injection after boot may need a value *different from the
-stored sample* to emit).
+Channel 2: `0x34` HI · `0x36` TRIM · `0x38` LOW · `0x3a` MID · `0x3c` FADER · `0x3e` COLOR ·
+`0x43.7` INPUT SELECT.
 
-**2026-11-12 — ✅ LIVE CONFIRMED (fresh boot, gdb Z0 on the setter leaves + sub-ucom frame inject).**
-Breaking at the setter *leaves* and injecting a `0→0x3ff` transition proved the mapping end-to-end
-(the decoder-entry breakpoint at 0x282800 is NOT reached as a clean call on a changed frame — the
-setter leaves are the real semantic endpoint, and Z0 software breakpoints catch them):
-- `A 2c 3ff` → **`setChannelFader`** (`FUN_00083fcc`) fired, `r0=0x02a49ca0` (deck1 input ch),
-  `r1=0x3f800000` = **1.0f**. ⇒ **frame 0x2c = CH FADER**, confirmed.
-- `A 4a 3ff` → **`setMasterVolume`** (`FUN_00066bb8`) fired, `r0=0x02a571f0` (master obj),
-  `r1=0x3f800000` = **1.0f**. ⇒ **frame 0x4a = MASTER LEVEL** (code 0x4405), confirmed — this also
-  corrected the master/HP block labels (0x4a was mislabelled HP MIXING; 0x50=HP LEVEL, 0x52=HP
-  MIXING, 0x4c=LEVEL DEPTH — the code column was right, the labels were scrambled).
-Significance: the **real sub-ucom event path drives the mixer setters** (not just gdb pokes), so the
-whole analog mix can be initialised through the frame like hardware — the production route to audio.
+### Master / centre section
 
-## Analog (16-bit LE, inj `A <off> <val16>`, value/1023)
-- Deck1 continuous @ rbp 0x04,0x06,0x08,0x0a,0x0c,0x0e,0x12 — TEMPO fader = **0x04 (neg) + 0x0a
-  (pos)** ✅ (complementary dual-field); the others are jog/vinyl-speed. Deck2 = +0x10.
-- **Mixer analog** (TRIM/EQ/COLOR/CH-fader/crossfader/headphone/master) — separate decoder,
-  base ~0x24+, codes 0x50xx/0x60xx. *(offsets being finalized — no LCD feedback, static-only.)*
+| offset | control |
+|---|---|
+| `0x44` / `0x46` | MIC EQ LOW (`0x805`) / MIC EQ HI (`0x804`) |
+| `0x48` | BOOTH MONITOR level (`0x440c`) |
+| `0x4a` | MASTER LEVEL (`0x4405`) → `setMasterVolume` (`FUN_00066bb8`) |
+| `0x4c` | BEAT FX LEVEL/DEPTH (`0x448b`) |
+| `0x4e` | CROSSFADER (`0x600f`) |
+| `0x50` | HEADPHONES LEVEL (`0x4403`) |
+| `0x52` | HEADPHONES MIXING (`0x4402`) |
+| `0x54` | BROWSE encoder rotate — see [Encoders](#encoders) |
+| `0x56` | BEAT FX TIME encoder (`0x448a`) — see [Encoders](#encoders) |
+| `0x59` | .4 FILTER (`0x5095`) · .5 CRUSH (`0x5096`) · .6 GATE (`0x5097`) · .7 NOISE (`0x5098`) — SOUND COLOR FX keys |
+| `0x5a` | .0 BEAT ► (`0x4494`) · .1 BEAT ◄ (`0x4493`) · bits 2–4 CH SELECT · bits 5–7 FX SELECT — see [Switches](#switches) |
+| `0x5b` | .0 HEADPHONES CUE CH2 · .1 CUE CH1 (`0x5014`) · .2 BEAT FX ON/OFF (`0x4487`) · .3 TAP (`0x4486`) · bits 4–5 CROSSFADER CURVE · bits 6–7 MIC switch |
+| `0x5d` | .0 POWER (`0x8001`, active-low) · .4 BROWSE PUSH (`0x4205`) · .5 LOAD to deck 2 (`0x420d`) · .6 LOAD to deck 1 (`0x420d`) · .7 TAG TRACK (`0x420b`) |
+| `0x5e` | .0 BACK (`0x4206`) · .1 TRACK MARK (`0x409`) · .2 MASTER REC (`0x401`) · .3 USB2 STOP (`0x8002`) · .4 USB1 STOP (`0x8002`; the slot is the event's parameter) · .5 QUANTIZE (`0x4488`) |
+| `0x5f` | .0 MENU (`0x20a`) · .1 INFO (`0x204`) · .2 TAG LIST (`0x209`) · .3 BROWSE (`0x208`) |
 
-## Coverage ceiling — why 100% of *panel controls* ≠ 100% subucom-injectable
-Of the XDJ-RX's physical controls, these are **NOT sub-ucom buttons** in this 100-byte frame
-(verified by decoding the whole frame — no code/slot exists for them):
-- **Slide switches** (3-position, read as GPIO/status levels, not momentary codes): DECK1/DECK2
-  ↔ PHONO/LINE, CROSSFADER CURVE, MIC OFF/ON/TALKOVER.
-- **Separate ADC path** (not in the mixer-analog group, which is full at rbp 0x44–0x52): MIC EQ
-  HI/LOW, BEAT FX TIME knob.
-- **MAIN-UCOM GPIO** (top panel, same path as the source keys, wired via `/tmp/mainkey`):
-  rekordbox/MIDI/USB1/USB2 (done), MASTER REC/WAKE UP, TRACK MARK.
-- **Not a set of buttons**: SOUND COLOR FX NOISE/GATE/CRUSH/FILTER (the per-channel COLOR pot at
-  rbp 0x2e/0x3e is the only sub-ucom part; note 0x2c/0x3c is CH FADER, not COLOR); LOOP SLICE (the RX has exactly 4 pad modes:
-  HOT CUE/BEAT LOOP/SLIP LOOP/BEAT JUMP = codes 0x4113/14/15/16).
-- **Separate protocol**: JOG-WHEEL **rotation** (jog *touch* is a normal deck button; rotation is
-  not in this frame — see the RX3 "JogCom" notes).
+### Switches
 
-### MASTER REC — ✅ mapped 2026-11-15: `0x5e.2`, code `0x401`
-**Verified live:** with a stick on **USB2** (it records there; on USB1 a tap does nothing), a tap
-starts recording — the USB2 drive's QEMU write counter climbs ~180 KB/s (16-bit stereo 44.1 kHz
-WAV, `/PIONEER REC/REC%03d.WAV`) and the MASTER REC LED (`0x0a.7`, TX) blinks; a second tap stops
-it (writes stop). No on-screen indicator. History of the hunt (kept for the method):
-- **Every code the panel decoders can emit is accounted for** (`movw` scan of `0x282000–0x284f00`):
-  the mapped buttons/analogs above, the master analog block (`0x4402 0x4403 0x4405 0x440c 0x448b
-  0x600f`), deck `0x4108`/`0x410a`, and `0x401`. No unmapped *button* code is left in this frame.
-- **Not a GPIO either:** every `GpioManager` input rbp creates (ctor `0x2be28`) is mapped — 119/120,
-  146, 149, 158–161, the USB fault pins.
-- **`0x401` (`0x5e.2`)**: the code consumer (`0x26a97c`) gates it on a flag bit — first misread as a
-  modifier because the test stick was on USB1. It IS the REC key (above).
-- **`0x5d.0` = code `0x8001` is an ACTIVE-LOW key** (decoder `0x283678`: bit clear → press, set →
-  release). The emulator's all-zero frames hold it "pressed" from boot. A real press (hold `B 5d 01`
-  as the idle level, drop it briefly) makes rbp turn every LED off and send TX byte `0x11 = 0x53`
-  ('S'); a second press changes nothing; the screen and guest keep running. Reads as the
-  power-switch/standby notice from the panel MCU, not REC.
-- **Recording itself:** USB recording (`/PIONEER REC/REC%03d.WAV`) starts in `RecStart` `0x5a388`
-  (status `0x5a5f8`); the only non-debug caller is the toggle `0x276fec` = **vtable slot 3 of
-  `ui::MasterInnards`** (vtable `0x426e08`, ctor ref `0x27a02c`). Its caller (an interface call) is
-  not traced yet — that is the path from the MASTER REC key. The firmware is the shared "XDJAERO"
-  platform, so REC code may exist whether or not the RX's panel routes a key to it.
+Multi-position switches are bit fields sharing a byte with buttons; send the field value, not a
+press. The virtual panel uses `S <off> <mask> <bits>` (see [Injection](#injection-syntax)).
 
-**Label-ambiguous (in-frame, bits decoded, but RX reassigned the codes vs RX3 and deck transport
-shows no LCD feedback, so the exact label per bit can't be fixed in the emulator):** TRACK SEARCH
-◄◄/►►, SEARCH ►► forward, CUE/LOOP CALL ◄/►. These are among the decoded deck bits (0x10 low bits,
-0x11 b4–7); assign by testing on real hardware.
-
-## 2026-11-12 ✅ SOLVED — INPUT SELECT (source switch) is a sub-ucom frame BIT
-
-The per-channel **source switch** (DECK ↔ LINE/PHONO, firmware `InputSourceSW`) is a plain
-sub-ucom frame bit — injectable like any button, and it **re-routes live** on change:
-
-| rbp bit | control | value |
+| field | positions (field value → position) | code |
 |---|---|---|
-| **`0x33` bit 7 (0x80)** | CH0 / deck1 source | `1`=DECK (`ch0→src0`), `0`=LINE/PHONO (`ch0→src3`) |
-| **`0x43` bit 7 (0x80)** | CH1 / deck2 source | `1`=DECK (`ch1→src1`), `0`=LINE/PHONO (`ch1→src4`) |
+| `0x5a` bits 2–4, mask `0x1c` | v → position 5 − v: 1, 2, MIC, CF.1, CF.2, MASTER — BEAT FX CH SELECT | `0x448e` |
+| `0x5a` bits 5–7, mask `0xe0` | v → position 7 − v: DELAY, ECHO, SPIRAL, REVERB, TRANS, FLANGER, PITCH, ROLL — BEAT FX SELECT | `0x448d` |
+| `0x5b` bits 4–5, mask `0x30` | v=1 → curve 1, v=0 → curve 2, v=2 → curve 3 — CROSSFADER CURVE | `0x6010` |
+| `0x5b` bits 6–7, mask `0xc0` | v=1 → OFF, v=0 → ON, v=2 → TALK OVER — MIC switch | `0x803` |
+| `0x33.7` / `0x43.7` | 1 = DECK, 0 = LINE/PHONO — INPUT SELECT CH1 / CH2 | `0x5112` |
 
-Stride `+0x10` (deck1→deck2, like the faders/EQ). **Default DECK = hold both bits.**
-Inject: `B 33 80` + `B 43 80` (persistent holds); release → LINE. Live-verified by reading the
-channel routing table (`tools/xdj-panel/debug/tables.py`; ch0.routed @`0x107acdc+4`, ch1 @`0x107ace8+4`)
-while toggling. Found with `tools/xdj-panel/debug/sweep_full.py` (sweep every frame byte, watch routed_src).
+### Encoders
 
-**NOT a GPIO.** GPIO 117/118 (and 134/135, 162-165) are rbp *output* pins (mux/control lines),
-proven inert for routing. The only switch *inputs* via `/dev/gpiodrv` are the USB fault flags (126/204, active-low; *not* USB-detect)
-and the EXT-TYPE/LINE-PHONO switch (GPIO 119/120 → switchState `+0xa0`/`+0xb0`). The deck-vs-ext
-*source* select is this frame bit, applied to the channel's `+0x254` requested-source by rbp's
-own (C++ vtable) applier → router `FUN_00080a74`. See the engine mechanism below for the data path.
+- **BROWSE rotate** = 16-bit counter at `0x54/0x55` (counting up scrolls down). Once the counter
+  has been sent it must be present in every frame: dropping it reads as a large rotate delta.
+  **BROWSE push** = `0x5d.4` (`0x4205`).
+- **BEAT FX TIME** = 16-bit counter at `0x56/0x57` (`0x448a`, relative).
 
-## 2026-11-12 — INPUT SELECT / deck→channel routing: the engine mechanism (static RE)
+### POWER key (`0x5d.0`, code `0x8001`)
 
-> ⚠️ **Reconciliation:** the sections below were written *before* the frame bit was found and
-> conclude the source select "is **NOT** a sub-ucom frame control" / "dead-ends at a C++ vtable"
-> / "boot-time LINE default to patch". **That conclusion is superseded** — see the SOLVED block
-> above (`rbp[0x33].7` / `rbp[0x43].7`). The *data-path* facts here (source/channel tables,
-> router `FUN_00080a74`, channel `+0x254` requested-source, the vtable applier) remain correct
-> and explain how the frame bit reaches the routing; only "not a frame control" is wrong.
+The POWER key is **active-low** on the real panel MCU: the bit idles at 1 and reads 0 while
+pressed (decoder `0x283678`: bit clear = press, set = release). A press starts rbp's **standby
+handshake**: `ui::PowerManager` prepares for standby, then every TX frame carries the LEDs off and
+payload byte `0x11 = 0x53` ('S'), telling the MCU to cut power. The same path serves AUTO STANDBY.
+Details: [service-modes.md](service-modes.md).
 
-The gdb routing hack (`wr32(DAT_0107acdc + chan*12, <deck buffer>)`) pokes the *result* of
-the engine's routing. The engine's own machinery is now decoded, which gives a cleaner,
-"no-raw-poke" lever and explains why the channel is silent on boot.
+`qemu/xdj/xdj-panel.c` inverts this bit so injection names presses like every other button: no
+hold → 1 (idle), `B 5d 01` → 0 (pressed). The virtual panel's POWER off presses the key while rbp
+runs and cuts power when rbp answers 'S' (or after 10 s with no answer).
 
-**Two tables, 12-byte stride (`{buf_ptr, src_idx, flag}` each):**
-- **Source table** base `DAT_0107ac88` — 7 slots (indices 0–6), one per physical source
-  (decks / line / phono / mic …). Slot word0 = live render buffer ptr, word1 = source index.
-- **Channel table** base `DAT_0107acdc` — 6 channels (the thing the gdb hack pokes). `DAT_0107acdc`
-  is channel[0].buf (deck1), channel[1].buf = `DAT_0107ace8` (deck2), stride 12. word1 =
-  the source index this channel is routed to.
+### MASTER REC (`0x5e.2`, code `0x401`)
 
-**The three engine functions (all screen-free / audio-graph):**
-- `FUN_00080920` — **init** (runs at graph setup). Zeroes every buf ptr; seeds each channel's
-  routed-source word (`channel[n].src_idx`) to **7** = a self/empty slot ⇒ **every channel boots
-  routed to nothing → silence.** This is the boot-silence root cause, independent of the mixer gains.
-- `FUN_000809ec(src_idx, buf)` — a **source** registers/updates its live buffer; if any channel is
-  currently routed to `src_idx` it also writes that channel's `buf` (propagation). Called from the
-  per-source render teardown/setup wrappers at `0x6a230 / 0x6a38c / 0x6a424 / 0x6a478` (right before
-  the ExtIn/line render `FUN_0006a4a8`); passing `buf=0` **un**registers (teardown path in `FUN_0006a230`).
-- `FUN_00080a74(src_idx, chan_idx)` — the **router**: copies source slot `src_idx`'s 3-word descriptor
-  into channel slot `chan_idx`. This is the primitive the INPUT SELECT ultimately drives.
+A tap starts recording the master output to the stick in **USB2** (with the stick in USB1 a tap
+does nothing); a second tap stops it. The file is a 16-bit stereo 44.1 kHz WAV,
+`/PIONEER REC/REC%03d.WAV`. There is no on-screen indicator; the MASTER REC LED (`SubTxData`
+`0x0a.7`) blinks while recording. In rbp the recording starts in `RecStart` (`0x5a388`); the
+toggle is `0x276fec`, vtable slot 3 of `ui::MasterInnards` (vtable `0x426e08`).
 
-**Channel object fields (MixerEngine channel, e.g. `0x02a49cc8` d1 / `0x02a4cb58` d2):**
-- `+0x188` = selected source index (written by `FUN_00085d44` = **setChannelSource**, which also
-  routes immediately).
-- `+0x254` = **requested** source index, `+0x250` = **applied** source index. The per-frame apply
-  `FUN_00085a10` notices `+0x254 != +0x250`, calls `FUN_00080a74(+0x254, chan)`, then latches
-  `+0x250 = +0x254`. ⇒ **`+0x254` is the clean lever**: set it to the deck's source index and the
-  engine re-routes through its own path (no raw `DAT_0107acdc` poke).
+### MENU (`0x5f.0`, code `0x20a`)
 
-**Both `setChannelSource` (`FUN_00085d44`) and the apply (`FUN_00085a10`) have NO direct callers —
-they are vtable-dispatched (rbp is C++).** So the INPUT-SELECT→`+0x254` write is an indirect/virtual
-call; a static call-graph walk back to a frame byte dead-ends here. This corroborates that LINE/PHONO
-is not a plain decoder bit. Finishing the trace needs the live loop: gdb `Z2` write-watch on a
-channel's `+0x254` (and on `DAT_0107acdc`) while toggling sources / loading a deck, to see **what
-value** denotes each deck and **who** writes it (panel event vs. deck-load/play auto-route).
+In the browser a tap is SORT. To open the **UTILITY** menu, **hold MENU for about 1 s or more**;
+a short tap leaves UTILITY again. A short tap on the home screen does nothing.
 
-### 2026-11-12 — LIVE-VERIFIED (gdb RSP + sub-ucom inject, deck1 playing, audio heard on host)
-Booted, registered USB2, PUSH-loaded "Play It Hard" to deck1 (it **autoplays on load**), then read
-the global tables over raw GDB-RSP (no host gdb — a Python RSP client; `-gdb tcp::1234`):
+## Input select (DECK ↔ LINE/PHONO)
 
-- **The deck's live audio renders into `src[0]`.** With deck1 playing, only `src[0].buf`
-  (`0x02abf5f0`) held non-zero float PCM; `src[1..6]` were silent zeros. `src[0]` = deck1 player.
-- **On load the firmware MIS-routes the deck channels.** Idle (pre-load): `ch0.routed=0`,
-  `ch1.routed=0` (both at the deck bank). After loading deck1 **both** deck channels moved:
-  `ch0.routed 0→3`, `ch1.routed 0→4` — i.e. onto the **silent external/LINE bank (src 3,4)**.
-  So the deck audio sits in `src[0]` but `ch0` listens to `src[3]` ⇒ master peak = 0 (silent).
-  This is the INPUT-SELECT-defaults-to-LINE bug, now confirmed end-to-end.
-- **Fix proven, audio heard.** Routing `ch0 → src[0]` (write `ch0.buf = src0.buf`,
-  `ch0.routed = 0`) **and** bringing the analog gains up (holds `A 2c 3ff` fader, `A 4a 3ff`
-  master, `A 4e 200` xfader, EQ `A 24/2a/28 200`, trim `A 26 3ff`) made deck1 **audible on the
-  host** (master peak `0 → full-scale`; user-confirmed). Reverting `ch0 → src[3]` silenced it
-  again (peak→0). **Both routing AND gains are required** (gains alone = silent because ch0 still
-  points at the silent src3; routing alone = silent because faders/master boot at 0).
-- **The correct deck-channel routing is `ch_n → src[n]`** (deck1→src0, deck2→src1). The load-time
-  code instead sends them to `src[n+3]` (the LINE bank) — an effective "+3" INPUT-SELECT=LINE
-  default. Idle already had the *correct* `ch0→src0`; the LOAD is what breaks it.
-- **The route is a one-time setup at the FIRST load** (it set BOTH ch0 and ch1 at once), NOT
-  re-applied on reload — so `FUN_00080a74` / `FUN_00085a10` do **not** fire during steady play or a
-  re-load (gdb breakpoints there stayed silent). To catch the writer + its INPUT-SELECT read, set
-  `Z0` on `FUN_00080a74` (0x80a74) **before the first load** on a fresh boot and read `lr`.
+The per-channel source switch (firmware `InputSourceSW`) is a frame bit and re-routes live on
+change:
 
-**Practical fixes (either ends the gdb routing hack):** (a) model the INPUT-SELECT switch state as
-DECK where the firmware reads it at load (a GPIO/flag — the read site is the one remaining trace),
-or (b) post-load, force `ch_n.routed = n` (+ propagate `ch_n.buf = src[n].buf`) via the engine; the
-init already defaults idle routing correctly, so the minimal patch is to stop the load-time LINE
-re-route. Mixer gains must also be asserted in the boot frame (item 2).
+| bit | channel | 1 = DECK | 0 = LINE/PHONO |
+|---|---|---|---|
+| `0x33.7` | CH1 | ch0 → src 0 | ch0 → src 3 |
+| `0x43.7` | CH2 | ch1 → src 1 | ch1 → src 4 |
 
-### 2026-11-12 (cont.) — the mis-route is a BOOT-TIME default; the engine path, pinned
-- **Idle routing (post-boot, pre-load) is already `ch0.routed=3`, `ch1.routed=4`.** So the deck
-  channels are put on the silent LINE bank **at boot channel-strip setup**, not at track load.
-  (Earlier "idle=0" was a transient read between the constructor and the override.) This is why
-  every load-time breakpoint stayed silent — nothing re-routes at load.
-- **`routed_src` is written ONLY by the init `FUN_00080920` and the router `FUN_00080a74`**
-  (static xref of `0x107ace0`). The router is clean ARM; a Z0/Z1 bp on `0x80a74` DOES fire
-  (confirmed — single-step and bp both work over raw RSP).
-- **Channel-strip constructor `FUN_00084e20` routes the channel to src0 (DECK) correctly:** it sets
-  the channel object's **requested source `obj+0x254` (= `param_1[0x95]`) = 0** and applied
-  `obj+0x250` (`param_1[0x94]`) = 0, and calls `FUN_00080a74(0, chan)`. It also computes the
-  per-channel LINE index (**3 for ch0, 4 for ch1**) and stows a line flag via `FUN_00080b28`.
-- **The per-channel mixdown `FUN_00085a54` / apply `FUN_00085a10` route from `obj+0x254`:**
-  `if (obj+0x254 != obj+0x250) FUN_00080a74(obj+0x254, chan); obj+0x250 = obj+0x254;`. So whatever
-  sets **`obj+0x254` to the LINE index (3/4)** is the INPUT-SELECT default — that is the single
-  remaining unknown. It is set after construction, before audio starts.
-- **Catching that setter live is blocked:** it runs during early boot channel setup; a bp there
-  wedges rbp (the halts broke its real-time init into a ~500k-iteration retry of the constructor
-  route `FUN_00080a74(0,0)` from `lr=0x850dc`, boot never progressed). Statically it is behind a
-  C++ vtable write to `obj+0x254`, not resolvable by address xref.
+The virtual panel holds both bits by default (DECK); `POST /input` toggles them. With the bits
+clear both channels play the (silent) external inputs. The separate rear **LINE/PHONO** selector
+(EXT-TYPE) is a GPIO, not this bit — see below.
 
-**Bottom line for item 1:** the deck→channel routing is a **boot-time INPUT-SELECT=LINE default**
-baked into the mixer channel objects (`obj+0x254` = LINE idx). It is NOT a sub-ucom frame control
-and NOT driven by the D1/D2 SRC keys (GPIO 119/120 — tested, no effect on `routed_src`). So the
-clean "no gdb" fix is emulator/firmware-side, not a panel operation:
-- **Recommended QEMU fix** (no rebuild of rbp, no per-boot step): the inject harness (`xdj-panel.c` (was patch 07))
-  already rewrites guest memory each frame — have it also enforce the correct deck routing by
-  writing the global channel table at fixed addresses: for the deck channels, `ch_n.buf =
-  src[n].buf` and `ch_n.routed = n` (n=0 deck1, n=1 deck2), i.e. model INPUT SELECT = DECK. Pair
-  with baking the analog-gain defaults into the boot frame (item 2). This reproduces exactly the
-  live-verified fix (ch→src0 + gains = audio) with no gdb.
-- Alternative: find and patch the firmware `obj+0x254` default (set it to the channel's deck index
-  instead of the LINE index) — needs the vtable setter, which a future session can get by a bp that
-  does not wedge boot (e.g. hardware bp + let rbp settle, or patch the boot route to not loop).
+Data path, for reading routing live (`tools/xdj-panel/debug/tables.py`):
+- Source table at `0x107ac88`, 7 slots; channel table at `0x107acdc` (channel 1 = `0x107ace8`),
+  6 slots. Both have a 12-byte stride `{buf_ptr, src_idx, flag}`. Deck 1's player renders into
+  `src[0]`, deck 2's into `src[1]`; slots 3/4 are the external inputs.
+- Router `FUN_00080a74(src_idx, chan_idx)` copies a source slot into a channel slot.
+  `FUN_000809ec(src_idx, buf)` registers a source's live buffer and propagates it to channels
+  routed to it. Init `FUN_00080920` clears the buffer pointers and leaves every channel routed to an empty slot.
+- Channel object: `+0x254` = requested source, `+0x250` = applied source. The per-frame apply
+  `FUN_00085a10` calls the router when they differ and latches `+0x250`. The INPUT SELECT bit
+  reaches `+0x254` through a C++ virtual call.
 
-**gdb-free tooling built this session** (scratchpad): `rsp.py` (raw RSP: mem/reg read-write, Z0/Z2,
-continue/stop), `tables.py` (dump both tables), `inj.py` (gain-preserving one-shot/hold/mainkey
-injects), `mon.py`/`ser.py` (HMP monitor + guest console), `relaunch.sh` (debug launcher). USB
-bring-up per `docs/usb-mount-howto.md` (hub-only boot → post-boot `device_add`; do **not** `touch
-/tmp/usb2_insert` — that's the USB fault flag, the old cause of "USB Error"). Load a track
-by PUSH-drilling to it then one more PUSH → TRACK MENU → PUSH on LOAD TO DECK1.
+Audio also needs the gains up (channel fader `0x2c`, MASTER `0x4a`, crossfader `0x4e`).
+`xdj-panel.c` asserts those defaults for every control the operator is not driving.
 
-## Not in this frame / unresolved
-- **JOG rotation**: a separate protocol (not this 100-byte frame); unmapped.
-- Top-panel source keys (rekordbox/MIDI/USB1/USB2/DECK1-2/TIME MODE) are **MAIN-UCOM GPIOs**
-  (158–161 etc.), not sub-ucom — already wired via `/tmp/mainkey`.
+## Controls that are not in this frame
 
-## PLAY works but playback position does not advance (audio DMA not emulated)
+**MAIN-UCOM keys** are i.MX6 GPIO inputs rbp reads through `/dev/gpiodrv` (idle HIGH, pressed
+LOW), not sub-ucom bits:
 
-**Symptom (2026-11-11):** with a track loaded on a deck, pressing PLAY (`0x13.6`,
-`b 13 40`) makes the deck react (view/state changes on the LCD) but the **REMAIN
-time stays frozen** (e.g. `02:56.640`, unchanged 2.5 s later). The track never plays.
+| key | GPIO |
+|---|---|
+| rekordbox | 159 |
+| MIDI | 161 |
+| USB1 | 160 |
+| USB2 | 158 |
+| DECK 1/2 | 149 |
+| TIME MODE | 146 |
+| rear LINE/PHONO (EXT-TYPE) switch | 119 / 120 (HIGH = PHONO) |
 
-**Root cause — the deck playhead is slaved to the audio sample clock, which the
-emulator has no backend for:**
+Inject one with `echo <gpio> > /tmp/mainkey` (empty or removed = release), or over the `xdjkey`
+chardev in socket mode. LINE/PHONO is not emulated (no external audio). The rekordbox/MIDI/USB1/USB2
+key LEDs are rbp GPIO outputs 162–165 (see [subucom-led-map.md](subucom-led-map.md)). How to map
+a GPIO control: skill `map-gpio-control`.
 
-- The QEMU machine (`hw/arm/fsl-imx6.c`) models **no audio peripheral** — the only
-  SSI present is the *sub-ucom panel SPI slave*. There is no i.MX6 **SSI audio** path
-  and no **SDMA audio** channels.
-- On the guest, ALSA enumerates (`card0: ak4387-audio`, codec + `imx-ssi` map OK) but
-  the DMA platform fails: `dmesg` shows **`asoc: platform imx-pcm-audio.0 hw params
-  failed`**, and every playback substream (`/proc/asound/card0/pcm{0,1,2}p/sub0/status`)
-  reads **`closed`** — rbp never opens the audio device.
-- CDJ/XDJ players advance the deck position from frames consumed by the audio hardware.
-  With no SDMA audio DMA to drain PCM at 44.1 kHz, no period-elapsed IRQ fires, the ALSA
-  pointer never moves, and rbp's playhead is stuck — even though "play" latched.
+**Mic:** the MIC 1 / MIC 2 LEVEL knobs are not in this frame, and the virtual panel leaves them
+unwired. MIC EQ HI/LOW (`0x46`/`0x44`) and the MIC switch (`0x5b` bits 6–7) are in the frame and
+wired. The emulator has no audio inputs, so none of them change what is heard.
 
-**So the PLAY mapping is correct; this is the (still-unimplemented) `audio` roadmap
-feature.** To make playback advance, QEMU must model the i.MX6 **SSI + SDMA audio**
-path enough that `snd_pcm_hw_params` succeeds and the DMA produces period IRQs at the
-PCM rate (a real backend for sound, or a "null sink that drains at realtime" if only the
-*visual* playhead advancing is wanted, no actual audio).
+## Injection syntax
+
+`qemu/xdj/xdj-panel.c` builds each frame from a snapshot of lines, read from the `xdjctrl`
+chardev (socket mode, the app) or from `XDJ_CTRL_PATH` (default `/tmp/subucom_ctrl`, file mode).
+Offsets and values are hex.
+
+| line | meaning |
+|---|---|
+| `B <off> <mask>` | hold button bit(s) down while the line is present |
+| `A <off> <val16>` | hold a 16-bit LE analog/counter value |
+| `b <off> <mask>` | one-shot press, then release (~30 frames) |
+| `a <off> <val16>` | one-shot analog value, then release |
+| `S <off> <mask> <bits>` | switch field (virtual-panel server only; it folds the field into the `B` lines it writes) |
+
+- A snapshot is the whole truth: anything left out returns to 0 (released) in the next frame.
+- In file mode, a one-shot left in the file next to holds re-fires every 30 frames; rewrite the
+  holds alone right after (`tools/xdj-panel/debug/inj.py pulse`).
+- Examples: `B 13 40` press PLAY on deck 1; `A 2c 3ff` channel 1 fader up; `B 33 80` + `B 43 80`
+  both channels on DECK; `printf 'B 13 04\nB 12 08\n'` before boot = test mode
+  ([service-modes.md](service-modes.md)).
+
+How to map a new control: skills `map-subucom-button`, `map-subucom-fader`, `map-subucom-knob`,
+`map-subucom-rotary`.
+
+## Related
+
+- [subucom-led-map.md](subucom-led-map.md) — the rbp → MCU payload (LEDs, meters, jog ring)
+- [rbp-and-panel-protocol.md](rbp-and-panel-protocol.md) — the SPI transport and rbp's panel classes
+- [debug-console-protocol.md](debug-console-protocol.md) — rbp's UDP debug console and its code tables
+- [service-modes.md](service-modes.md) — test mode, update mode, the standby handshake
+- [usb.md](usb.md) — mounting USB sticks (needed for MASTER REC and track loads)
+- [emulator-status.md](emulator-status.md) — feature board

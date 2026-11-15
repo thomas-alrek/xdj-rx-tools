@@ -1,0 +1,18 @@
+# Python dependencies for the dev tools (tools/fetch_key.py, qemu/build-nand.py).
+#   python3 -m venv .venv && source .venv/bin/activate   # (optional but recommended)
+#   pip install -r tools/requirements.txt
+#
+# Or run a script with uv and let it resolve deps automatically
+# (PEP 723 inline metadata):  uv run tools/fetch_key.py
+
+pycdlib>=1.14        # ISO9660 reading for qemu/build-nand.py (the SD test-bed image)
+inflate64>=1.0       # deflate64 unwrap for tools/fetch_key.py (the GPL-source download path)
+
+# Python is only needed for these dev tools; the firmware toolkit is the `xdj` CLI
+# (crates/xdj-fw) and the desktop app needs no Python at all.
+
+# Non-pip system dependency:
+#   qemu/build-nand.py needs e2fsprogs (mke2fs + debugfs) to build the ext4 SD image
+#   (no Docker or root needed).
+#     macOS:  brew install e2fsprogs
+#     Debian: sudo apt-get install e2fsprogs

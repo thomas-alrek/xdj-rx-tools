@@ -2,7 +2,7 @@ XDJ-RX: SABRE-SD board wiring on the sabrelite machine.
 
 The XDJ-RX is a SABRE-SD board (MACH_TYPE 3980): rootfs SD card ("xdjsd") on
 uSDHC3, console on ttymxc0, and the front-panel MCU ("xdj-subucom" SSI slave) on
-ECSPI2. (Was patch 03.)
+ECSPI2.
 
 --- a/hw/arm/sabrelite.c
 +++ b/hw/arm/sabrelite.c
