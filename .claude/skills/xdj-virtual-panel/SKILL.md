@@ -1,6 +1,6 @@
 ---
 name: xdj-virtual-panel
-description: Work on the XDJ-RX virtual web panel (tools/xdj-panel/) - the browser UI that streams the emulator's screen and drives its controls by injecting sub-ucom frames / GPIO keys. Use when adding or fixing a panel control, adjusting the layout, wiring a newly-mapped control into the UI, changing the server's inject/hold model, mounting USB from the panel, or debugging the panel↔emulator bridge.
+description: Work on the XDJ-RX virtual web panel (tools/xdj-panel/) - the browser UI that streams the emulator's screen and drives its controls by injecting sub-ucom frames / GPIO keys. Use when adding or fixing a panel control, adjusting the layout, wiring a newly-mapped control into the UI, changing the server's inject/hold model, mounting USB from the panel, or debugging the panel↔emulator bridge. Also covers the app's native menu bar (MENU in panel.html), the pop-out screen, panel LEDs/meters, and the Sub uCom / System log windows (logs.html, /log/*).
 ---
 
 # XDJ-RX virtual panel (`tools/xdj-panel/`)
@@ -36,6 +36,10 @@ device **photo** as its background; that photo was deleted and must never ship a
   - Defaults: TRIM and MASTER level start at **half** (512), like the hardware's centre detent.
   - Arrow glyphs: `◄`/`►` come from different fallback fonts under the system font (different
     sizes), so `setLabel()` draws every `◄` as a mirrored `►` (`.flip`).
+- **Channel INPUT SELECT** (DECK ↔ LINE/PHONO, frame bits `0x33.7`/`0x43.7`) is the toggle in each
+  channel strip (`srcCh` entries `deck1src`/`deck2src`, ids `src0`/`src1`, blue DECK / amber LINE;
+  `toggleSrc` → `POST /input`). It used to be in the header. The rear **LINE/PHONO** EXT-TYPE switch
+  (GPIO 119/120) is deliberately **not** on the panel — there's no external audio to switch.
 - **Layout notes:** LEVEL meters are one centred bank (`t:'meterbank'`: CH1 | MASTER | CH2 between
   the LOAD keys and XF CURVE, like the device; MASTER is one column — rbp sends one master level, and
   no dB scale is drawn since the segment→dB mapping is unknown). BROWSE/TAG LIST/INFO/MENU are evenly
@@ -51,7 +55,21 @@ device **photo** as its background; that photo was deleted and must never ship a
   `const C = {}` is the control registry (`l` label, `t` type, `spec`/`gpio`/`specUp`…).
 - **Screen**: noVNC (`?vnc=ws://host/`, RFB over WebSocket) in the app, or `/raw` screendump poll
   in dev. `#screen,#screen *{cursor:default!important}` keeps the pointer visible (noVNC hides it).
-- **Pop-out screen** (header `⧉ Screen`): the same page with `?screen=1` renders only `#screen`,
+- **The window is only the virtual deck** (2026-11-15): no header bar, no log strip, no in-page
+  menu (by request — don't add one). Everything else lives in the **native menu bar** (app only):
+  `MENU` in `panel.html` = File | Edit | Mixer | Deck 1 | Deck 2 | Color FX | FX | Master | View |
+  Window, built with `window.__TAURI__.menu` (`buildAppMenu`, needs `core:menu:default`) and set as
+  the app menu. A plain browser gets no menu. Menu actions go *through the widgets*: `tap(id)` =
+  momentary press of a button (visual + spec/gpio, auto-release), `setW(id,v)` = a widget's
+  `WG[id].set(v)` (knobs/faders/xfader/selectors/switches register setters), `setSrc`, `mountUsb`.
+  To expose a new control in the menu, add a line to `MENU`/`deckMenu`.
+- **Logs**: `log(m)` goes to the browser console and `POST /log/note`. View > *View Sub uCom Log* /
+  *View System Log* open `logs.html?src=subucom|console` (Tauri windows `log-subucom`/`log-console`,
+  or browser pop-ups), streaming `GET /log/<src>`: the sub-ucom log = every control POST (`->`),
+  rbp LED changes (`<-`, blink toggles and meter/jog bytes suppressed) and panel notes (`·`); the
+  system log tails the guest console (`--console`; default `console.log` beside `--ctrl-sock` = the
+  app's runtime dir, else `/tmp/xdj_console.log`, which `relaunch.sh` writes via chardev `logfile=`).
+- **Pop-out screen** (**double-click the screen**, or View > Pop Out Screen): the same page with `?screen=1` renders only `#screen`,
   letterboxed in a resizable window, and never pushes state/holds (view-only; a second VNC client).
   In the app it is a Tauri `WebviewWindow` labelled `screen` (JS API; needs
   `core:webview:allow-create-webview-window` + `core:window:allow-set-focus` in the capability —
@@ -82,6 +100,8 @@ panel POSTs into control writes. Run (dev): `python3 tools/xdj-panel/server.py -
 | `POST /mainkey` `/mainkey_release` | gpio / — | hold/release a MAIN-UCOM GPIO key |
 | `POST /usb` | `<usb1\|usb2> <path>` | mount a disk image/device on a front slot (see below) |
 | `GET /raw` | — | framebuffer (`X-Width`/`X-Height` headers, body `w*h*3`) |
+| `GET /log/subucom` `/log/console` | — | **SSE** log lines (backlog first); page `GET /logs.html?src=…` |
+| `POST /log/note` | text | append a panel note to the sub-ucom log |
 | `GET /leds` | — | **SSE** stream of rbp's 20-byte LED payload (`data: <40 hex>` per change); `?once=1` = JSON |
 | `GET /cal-ref` | — | dev calibration overlay image (`XDJ_CAL_REF`; 404 if unset) |
 
@@ -132,6 +152,9 @@ over SSE; `panel.html` `startLeds()` → `applyLeds(hex)`:
 - `t:'meter'` cells (`meter:<byte>`) = 12-segment bars from a 16-bit LE bitmask (CH1 `0x0e`,
   CH2 `0x0c`, MASTER `0x08`). Grid rows, not flex (WKWebView flex-fill collapse).
 - jog cells get a `.jogled` ring: byte `0x00`/`0x04` = 1..36 position, 0 = full ring, else off.
+- **byte `0x14`** (QEMU patch 17, the 21st byte) = source-key LEDs from GPIO 162–165: bit0 rekordbox,
+  bit1 MIDI, bit2 USB1, bit3 USB2 — the `src_*` keys use `led:[0x14,n]` like any other LED.
+  `server.py` accepts 40 or 42 hex.
 Map + open items: `docs/subucom-led-map.md`. Map a new LED with `debug/ledprobe.py` (file mode).
 
 ## Adding a control
@@ -157,9 +180,11 @@ Map + open items: `docs/subucom-led-map.md`. Map a new LED with `debug/ledprobe.
 - To verify a mapping without the LCD: break on the dispatcher `0x2a47c0` (`r1`=code,
   `r2`=state, `r3`=deck) — but on `-smp 1`, step off each bp, and keep halts sparse (the UI
   stops reacting after many halts; reboot before visual checks).
-- The log box re-enables `user-select` (the panel is `user-select:none` globally).
+- The panel is `user-select:none` globally; text to copy lives in the log windows (`logs.html`).
+- Loading the panel page **pushes its full default state** (`pushInitialState`) — opening a second
+  panel tab or a headless snapshot resets the emulator's mixer to the panel defaults.
 
 ## References
-`tools/xdj-panel/{server.py,panel.html}`, `app/ui/{node_modules/audio-knobs,novnc}`.
+`tools/xdj-panel/{server.py,panel.html,logs.html}`, `app/ui/{node_modules/audio-knobs,novnc}`.
 Skills: [build-xdj-app], [run-xdj-emulator], [map-subucom-button/fader/knob/rotary],
-[map-gpio-control]. Docs: `docs/subucom-frame-map.md`, `docs/usb-mount-howto.md`. Memory: [[photo-panel]].
+[map-gpio-control]. Docs: `docs/subucom-frame-map.md`, `docs/subucom-led-map.md`, `docs/usb-mount-howto.md`. Memory: [[photo-panel]].

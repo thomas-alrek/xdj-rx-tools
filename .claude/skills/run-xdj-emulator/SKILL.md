@@ -1,6 +1,6 @@
 ---
 name: run-xdj-emulator
-description: Launch and drive the XDJ-RX firmware emulator - boot the patched QEMU to the live rekordbox UI, capture the screen, mount a rekordbox USB, inject sub-ucom panel controls, read audio routing over the gdbstub, and hear deck audio on the host. Use when you need to run/boot the emulator, reproduce a UI/audio/control behavior, or set up a live test bed.
+description: Launch and drive the XDJ-RX firmware emulator - boot the patched QEMU to the live rekordbox UI, capture the screen, mount a rekordbox USB, inject sub-ucom panel controls, read audio routing over the gdbstub, hear deck audio on the host, measure audio stutter, and boot the service modes (test mode, firmware-update mode). Use when you need to run/boot the emulator, reproduce a UI/audio/control behavior, or set up a live test bed.
 ---
 
 # Running the XDJ-RX emulator
@@ -27,6 +27,8 @@ XDJ_AUDIO_DEBUG=1 nohup ./tools/xdj-panel/debug/relaunch.sh > /tmp/xdj_qemu.log 
 - Monitor (HMP): `tools/xdj-panel/debug/mon.py "<cmd>"` → `/tmp/d_mon4.sock`
   (`screendump`, `device_add`, `xp/1wx <addr>`, `info usb`, `cont`).
 - Serial console: `tools/xdj-panel/debug/ser.py "<shell cmd>"` → `/tmp/d_con4.sock` (login root).
+  Everything the console prints is also logged to **`/tmp/xdj_console.log`** (chardev `logfile=`;
+  the panel's View > System Log tails it) — read it instead of competing for the socket.
 - gdbstub: `tools/xdj-panel/debug/rsp.py` (raw RSP); `tables.py` dumps the audio routing tables.
 
 ## See the screen
@@ -111,7 +113,24 @@ with `XDJ_AUDIO_STATS=1` for a 5 s line: `underruns`/`gap` (host ran dry), `minf
 (`ch_n.routed_src`: deck=n, line=n+3). Idle default = LINE (ch0→3, ch1→4) until the source
 switch is held to DECK.
 
+## Service modes (test mode / update mode) — `docs/service-modes.md`
+- **Test mode** (8 sub-modes: versions, LED/LCD all off/on, LCD patterns, KEY/LED, SW, VR/fader
+  values in hex, rotary counters): hold DECK 1 MEMORY + TEMPO RANGE *from power-on* —
+  `printf 'B 13 04\nB 12 08\n' > /tmp/subucom_ctrl` before `relaunch.sh` (file mode), remove the
+  file once Mode 1 shows, then turn/push the browse encoder to change mode. rbp only checks the
+  **first** frame it parses, so the holds must already be there at boot. Modes 5/6/7 are oracles
+  for mapping LEDs, switches and pots. Occasionally comes up in the normal UI or crashes the
+  `TestModeView` thread — just reboot.
+- **Firmware-update mode**: `XDJ_BOOT_UPDATE=1 ./tools/xdj-panel/debug/relaunch.sh` (QEMU patch
+  19) → the initramfs "Connect USB storage device into top USB1 port." screen. Going further needs a
+  USB image with `XDJRX.UPD`, and the updater then wants NAND MTDs + the sub-ucom update protocol
+  (not emulated). Debug launcher only (`snapshot=on`); never the app image or a real stick.
+- **Factory reset**: DELETE + TEMPO RANGE (`B 13 08` + `B 12 08`) — untested.
+
 ## Gotchas
+- **gdbstub halts the VM on connect** — send `?` first (rsp.py `cmd('?')`); a bare `interrupt()`
+  right after connecting gets no reply. Hardware breakpoints (`set_bp(addr, kind=1)`) work from
+  power-on (rbp is non-PIE); clear one after it hits or `c` re-triggers it.
 - **Host load:** single-core TCG boot starves under load — **close REA/Ghidra before booting**
   (Ghidra + rekordbox-on-host hang the boot at high load). `iPodMgr` has a load-sensitive
   startup SIGSEGV; keep load low (don't leave thousands of `.ppm` files around → Spotlight).
@@ -122,6 +141,7 @@ switch is held to DECK.
 - Boot occasionally hangs on the splash — if no home screen after ~120 s, kill + relaunch.
 
 ## References
-`QEMU.md`, `docs/usb-mount-howto.md`, `docs/emulator-status.md`, `docs/subucom-frame-map.md`.
+`QEMU.md`, `docs/usb-mount-howto.md`, `docs/emulator-status.md`, `docs/subucom-frame-map.md`,
+`docs/service-modes.md`, `docs/subucom-led-map.md`.
 Tools: `tools/xdj-panel/debug/`. Skills: [qemu-imx6-patches], [map-subucom-button],
 [map-subucom-fader], [map-subucom-knob], [map-subucom-rotary], [map-gpio-control], [rbp-binary-internals].

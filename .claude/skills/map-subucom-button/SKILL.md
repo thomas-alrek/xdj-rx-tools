@@ -52,6 +52,12 @@ inject it.
    bit 7 = CH1** (`1`=DECK, `0`=LINE; live-toggles). Space the RSP reads (don't hammer).
 5. Record `(off, bit, code, control, confidence)` in `docs/subucom-frame-map.md`.
 
+## Test-mode oracle
+Test **Mode 5 (KEY/LED TEST)** lights the LED belonging to each pressed key, and the service
+manual's key→LED table (p. 38) names LEDs we haven't mapped yet (USB1/2 STOP, MASTER REC, BROWSE,
+TAGLIST, INFO, MENU, TAP, LOAD1/2). Mode 6 (SW TEST) shows switch positions. Entry: skill
+`run-xdj-emulator`, "Service modes"; details `docs/service-modes.md`.
+
 ## The button's LED (other direction)
 Button LEDs are NOT in the RX frame: rbp drives them through the MOSI `SubTxData` payload (QEMU
 patch 15). After mapping the press, find its LED with `tools/xdj-panel/debug/ledprobe.py b_<off>_<mask>`

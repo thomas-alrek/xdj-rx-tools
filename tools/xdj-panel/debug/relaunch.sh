@@ -22,6 +22,9 @@ if [ -n "${XDJ_RUNTIME_DIR:-}" ]; then
   echo "ctrl: xdjctrl=$XDJ_RUNTIME_DIR/ctrl.sock  xdjkey=$XDJ_RUNTIME_DIR/key.sock" >&2
 fi
 
+# The serial console stays on /tmp/d_con4.sock (ser.py) and is also logged to
+# /tmp/xdj_console.log, which the panel's View > System log tails.
+
 # USB stick backend (id=usbstick) for the post-boot device_add -- only when the image exists.
 USBIMG="${XDJUSB:-test/usb/rekordbox_new.img}"
 USB_ARGS=()
@@ -45,5 +48,6 @@ exec env XDJ_AUDIO_DEBUG=1 "$QEMU" \
   -nic user \
   ${CTRL_ARGS[@]+"${CTRL_ARGS[@]}"} \
   -monitor unix:/tmp/d_mon4.sock,server,nowait \
-  -serial unix:/tmp/d_con4.sock,server,nowait -serial null \
+  -chardev socket,id=con0,path=/tmp/d_con4.sock,server=on,wait=off,logfile=/tmp/xdj_console.log \
+  -serial chardev:con0 -serial null \
   -gdb tcp::1234

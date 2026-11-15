@@ -461,9 +461,11 @@ fn main() {
                 // (don't leave a headless QEMU running).
                 WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed => {
                     if window.label() == "main" {
-                        // the pop-out screen window (opened from the panel) goes with it
-                        if let Some(s) = window.app_handle().get_webview_window("screen") {
-                            let _ = s.close();
+                        // the pop-out screen and log windows (opened from the panel) go with it
+                        for (label, w) in window.app_handle().webview_windows() {
+                            if label == "screen" || label.starts_with("log-") {
+                                let _ = w.close();
+                            }
                         }
                         stop_host(&window.app_handle().state::<AppState>());
                     }

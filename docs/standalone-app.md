@@ -70,7 +70,7 @@ Keeping them separate means the emulator plumbing has no Tauri dependency and is
 | `tools/xdj-panel/` | `server.py` (panel sidecar) + `panel.html` (the control UI). See skill `xdj-virtual-panel`. |
 | `packaging/build-macos-app.sh` | Assembles `dist/XDJ-RX.app`. |
 | `xdjrx_upd.py`, `qemu_prepare.py`, `qemu/build-nand.py` | The firmware-prep pipeline the host drives. |
-| `qemu/` | The patched-QEMU build scripts + `patches/01..13`. |
+| `qemu/` | The patched-QEMU build scripts + `patches/01..19`. |
 
 App-data (runtime, never in the repo): `~/Library/Application Support/XDJ-RX/` on macOS
 (`$XDG_DATA_HOME/xdj-rx` elsewhere). Contains `key/aes256.key`, per-firmware cache dirs keyed by

@@ -139,6 +139,21 @@
 #       tick is rate-locked to the FIFO level. 378 -> 2 xruns / 30 s under load.
 #       XDJ_AUDIO_LATENCY_MS (FIFO target, default 20), XDJ_AUDIO_STATS=1.
 #
+#   patches/17-imx6-source-key-leds.patch
+#       The rekordbox/MIDI/USB1/USB2 key LEDs are rbp GPIO outputs 162..165
+#       (GPIO6_IO02..05, active-high, one-hot). Mirrors them and appends one byte to
+#       the patch-15 LED line ("T <40 hex> <2 hex>"); the panel reads it as byte 0x14.
+#
+#   patches/18-imx6-auth-chip-i2c4.patch
+#       Fixes E-7206 "AUTH CHIP ERROR": adds the missing I2C4 controller (0x021F8000,
+#       guest /dev/i2c-3) and an MFi auth-coprocessor identity responder at 0x10
+#       (rbp's self-check reads reg 0x00 == 0x05, reg 0x01 == 0x01). Also reports
+#       the sub-ucom firmware version 0.35 in frame bytes 2-3 (XDJ_SUBUCOM_VER).
+#
+#   patches/19-imx6-update-mode-strap.patch
+#       XDJ_BOOT_UPDATE=1 drives GPIO3_IO30 (the sub-ucom's update request) HIGH
+#       from reset, so the initramfs boots into USB firmware-update mode.
+#
 #   patches/03-sabrelite-sabresd-sd.patch
 #       The XDJ-RX firmware's real board is SABRE-SD (MACH_TYPE 3980), which
 #       registers ECSPI2 (bus 1) for the panel MCU + audio codecs, on a

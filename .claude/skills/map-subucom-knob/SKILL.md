@@ -31,6 +31,9 @@ Setter leaves: EQ `FUN_000836dc`, level `FUN_00083df8`. (EQ MID/LOW were once mi
 trust the codes: `0x5009`=MID, `0x500a`=LOW.)
 
 ## Method
+0. **Test-mode oracle:** test **Mode 7** lists TRIM/HIGH/MID/LOW/COLOR/TOUCH-RELEASE/HP/MIC EQ/
+   LEVEL-DEPTH/BOOTH/MASTER as raw hex (see the fader skill, step 0); Mode 8 shows the rotary
+   SELECTOR/TIME counters.
 1. **Inject + setter breakpoint:** `A <off> 3ff` (or `0` / `0x200`) hold; gdb-RSP breakpoint on
    the EQ/level setter leaf; read `(channel/band, float)` to confirm which band and the curve
    (center `0x200` should map to the neutral float, e.g. `1.0f`=`0x3f800000` for unity EQ).

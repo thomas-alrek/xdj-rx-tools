@@ -12,7 +12,9 @@ protocol, and streams the QEMU framebuffer to the browser as raw RGB (drawn on a
   POST /jog      body="1 move <deg> <sec>" | "1 touch 1"  -> jog wheel (counter/period/flags)
   GET  /raw                      -> latest framebuffer as raw RGB
                                     (headers X-Width / X-Height; body w*h*3 bytes)
-  GET  /leds                     -> Server-Sent Events: one "data: <40 hex>" per change of
+  GET  /logs.html?src=subucom|console -> log window page; GET /log/<src> = its SSE stream
+  POST /log/note                 -> append a panel note to the sub-ucom log
+  GET  /leds                     -> Server-Sent Events: one "data: <40|42 hex>" per change of
                                     rbp's 20-byte LED/meter payload (SubTxData, QEMU patch 15;
                                     layout docs/subucom-led-map.md). /leds?once=1 = current JSON.
 
@@ -80,12 +82,95 @@ _leds = {"hex": "", "seq": 0}
 _leds_cv = threading.Condition()
 
 
+# ---- log windows (View > Sub uCom log / System log) -------------------------------------
+# Two line rings served as SSE at GET /log/<src>:
+#   subucom -- panel -> emulator control traffic (what each POST asked for) and rbp's LED
+#              changes (non-meter / non-jog bytes), plus panel notes (POST /log/note);
+#   console -- the guest Linux console, tailed from --console (the app's runtime-dir
+#              console.log; the debug launcher's /tmp/xdj_console.log).
+LOG_MAX = 5000
+_logs = {"subucom": [], "console": []}       # [(index, line)]
+_log_next = {"subucom": 0, "console": 0}
+_log_cv = threading.Condition()
+CONSOLE = None
+
+
+def _logline(src, text):
+    with _log_cv:
+        buf = _logs[src]
+        for ln in str(text).splitlines() or [""]:
+            if src != "console":
+                ln = time.strftime("%H:%M:%S") + "  " + ln
+            buf.append((_log_next[src], ln))
+            _log_next[src] += 1
+        if len(buf) > LOG_MAX:
+            del buf[: len(buf) - LOG_MAX]
+        _log_cv.notify_all()
+
+
+_LED_SKIP = {0x00, 0x04, 0x08, 0x09, 0x0C, 0x0D, 0x0E, 0x0F}   # jog rings + level meters
+
+
+_led_prev = {}      # byte -> (value before its last change, time of that change)
+
+
+def _log_led_diff(old, new):
+    # rbp blinks LEDs by toggling bits ~3x/s; a byte flipping straight back to its previous
+    # value within 1 s is a blink, not a state change, so it isn't logged.
+    try:
+        a, b = bytes.fromhex(old), bytes.fromhex(new)
+    except ValueError:
+        return
+    now, ch = time.time(), []
+    for i in range(min(len(a), len(b))):
+        if a[i] == b[i] or i in _LED_SKIP:
+            continue
+        pv, t = _led_prev.get(i, (None, 0.0))
+        _led_prev[i] = (a[i], now)
+        if pv == b[i] and now - t < 1.0:
+            continue
+        ch.append("%02x:%02x>%02x" % (i, a[i], b[i]))
+    if len(b) > len(a):
+        ch.append("%02x:->%02x" % (len(a), b[len(a)]))
+    if ch:
+        _logline("subucom", "<- LED  " + "  ".join(ch))
+
+
+def _console_loop():
+    # Tail CONSOLE (it may appear later, or be truncated by a reboot).
+    pos, ino, part = 0, None, b""
+    while True:
+        try:
+            st = os.stat(CONSOLE)
+            if ino != st.st_ino or st.st_size < pos:
+                ino, pos, part = st.st_ino, max(0, st.st_size - 200_000), b""
+            if st.st_size > pos:
+                with open(CONSOLE, "rb") as f:
+                    f.seek(pos)
+                    data = f.read(1_000_000)
+                pos += len(data)
+                data = part + data
+                lines = data.split(b"\n")
+                part = lines.pop()
+                if lines:
+                    _logline("console", b"\n".join(l.rstrip(b"\r") for l in lines)
+                             .decode("utf-8", "replace"))
+        except FileNotFoundError:
+            pass
+        time.sleep(0.25)
+
+
 def _leds_update(hexstr):
-    hexstr = hexstr.strip().lower()
-    if len(hexstr) != 40 or any(c not in "0123456789abcdef" for c in hexstr):
+    # "<40 hex>" = SubTxData; QEMU (patch 17) appends " <2 hex>" = source-key LEDs
+    # (GPIO 162..165: bit0 rekordbox, bit1 MIDI, bit2 USB1, bit3 USB2). Served as one
+    # string: byte 0x14 of the panel's LED array.
+    hexstr = hexstr.strip().lower().replace(" ", "")
+    if len(hexstr) not in (40, 42) or any(c not in "0123456789abcdef" for c in hexstr):
         return
     with _leds_cv:
         if hexstr != _leds["hex"]:
+            if _leds["hex"]:
+                _log_led_diff(_leds["hex"], hexstr)
             _leds["hex"] = hexstr
             _leds["seq"] += 1
             _leds_cv.notify_all()
@@ -641,6 +726,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send_file("calibration.json", base=ASSETS)
             else:
                 self._send(404, "application/json", b"{}")
+        elif path == "/logs.html":
+            self._send_file("logs.html")
+        elif path in ("/log/subucom", "/log/console"):
+            src = path.rsplit("/", 1)[1]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            if src == "console" and not CONSOLE:
+                self.wfile.write(b"data: (no console log: start the panel server with --console)\n\n")
+            nxt = 0
+            try:
+                while True:
+                    with _log_cv:
+                        if _log_next[src] == nxt:
+                            _log_cv.wait(15.0)
+                        out = [ln for i, ln in _logs[src] if i >= nxt]
+                        nxt = _log_next[src]
+                    if out:
+                        self.wfile.write("".join("data: %s\n\n" % ln.replace("\r", "")
+                                                 for ln in out[-LOG_MAX:]).encode())
+                    else:
+                        self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+            except Exception:
+                pass
         elif path == "/leds":
             if "once=1" in self.path:
                 with _leds_cv:
@@ -683,6 +796,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", 0) or 0)
         body = self.rfile.read(n).decode("utf-8", "replace") if n else ""
         path = self.path.split("?", 1)[0]
+        if path == "/log/note":
+            _logline("subucom", "·  " + body.strip()[:500])
+            self._send(200, "text/plain", b"ok"); return
+        if path in ("/ctrl", "/release", "/input", "/mainkey", "/mainkey_release", "/browse", "/usb"):
+            _logline("subucom", "-> %-16s %s" % (path[1:], " | ".join(
+                ln.strip() for ln in body.strip().split("\n") if ln.strip()) or "(all)"))
+        elif path == "/jog" and "touch" in body:
+            _logline("subucom", "-> jog              " + body.strip())
         if path == "/ctrl":
             # One spec per line. A = set an analog value (persists), B = press and
             # HOLD a button bit (until /release names it), a/b = one-shot,
@@ -860,7 +981,15 @@ def main():
     ap.add_argument("--key-sock", default=None,
                     help="QEMU xdjkey chardev socket (push mainkey GPIO int here "
                          "instead of /tmp/mainkey)")
+    ap.add_argument("--console", default=None,
+                    help="guest console log file to show in View > System log (default: "
+                         "console.log next to --ctrl-sock, else /tmp/xdj_console.log)")
     args = ap.parse_args()
+    global CONSOLE
+    CONSOLE = args.console or (os.path.join(os.path.dirname(args.ctrl_sock), "console.log")
+                               if args.ctrl_sock and os.path.exists(os.path.join(
+                                   os.path.dirname(args.ctrl_sock), "console.log"))
+                               else "/tmp/xdj_console.log")
     MON = args.mon
     QMP = args.qmp
     CTRL_SOCK = args.ctrl_sock
@@ -881,6 +1010,8 @@ def main():
         except Exception:
             pass
         threading.Thread(target=_jog_idle_loop, daemon=True).start()
+        threading.Thread(target=_console_loop, daemon=True).start()
+        print("console log: %s" % CONSOLE)
         threading.Thread(target=_leds_sock_loop if CTRL_SOCK else _leds_file_loop,
                          daemon=True).start()
         print("Ctrl-C to stop.")

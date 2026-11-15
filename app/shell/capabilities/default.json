@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Core defaults. The emulator UI is an external localhost page; it may invoke the app's own IPC commands (e.g. the USB file picker) and open the pop-out screen window.",
+  "description": "Core defaults. The emulator UI is an external localhost page; it may invoke the app's own IPC commands (e.g. the USB file picker), open the pop-out screen and log windows, and build the native menu bar.",
   "windows": ["*"],
   "remote": {
     "urls": ["http://127.0.0.1:*", "http://localhost:*"]
@@ -10,6 +10,7 @@
     "core:default",
     "dialog:allow-open",
     "core:webview:allow-create-webview-window",
-    "core:window:allow-set-focus"
+    "core:window:allow-set-focus",
+    "core:menu:default"
   ]
 }

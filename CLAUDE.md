@@ -20,12 +20,14 @@ interoperability/preservation on owned hardware.
 
 ## Layout
 - `xdjrx_upd.py`, `fetch_key.py` — `.UPD` firmware decrypt/extract/pack + AES key fetch → skill `upd-firmware-format`.
-- `qemu/` — `build-qemu.sh`, `patches/01..16`, `watch.sh`, `build-nand.sh`, `cramfs_extract.py`.
+- `qemu/` — `build-qemu.sh`, `patches/01..19`, `watch.sh`, `build-nand.sh`, `cramfs_extract.py`.
 - `qemu_prepare.py` — kernel boot blobs (trampoline/atags/vmlinux). `run.sh` — from-scratch build+boot.
 - `build/` (git-ignored) — `qemu-src/` (patched QEMU), `extract/rbp` (the analyzed binary), `qemu/` (boot blobs, nand.img).
-- `tools/xdj-panel/` — the virtual web panel (`server.py`, `panel.html`) + `debug/` (RE launcher & helpers: `relaunch.sh`, `rsp.py`, `tables.py`, `mon.py`, `ser.py`, `inj.py`, `sweep_*.py`).
+- `tools/xdj-panel/` — the virtual web panel (`server.py`, `panel.html`, `logs.html`) + `debug/` (RE launcher & helpers: `relaunch.sh`, `rsp.py`, `tables.py`, `mon.py`, `ser.py`, `inj.py`, `sweep_*.py`).
 - `docs/` — handovers + the authoritative `subucom-frame-map.md` (control map), `subucom-led-map.md`
-  (LED/meter map) and `emulator-status.md` (feature board).
+  (LED/meter map), `service-modes.md` (test/update/factory-reset modes, auth chip) and
+  `emulator-status.md` (feature board). The XDJ-RX **service manual** (manualslib 1307531) is the
+  hardware reference; it's Pioneer-owned, so keep it out of the repo and cite page numbers.
 - `test/` — e.g. `test/usb/rekordbox_new.img`; `~/Downloads/rekordbox_test.dmg` also exists.
 
 ## Key established facts (so they aren't re-derived)
@@ -34,7 +36,9 @@ interoperability/preservation on owned hardware.
 - **Source switch** (deck↔line/phono) = frame bits **`rbp[0x33].7` (CH0) / `rbp[0x43].7` (CH1)**,
   `1`=DECK `0`=LINE, injectable + live. The separate **LINE-vs-PHONO** (EXT-TYPE) switch is
   GPIO **119/120** (`switchState +0xa0/+0xb0`); `0x1013`/`LinePhonoSW` = that EXT-TYPE control.
-- **GPIO 117/118, 134/135, 162-165 are rbp OUTPUT pins** (mux/control), not switch inputs.
+- **GPIO 117/118, 134/135, 162-165 are rbp OUTPUT pins**, not switch inputs. **162-165 = the
+  rekordbox/MIDI/USB1/USB2 key LEDs** (active-high, one-hot); patch 17 appends them to the LED line
+  as byte `0x14`. GPIO 119/120 = rear LINE/PHONO switch (HIGH=PHONO), **not emulated** (no ext audio).
 - **GPIO4_IO30 / GPIO7_IO12 (ids 0x7e/0xcc) are active-low USB FAULT flags, not insert-detect.**
   Insert a USB with `device_add` only; `touch /tmp/usb*_insert` (patch 06) asserts the fault →
   "USB Error. Remove the device." (that was the long-standing "USB Error on a correct insert").
@@ -49,6 +53,12 @@ interoperability/preservation on owned hardware.
   `/tmp/subucom_tx`); the panel lights from `GET /leds`. Map: `docs/subucom-led-map.md`.
 - A one-shot `b`/`a` left in `/tmp/subucom_ctrl` **next to holds re-fires every 30 frames** (file
   mode) — rewrite the holds alone right after (`inj.py pulse`), or toggles flip back and forth.
+- **Service modes** (`docs/service-modes.md`, from the service manual + RE): **test mode** = hold
+  `B 13 04`+`B 12 08` (MEMORY+TEMPO RANGE) in `/tmp/subucom_ctrl` *before* boot (rbp checks only
+  the first frame; Mode 5/6/7 = LED/switch/pot oracles); **update mode** = `XDJ_BOOT_UPDATE=1`
+  (GPIO3_IO30, patch 19). Frame bytes 2–3 = sub-ucom version (0.35).
+- **E-7206 AUTH CHIP ERROR** = MFi auth coprocessor missing: it's on **I2C4** (`0x021F8000`,
+  `/dev/i2c-3`, slave 0x10), which stock QEMU lacks. Patch 18 adds it (identity regs only).
 - **Audio** works (patch 11, SDMA/SSI/AUDMUX; sonifier → SDMA ch1 = MasterOut). Audible needs
   routing=DECK + gains up (on-air gate `FUN_00065028`). **Stutter = guest ALSA xruns** (rbp's ring is
   2×64 frames): periods must complete evenly, one per 1.45 ms — patch 16's pacer thread does that

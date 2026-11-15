@@ -69,8 +69,15 @@ to update them.
   block (`http://127.0.0.1:*`, `http://localhost:*`) to `app/shell/capabilities/default.json` so the
   external page may use IPC at all. `remote` capabilities are stable on Tauri 2.12 (no `unstable`).
 
+## Native menu bar + extra windows
+The panel page builds the **app menu** itself via the Tauri JS menu API (`buildAppMenu` in
+`panel.html`; permission `core:menu:default` in `capabilities/default.json`) — the main window holds
+only the virtual deck. View > *Sub uCom Log* / *System Log* open webview windows `log-subucom` /
+`log-console` (`logs.html`); the system log is the QEMU serial `console.log` in the runtime dir, which
+the sidecar finds next to `ctrl.sock`. Closing `main` closes `screen` and every `log-*` window.
+
 ## Pop-out screen window (`screen`)
-The panel's `⧉ Screen` button creates a second webview window, label **`screen`**, from the remote
+Double-clicking the panel's screen (or View > Pop Out Screen) creates a second webview window, label **`screen`**, from the remote
 page via the JS API (`window.__TAURI__.webviewWindow.WebviewWindow`) at `/?screen=1`. Needs
 `core:webview:allow-create-webview-window` + `core:window:allow-set-focus` in
 `capabilities/default.json` (permissions are compiled into the shell — **rebuild the shell**, copying

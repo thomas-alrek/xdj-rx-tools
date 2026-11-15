@@ -31,9 +31,9 @@ Run `procedure_callers(FUN_0002be28)` and read each caller's args. Baseline inve
 |---|---|---|---|
 | `FUN_00066688` (mixer master) | 117,118 | out | analog-mux command (NOT the switch input) |
 | `_INIT_72` | 134,135 | out | global control lines |
-| `FUN_0021a4ac` (PanelComController) | 162-165 | out | panel control lines |
+| `FUN_0021a4ac` (PanelComController) | 162-165 | out | **source-key LEDs** rekordbox/MIDI/USB1/USB2 (active-high, one-hot; live-verified; QEMU patch 17 mirrors them) |
 | `FUN_0024e834` (deck/Player ctor) | 126 / 204 | in | USB fault flag USB1/USB2, active-low (LOW on a mounted slot → "USB Error. Remove the device."; NOT insert-detect) |
-| `FUN_0023b5e8` (ISetting/SwitchTestMode) | 119,120 | in | **EXT TYPE (LINE/PHONO) switch** ch0/ch1 |
+| `FUN_0023b5e8` (ISetting/SwitchTestMode) | 119,120 | in | **EXT TYPE (LINE/PHONO) rear switch** ch0/ch1: `+0xa0/+0xb0 = (level != 0)` (`0x23bd1c`), and SW TEST shows `0`→LINE, `≠0`→PHONO (`0x2409d0`) ⇒ **HIGH = PHONO, LOW = LINE** (static; runtime path is code `0x1013` `LinePhonoSW`, not traced). Not emulated — no external audio. |
 | `FUN_00274a38` | 119,120,146,149,158-161 | in | main-ucom top-panel keys |
 
 GpioManager object layout: `+0x54` gpio num, `+0x58` cached level (byte), `+0x5c` fd,
@@ -67,6 +67,15 @@ qemu_set_irq(qdev_get_gpio_in(g_xdj_gpio[gpio>>5], gpio & 31), level); // level 
 
 Build-tree source: `build/qemu-src/qemu-11.1.0/hw/arm/fsl-imx6.c`. Rebuild with
 `ninja -C build/qemu-src/qemu-11.1.0/build qemu-system-arm`.
+
+### Mapping an rbp OUTPUT (e.g. an LED) — cheapest method
+Read every bank's `DR`/`GDIR` over the monitor (`xp/1wx <base>` / `<base>+4`), perform the action
+(press a key, change a mode), read again, and diff the `GDIR`-set bits. That is how 162–165 were
+identified as the source-key LEDs. To expose an output to the panel, `qdev_connect_gpio_out()` the
+bank's pin to a `qemu_allocate_irq()` handler (see patch 17) — the i.MX GPIO model raises it on
+every `DR` write while `GDIR` is set.
+Static RE without REA: `pip install capstone pyelftools` in a venv and disassemble rbp (ARM mode,
+non-PIE); resolve `ldr rX, [pc, #imm]` literals to find string/object references.
 
 ## 4. Live-verify (monitor + RSP)
 

@@ -1,0 +1,32 @@
+XDJ-RX patch 19: firmware-update boot strap (XDJ_BOOT_UPDATE=1).
+
+On the device, holding DECK 1 USB STOP + RELOOP/EXIT at power-on makes the
+sub-ucom (EUP) MCU raise its EUP update-request line, wired to i.MX6 GPIO3_IO30
+(Linux gpio 94). The initramfs /init reads it (`regio T,D,020A4000,40000000`;
+u-boot env boot_type=update forces the same) and enters USB update mode: it shows
+image D001 "Connect USB storage device into top USB1 port.", waits for a stick with
+XDJRX.UPD, checks the signature and runs the `update` program (NAND + sub-ucom
+reflash). XDJ_BOOT_UPDATE=1 sets that pin HIGH from reset (psr-reset), so the
+emulator boots into update mode. Verified: D001 screen shown. Default unchanged.
+
+--- a/hw/arm/fsl-imx6.c
++++ b/hw/arm/fsl-imx6.c
+@@ -2542,7 +2542,17 @@
+          * GPIO5_IO18/21/30/31, GPIO6_IO00/01 (Linux ids 119,120,146,149,158,159,
+          * 160,161).
+          */
+-        if (i == 3) {        /* GPIO4: USB1 detect (30) + keys 23,24 */
++        if (i == 2) {        /* GPIO3_IO30 (gpio 94): EUP update request */
++            /* The sub-ucom (EUP) MCU raises this line when USB STOP + RELOOP/EXIT
++             * (deck 1) are held at power-on; the initramfs /init reads it
++             * (regio T,D,020A4000,40000000) and enters USB firmware-update mode.
++             * XDJ_BOOT_UPDATE=1 boots with it HIGH (opt-in; default LOW = normal). */
++            const char *u = getenv("XDJ_BOOT_UPDATE");
++            if (u && u[0] && u[0] != '0') {
++                object_property_set_uint(OBJECT(&s->gpio[i]), "psr-reset",
++                                         1u << 30, &error_abort);
++            }
++        } else if (i == 3) { /* GPIO4: USB1 detect (30) + keys 23,24 */
+             object_property_set_uint(OBJECT(&s->gpio[i]), "psr-reset",
+                                      (1u << 30) | (1u << 23) | (1u << 24),
+                                      &error_abort);

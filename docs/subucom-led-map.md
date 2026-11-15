@@ -76,10 +76,23 @@ hold at 10.
 
 **No LED change observed for:** TEMPO RANGE, SHIFT, QUANTIZE and TAP. The display keys
 (rekordbox / MIDI / USB1 / USB2 / DECK 1/2 / TIME MODE) are GPIO keys and are not in this frame.
-If they have LEDs, those are rbp GPIO outputs; see `map-gpio-control`.
+
+### Source-key LEDs (GPIO, not SubTxData) — verified live 2026-11-15
+The rekordbox / MIDI / USB1 / USB2 key that is the active source glows. rbp drives these four LEDs
+as **GPIO outputs 162–165** (GPIO6_IO02..05, `PanelComController` `FUN_0021a4ac`), **active-high,
+one-hot**: rekordbox = **162**, MIDI = **163**, USB1 = **164**, USB2 = **165**. Found by reading
+GPIO6 `DR` (`0x020B0000`; `GDIR` = `0x3c`) over the monitor while pressing each key.
+QEMU **patch 17** mirrors them and appends one byte to the LED line: `T <40 hex> <2 hex>` (bit0
+rekordbox … bit3 USB2); `server.py` passes 42 hex through and the panel reads it as **byte `0x14`**.
+DECK 1/2 and TIME MODE showed no GPIO-output change (not checked further).
 
 ## Open items
 - Identify `0x01.0`, `0x03.7`, `0x0a.6`, `0x12`, and `0x13.4/.5/.7`.
+- Test **Mode 5** (KEY/LED TEST) is the oracle for the rest: the service manual names LEDs not
+  mapped yet — USB1/2 STOP, MASTER REC, BROWSE, TAGLIST, INFO, MENU, TAP, LOAD1/2 — candidates for
+  the unknown bits (`docs/service-modes.md`).
+- `0x0b.7` went on after the first USB1 press with a stick inserted (2026-11-15) — candidate USB
+  indicator; not yet characterised.
 - Decode the jog ring's non-position values (`0x3f`, `0x63`) and check its orientation.
 - Statically locate the encoder that writes the payload, for names. rbp's `PcControlLedData`
   string table lists Play/Pause, Vinyl, Sync, MasterTempo, LoopIn, LoopOut, Reloop, Reverse, Slip,

@@ -34,6 +34,9 @@ decoded into a `0x50xx`/`0x44xx`/`0x600f` control code, then applied by a C++ se
   reads both. The TEMPO fader is a known complementary pair.
 
 ## Method
+0. **Test-mode oracle (no gdb):** boot into test mode (skill `run-xdj-emulator`, "Service modes"),
+   go to **Mode 7**: rbp prints every pot/fader's raw value as `000–3FF` hex. Hold your candidate
+   `A <off> <val>` and read which label changes — confirms offset + raw value in one look.
 1. **Inject + setter breakpoint (most precise):** `A <off> 3ff` hold, then gdb-RSP breakpoint on
    the setter leaf (`FUN_00083fcc` fader, `FUN_00066bb8` master, …). Read the args: an index + a
    **float** (soft-float ABI: the float is an IEEE-754 bit pattern in a core reg; `1.0f`=`0x3f800000`,

@@ -184,6 +184,15 @@ A pacer thread now completes one period per 1.45 ms, rate-locked to the host via
 decks + BEAT FX + Color FX + tempo: 378 → 2 guest xruns in 30 s, no host underruns.
 Cost: ~20 ms more output latency (`XDJ_AUDIO_LATENCY_MS`).
 
+**Auth chip / service modes (2026-11-15, patches 18–19):** E-7206 AUTH CHIP ERROR fixed (I2C4 +
+MFi coprocessor identity at 0x10); sub-ucom reports version 0.35; **test mode** (hold MEMORY + TEMPO
+RANGE from boot) and **firmware-update mode** (`XDJ_BOOT_UPDATE=1`, D001 screen) both reachable.
+Update past D001 (NAND write, sub-ucom reflash) not emulated. See `docs/service-modes.md`.
+
+**Source-key LEDs (2026-11-15, patch 17):** the active rekordbox/MIDI/USB1/USB2 key glows on the
+panel, mirrored from rbp's GPIO outputs 162–165. The rear LINE/PHONO switch (GPIO 119/120) is not
+emulated (no external audio input).
+
 ## ⬜ F. FLAC playback
 rbp decodes **MP3 (libmpg123), AAC, M4A, AIFF, WAV — no FLAC** (two decoder slots
 `PLAYER_DECODER_0/1`). The codecs are **dlopen'd** (e.g. `libmpg123.so.0` with
@@ -216,7 +225,8 @@ rejected frame could not). The real gate was never the auth/handshake — it was
 byte-swapped) matches the LE halfword at `[0x62]`. Sections: `refFmtData` +0x04,
 `refCommonData` +0x14 (global buttons `[0x1a]/[0x1b]`), `tMixerData` +0x24/+0x34
 (per-deck analog), `refOtherData` +0x44. The `E-7206 AUTH CHIP ERROR` was a red
-herring — it auto-clears, and the StaticInfomation handshake is a lazy
+herring *for panel decode* (it is the missing MFi auth chip on I2C4 — fixed 2026-11-15 by
+patch 18, see `docs/service-modes.md`), and the StaticInfomation handshake is a lazy
 version-screen cache (confirmed uninitialized in rbp's live memory), not on the
 button path. Full protocol: `docs/rbp-and-panel-protocol.md`.
 
