@@ -23,6 +23,7 @@ void xdj_audio_realize(DeviceState *dev, DeviceState *gic);
 extern DeviceState *g_xdj_usb_gpio[2];
 extern DeviceState *g_xdj_gpio[8];
 void xdj_srcled_set(void *opaque, int n, int level);
+void xdj_subucom_bl_wire(DeviceState *gpio1);   /* GPIO1_IO18 = bootloader REQ */
 
 /* called from stock QEMU files patched by qemu/patches/ */
 void xdj_dvfs_gpt_kick(void);          /* hw/misc/imx6_ccm.c */

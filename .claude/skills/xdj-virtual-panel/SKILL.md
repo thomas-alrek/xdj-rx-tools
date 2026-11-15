@@ -78,9 +78,13 @@ device **photo** as its background; that photo was deleted and must never ship a
   after power on once the guest is ready: normal boot = console `Resolve xrun` + 6 s, update mode =
   `USB update mount` + 2 s (same choreography as `maybe_insert_usb`). On ctrl-socket reconnect (a fresh
   QEMU) the sidecar re-sends the full panel state (`_repush`).
-- **The deck is the root**: `.stagewrap` has no padding and `#stage` no border/radius/shadow; the
+- **The deck is the root**: `.stagewrap` has a 1rem padding (the only margin) and `#stage` no border/radius/shadow; the
   visible canvas is the design canvas cropped by `CROP`=16 units per side (`VW`x`VH` = 2110x1152, via
-  CSS vars `--vw/--vh`), and the app window is aspect-locked to exactly that (`DECK_AR` in the shell). Don't put CSS transitions on things toggled by
+  CSS vars `--vw/--vh`), and the app window is aspect-locked to exactly that (`DECK_AR` in the shell).
+  If the viewport's shape is within ±10% of the deck's (`FILL_TOL`), `#stage.fill` stretches to fill
+  it exactly instead of letterboxing (on macOS the window's reported size includes the ~30 px title
+  bar, so an "aspect-locked" window still left side bands); round widgets size from their smaller side,
+  so they stay round. Further off → letterbox. Don't put CSS transitions on things toggled by
   `visibility` (an offscreen WKWebView never ticks them — the power button uses `transition:none`).
 - **Pop-out screen** (**double-click the screen**, or View > Pop Out Screen): the same page with `?screen=1` renders only `#screen`,
   letterboxed in a resizable window, and never pushes state/holds (view-only; a second VNC client).

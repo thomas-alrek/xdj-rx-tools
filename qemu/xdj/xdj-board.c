@@ -102,6 +102,9 @@ void xdj_imx6_gpio_post_realize(FslIMX6State *s, int bank)
         if (bank < 8) {         /* capture every bank for the MAIN-UCOM key hook */
             g_xdj_gpio[bank] = DEVICE(&s->gpio[bank]);
         }
+        if (bank == 0) {        /* GPIO1_IO18 = host REQ of the panel MCU's bootloader handshake */
+            xdj_subucom_bl_wire(DEVICE(&s->gpio[bank]));
+        }
         if (bank == 5) {        /* GPIO6_IO02..05 = source-key LEDs (rbp outputs) */
             int pin;
             for (pin = 2; pin <= 5; pin++) {

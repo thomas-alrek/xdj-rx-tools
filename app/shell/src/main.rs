@@ -258,6 +258,41 @@ fn lock_aspect(window: &tauri::Window, ar_w: f64, ar_h: f64) {
     let _ = (window, ar_w, ar_h);
 }
 
+/// Keep a window's content at its aspect ratio after ANY resize. `contentAspectRatio`
+/// (lock_aspect) only constrains live edge-drags; window tiling, the green button's
+/// fill/zoom and programmatic sizes bypass it and left the deck letterboxed with empty
+/// side bands. Shrink to the largest w:h rect inside the size the user chose (never
+/// grow past a tile or the screen). Zoomed ("Fill") windows are corrected too; only
+/// full screen is left alone (macOS owns the size; the page fills the bands).
+fn snap_aspect(window: &tauri::Window, ar_w: f64, ar_h: f64) {
+    if window.is_fullscreen().unwrap_or(false) {
+        return;
+    }
+    let Ok(sz) = window.inner_size() else { return };
+    let (w, h) = (sz.width as f64, sz.height as f64);
+    if w < 1.0 || h < 1.0 {
+        return;
+    }
+    // The page only gets the webview's area; on macOS the reported inner size can include
+    // the title bar (~30 px), so target the ratio for the webview and carry the difference.
+    let (ew, eh) = window
+        .webviews()
+        .first()
+        .and_then(|v| v.size().ok())
+        .map(|v| ((w - v.width as f64).max(0.0), (h - v.height as f64).max(0.0)))
+        .unwrap_or((0.0, 0.0));
+    let (cw, ch) = (w - ew, h - eh);
+    let (mut nw, mut nh) = (cw, (cw * ar_h / ar_w).round());
+    if nh > ch {
+        nh = ch;
+        nw = (ch * ar_w / ar_h).round();
+    }
+    let (nw, nh) = (nw + ew, nh + eh);
+    if (nw - w).abs() > 2.0 || (nh - h).abs() > 2.0 {
+        let _ = window.set_size(tauri::PhysicalSize::new(nw as u32, nh as u32));
+    }
+}
+
 /// Handle a dropped firmware file: prep (with progress) then boot it.
 fn on_firmware_dropped(app: &tauri::AppHandle, path: PathBuf) {
     if !has_key() {
@@ -471,6 +506,11 @@ fn main() {
                         }
                     }
                 }
+                WindowEvent::Resized(_) => match window.label() {
+                    "main" => snap_aspect(window, DECK_AR.0, DECK_AR.1),
+                    "screen" => snap_aspect(window, SCREEN_FB.0, SCREEN_FB.1),
+                    _ => {}
+                },
                 // Closing the emulator window stops the whole emulator stack now
                 // (don't leave a headless QEMU running).
                 WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed => {

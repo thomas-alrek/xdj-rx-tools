@@ -86,6 +86,10 @@ but two emulators contend for the host (one stalled the other's boot), so keep i
 `main` is locked to the deck's aspect **2110:1152** (`DECK_AR`, `lock_aspect` via
 `NSWindow.contentAspectRatio` in `on_page_load`) and sized to it, so the deck fills the window with
 no letterbox; `panel.html` draws the stage edge to edge (no outer padding/border/radius).
+`contentAspectRatio` only governs live edge-drags — tiling, the green button's Fill/zoom and
+programmatic sizes bypass it — so `on_window_event(Resized)` also runs `snap_aspect()`: shrink to the
+largest deck-ratio rect inside the chosen size (never grow). It targets the ratio for the **webview's** size (`window.webviews()[0].size()`), carrying the difference to the reported inner size (the title bar on macOS). Full screen is exempt (bands remain,
+filled with the deck background). Same for the pop-out `screen` window at 800:480.
 
 ## Native menu bar + extra windows
 The panel page builds the **app menu** itself via the Tauri JS menu API (`buildAppMenu` in

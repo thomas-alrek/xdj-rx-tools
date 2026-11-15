@@ -20,7 +20,7 @@ ON/OFF is pressed.
 
 | mode | content | use for us |
 |---|---|---|
-| 1 | VERSION INFORMATION: SYSTEM / SUB / APL / KERNEL, language, MAC, JOG uCom status | shows our sub-ucom version word (now **0.35**) |
+| 1 | VERSION INFORMATION: SYSTEM / SUB / APL / KERNEL, language, MAC, JOG uCom status | shows our sub-ucom version word (`0.00` by default; `XDJ_SUBUCOM_VER=35` → 0.35) |
 | 2 / 3 | all LEDs + LCDs off / on | LED-bit oracle (everything set) |
 | 4 | LCD patterns (push = colour/black/white, BACK = back) | — |
 | 5 | **KEY/LED TEST**: each key lights its LED | **LED-map oracle**: the manual's key→LED table names LEDs we haven't mapped (USB1/2 STOP, MASTER REC, BROWSE, TAGLIST, INFO, MENU, TAP, LOAD1/2) |
@@ -74,10 +74,12 @@ image is persistent.
   `enterUpdateMode`, `getUpdateType`), with MAIN/SUB progress bars (manual p. 22).
 - Old rootfs path (`/root/pioneer/versionup/version_up.sh`) is the same logic, commented out,
   plus an SD path: a `nandupdate/` dir on the SD card runs `./update SD 0` then powers off.
-- **Emulator:** `XDJ_BOOT_UPDATE=1 ./tools/xdj-panel/debug/relaunch.sh` → D001 screen ✅.
-  Not yet tried past that: it needs a USB image containing `XDJRX.UPD`, and `update` would then
-  try to write NAND MTDs (the SD-booted emulator has none) and talk the sub-ucom's update
-  protocol (not emulated). Expect "Firmware update failed" until those exist. Use the debug
+- **Emulator:** `XDJ_BOOT_UPDATE=1 [XDJ_BL_LOG=1] XDJUSB=<fat32 img with XDJRX.UPD>
+  ./tools/xdj-panel/debug/relaunch.sh` → D001 screen ✅; then `device_add usb-storage,bus=usb-bus.1,
+  port=1.2,drive=usbstick,id=xdjusb1,removable=on` (USB1). `update` writes NAND MTDs (the SD-booted
+  emulator has none yet) and talks the sub-ucom's update
+  protocol — **now emulated** (`xdj-panel.c` SUB bootloader; the SUB bar reaches 100 %, see
+  `docs/update-path-plan.md`). MAIN still fails until the NAND model exists. Use the debug
   launcher (`snapshot=on`), never the app's persistent image, and never a real stick.
 
 ## Other manual facts worth keeping

@@ -26,7 +26,9 @@ qemu/xdj/            real source files -- EDIT THESE; synced to <qemu>/hw/arm/xd
   xdj-audio.c        SDMA engine, SSI1-3/AUDMUX register files, pacer thread + PCM FIFO
   xdj-panel.c        front-panel MCU ("sub-ucom") SPI slave: inject harness (holds, one-shots,
                      ctrl/key chardevs or /tmp files), auto-level, LED back-channel, MAIN-UCOM
-                     keys (/tmp/mainkey), USB fault-flag files, sub-ucom version word
+                     keys (/tmp/mainkey), USB fault-flag files, sub-ucom version word; the MCU's flash
+                     bootloader for firmware updates (enter/erase/program/crc/reset over SPI +
+                     GPIO1_IO18 REQ / GPIO1_IO16 ACK; docs/update-path-plan.md)
   xdj-mfi.c          I2C4 controller + MFi auth-coprocessor identity (fixes E-7206)
   xdj-usbnc.c        USBNC OWIR wakeup registers
   meson.build

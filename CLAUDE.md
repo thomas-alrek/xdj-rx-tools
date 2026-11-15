@@ -65,7 +65,7 @@ interoperability/preservation on owned hardware.
 - **Service modes** (`docs/service-modes.md`, from the service manual + RE): **test mode** = hold
   `B 13 04`+`B 12 08` (MEMORY+TEMPO RANGE) in `/tmp/subucom_ctrl` *before* boot (rbp checks only
   the first frame; Mode 5/6/7 = LED/switch/pot oracles); **update mode** = `XDJ_BOOT_UPDATE=1`
-  (GPIO3_IO30, `xdj-board.c` (was patch 19)). Frame bytes 2–3 = sub-ucom version (0.35).
+  (GPIO3_IO30, `xdj-board.c` (was patch 19)). Frame bytes 2–3 = sub-ucom version (default 0 = "0.00"; `XDJ_SUBUCOM_VER`; rbp only rejects 0xffff).
 - **USB speed / track loads**: front slots must enumerate at **480 Mbit/s** (`04-usb-chipidea-hub` (was patch 20): ChipIdea PSPD +
   SRI + hub HS status; was 12 Mbit/s) and macOS QEMU timers need `05-macos-submillisecond-poll` (was patch 21) (sub-ms poll). The firmware
   caps USB requests at 8 KB itself — per-request latency is what matters. Loads 10.6 → 7.4 s.

@@ -67,6 +67,15 @@ struct XdjSubucom {
     uint32_t tx_len;      /* length of the last seen burst (0 = none yet) */
     uint8_t  tx_pub[20];  /* last published LED payload */
     bool     tx_pub_valid;
+    /* flash bootloader (firmware update, see the "SUB bootloader" block below) */
+    bool     bl_mode;     /* MCU is in its flash bootloader */
+    int      bl_state;    /* XDJ_BL_* */
+    bool     bl_req;      /* host REQ line (GPIO1_IO18) */
+    bool     bl_exit;     /* leave the bootloader once this response is read */
+    uint32_t bl_rx_len;
+    uint32_t bl_resp_pos;
+    uint8_t  bl_rx[1040];
+    uint8_t  bl_resp[16];
 };
 
 static XdjSubucom *g_xdj_subucom;
@@ -473,6 +482,10 @@ void xdj_subucom_frame_start(void)
     uint16_t crc;
     int k;
 
+    if (s && s->bl_mode) {                   /* flash bootloader: bytes handled per transfer */
+        s->pos = 0;
+        return;
+    }
     if (!s) {
         return;
     }
@@ -652,13 +665,15 @@ void xdj_subucom_frame_start(void)
     memset(rbp, 0, sizeof(rbp));
     /* Bytes 2-3 = the panel MCU's firmware version word (LE). rbp keeps it from
      * the first frame (boot-key handler FUN_00282630 -> +0x94) and shows it as
-     * "SUB Ver." in test mode; the real MCU reports 0.35 (images/subucom.rev).
-     * XDJ_SUBUCOM_VER=<hex> overrides (default 0x0035). */
+     * "SUB Ver." in test mode ("%x.%02x" of hi, lo). The real MCU reports the version
+     * of the firmware in its flash; where PANELCOM keeps it is not located yet, so we
+     * report 0 ("0.00", what the harness always sent) rather than invent one -- rbp
+     * only rejects 0xffff. XDJ_SUBUCOM_VER=<hex> sets it (e.g. 35 = 0.35, update 2.21). */
     {
         static int ver = -1;
         if (ver < 0) {
             const char *e = getenv("XDJ_SUBUCOM_VER");
-            ver = e ? (int)(strtoul(e, NULL, 16) & 0xffff) : 0x0035;
+            ver = e ? (int)(strtoul(e, NULL, 16) & 0xffff) : 0x0000;
         }
         rbp[2] = ver & 0xff;
         rbp[3] = (ver >> 8) & 0xff;
@@ -732,10 +747,242 @@ void xdj_subucom_frame_start(void)
     }
 }
 
+/*
+ * ---- SUB bootloader: the panel MCU's flash update protocol --------------------------
+ * Used by the firmware's `update` program (SpiDownloader / SubucomRequestManager) to
+ * reflash the panel MCU from images/PANELCOM.mot. Protocol (RE'd from the unstripped
+ * updater + GPL kernel subucom_spi.c / gpiodrv.c; docs/update-path-plan.md):
+ *  - The updater stops the subucom driver's periodic timer; SPI bursts then happen only
+ *    on its write() (request) and read() (16-byte response). It word-reverses its
+ *    buffers and the ECSPI shifts words MSB-first, so the wire carries the logical bytes.
+ *  - Handshake on two GPIOs: host REQ = GPIO1_IO18 (output), MCU ACK = GPIO1_IO16 (input).
+ *    request_wait: REQ=0, wait ACK=1, REQ=1.  request_done: wait ACK=0, REQ=0.
+ *  - Enter: a 100-byte request with [0x13]=0x55 (normal mode); reply [0]=0xFE [1]=0.
+ *  - Then each command: wait(ACK=1) write 1036-byte request done(ACK=0)
+ *                       wait(ACK=1) read 16-byte response   done(ACK=0).
+ *    Request: [0]=cmd [1]=sub [2..3]=len [4..7]=addr [8..]=data (0xFF filled),
+ *             [0x408..9] = crc_ccitt16_go8(req, 0x408, 0xFFFF).
+ *    Response: [0]=cmd [1]=status (0 OK, 1 NG) [4..]=payload,
+ *              [12..13] = crc_ccitt16_go8(resp, 12, 0xFFFF).
+ *    0xF1 init(type)  0xF2 erase(block of addr)  0xF3 program(addr,len,data)
+ *    0xF5 crc(addr, len) -> [4..5]  0xF9 reset  0xFA update type -> [4..7] str, [10] type
+ *  Seen from update 2.21: FA, F1, erase+program the flag block 0xE000, erase 0xC/0xD/0xE0000,
+ *  program 0xC0000-0xEFFFF in 1 KiB, F5 crc, erase 0xE000 again, F9 reset (.bot/.fix untouched).
+ *  Flash = 1 MiB, persisted to $XDJ_PANELCOM_IMG if set (else kept in memory).
+ *  XDJ_UPDATE_TYPE (hex, default 0x10 = normal update; 0x20 = ALL, 0x15 = SERVICE).
+ */
+enum { XDJ_BL_IDLE, XDJ_BL_RX, XDJ_BL_DONE, XDJ_BL_RESP, XDJ_BL_SENT };
+#define XDJ_BL_REQ_LEN   0x40c
+#define XDJ_BL_FLASH     0x100000
+static uint8_t *xdj_bl_flash;
+
+static uint16_t xdj_crc_ccitt16_go8(const uint8_t *p, uint32_t n, uint16_t crc)
+{
+    uint32_t i;
+    int b;
+    for (i = 0; i < n; i++) {
+        uint8_t v = p[i], r = 0;
+        for (b = 0; b < 8; b++) {            /* bit-reverse the input byte */
+            r |= ((v >> b) & 1) << (7 - b);
+        }
+        for (b = 0; b < 8; b++) {
+            bool x = ((crc >> 15) ^ (r >> 7)) & 1;
+            crc = (uint16_t)(crc << 1);
+            if (x) {
+                crc ^= 0x1021;
+            }
+            r = (uint8_t)(r << 1);
+        }
+    }
+    return crc;
+}
+
+static void xdj_bl_ack(bool level)
+{
+    if (g_xdj_gpio[0]) {
+        qemu_set_irq(qdev_get_gpio_in(g_xdj_gpio[0], 16), level);
+    }
+}
+
+static void xdj_bl_flash_io(bool save)
+{
+    const char *path = getenv("XDJ_PANELCOM_IMG");
+    FILE *f;
+    if (!xdj_bl_flash) {
+        xdj_bl_flash = g_malloc(XDJ_BL_FLASH);
+        memset(xdj_bl_flash, 0xff, XDJ_BL_FLASH);
+        if (path && (f = fopen(path, "rb"))) {
+            size_t got = fread(xdj_bl_flash, 1, XDJ_BL_FLASH, f);
+            (void)got;
+            fclose(f);
+        }
+    }
+    if (save && path && (f = fopen(path, "wb"))) {
+        fwrite(xdj_bl_flash, 1, XDJ_BL_FLASH, f);
+        fclose(f);
+    }
+}
+
+static void xdj_bl_respond(XdjSubucom *s, uint8_t cmd, uint8_t status)
+{
+    uint16_t c;
+    s->bl_resp[0] = cmd;
+    s->bl_resp[1] = status;
+    c = xdj_crc_ccitt16_go8(s->bl_resp, 12, 0xffff);
+    s->bl_resp[12] = c & 0xff;
+    s->bl_resp[13] = c >> 8;
+    s->bl_resp_pos = 0;
+}
+
+static void xdj_bl_command(XdjSubucom *s)
+{
+    const uint8_t *q = s->bl_rx;
+    uint8_t cmd = q[0];
+    uint32_t len = q[2] | (q[3] << 8);
+    uint32_t addr = q[4] | (q[5] << 8) | (q[6] << 16) | ((uint32_t)q[7] << 24);
+    uint16_t want = q[0x408] | (q[0x409] << 8);
+    uint8_t st = 0;
+
+    xdj_bl_flash_io(false);
+    memset(s->bl_resp, 0, sizeof(s->bl_resp));
+    if (xdj_crc_ccitt16_go8(q, 0x408, 0xffff) != want) {
+        st = 1;                              /* NG: corrupted request */
+    } else if (cmd == 0xf2) {
+        /* erase the block containing addr (the updater passes the block's last even
+         * address: 0x00effe, 0x0cfffe...): 4 KiB blocks below 64 KiB, 64 KiB above */
+        uint32_t bs = addr < 0x10000 ? 0x1000 : 0x10000;
+        uint32_t b = addr & ~(bs - 1);
+        if (b < XDJ_BL_FLASH) {
+            memset(xdj_bl_flash + b, 0xff, MIN(bs, XDJ_BL_FLASH - b));
+        } else {
+            st = 1;
+        }
+    } else if (cmd == 0xf3) {               /* program */
+        if (addr < XDJ_BL_FLASH && len <= 0x400 && addr + len <= XDJ_BL_FLASH) {
+            uint32_t i;
+            for (i = 0; i < len; i++) {      /* flash programming only clears bits */
+                xdj_bl_flash[addr + i] &= q[8 + i];
+            }
+        } else {
+            st = 1;
+        }
+    } else if (cmd == 0xf5) {               /* crc over [addr, addr+n) */
+        uint32_t n = q[8] | (q[9] << 8) | (q[10] << 16) | ((uint32_t)q[11] << 24);
+        uint16_t c = 0xffff;
+        if (addr < XDJ_BL_FLASH && n <= XDJ_BL_FLASH - addr) {
+            c = xdj_crc_ccitt16_go8(xdj_bl_flash + addr, n, 0xffff);
+        } else {
+            st = 1;
+        }
+        s->bl_resp[4] = c & 0xff;
+        s->bl_resp[5] = c >> 8;
+    } else if (cmd == 0xfa) {               /* update type */
+        const char *e = getenv("XDJ_UPDATE_TYPE");
+        memcpy(&s->bl_resp[4], "0.35", 4);
+        s->bl_resp[10] = e ? (uint8_t)strtoul(e, NULL, 16) : 0x10;
+    } else if (cmd == 0xf9) {               /* reset: back to the application */
+        s->bl_exit = true;
+        xdj_bl_flash_io(true);
+    }                                        /* 0xf1 init: just OK */
+    if (getenv("XDJ_BL_LOG")) {
+        fprintf(stderr, "SUB-BL cmd=%02x sub=%02x len=%u addr=%06x -> %s\n",
+                cmd, q[1], len, addr, st ? "NG" : "OK");
+    }
+    xdj_bl_respond(s, cmd, st);
+}
+
+/* GPIO1_IO18 (host REQ) edges drive the bootloader handshake. */
+static void xdj_bl_req(void *opaque, int n, int level)
+{
+    XdjSubucom *s = g_xdj_subucom;
+    bool up = level != 0;
+    if (!s || up == s->bl_req) {
+        return;
+    }
+    s->bl_req = up;
+    if (!s->bl_mode) {
+        return;
+    }
+    if (up) {
+        if (s->bl_state == XDJ_BL_IDLE) {    /* host is about to write a request */
+            s->bl_state = XDJ_BL_RX;
+            s->bl_rx_len = 0;
+        }
+    } else if (s->bl_state == XDJ_BL_DONE) { /* request taken: response is ready */
+        s->bl_state = XDJ_BL_RESP;
+        xdj_bl_ack(true);
+    } else if (s->bl_state == XDJ_BL_SENT) { /* response read: ready for the next one */
+        if (s->bl_exit) {
+            s->bl_mode = false;
+            s->bl_exit = false;
+            xdj_bl_ack(false);
+            return;
+        }
+        s->bl_state = XDJ_BL_IDLE;
+        xdj_bl_ack(true);
+    }
+}
+
+void xdj_subucom_bl_wire(DeviceState *gpio1)
+{
+    qdev_connect_gpio_out(gpio1, 18, qemu_allocate_irq(xdj_bl_req, NULL, 0));
+}
+
+/* Bootloader-mode byte handling; returns the MISO byte. */
+static uint8_t xdj_bl_byte(XdjSubucom *s, uint8_t v)
+{
+    if (s->bl_state == XDJ_BL_RX) {
+        if (s->bl_rx_len < sizeof(s->bl_rx)) {
+            s->bl_rx[s->bl_rx_len] = v;
+        }
+        if (++s->bl_rx_len == XDJ_BL_REQ_LEN) {
+            xdj_bl_command(s);
+            s->bl_state = XDJ_BL_DONE;
+            xdj_bl_ack(false);               /* host waits for ACK=0, then REQ=0 */
+        }
+        return 0xff;
+    }
+    if (s->bl_state == XDJ_BL_RESP) {
+        uint8_t r = s->bl_resp_pos < 16 ? s->bl_resp[s->bl_resp_pos] : 0xff;
+        if (++s->bl_resp_pos == 16) {
+            s->bl_state = XDJ_BL_SENT;
+            xdj_bl_ack(false);
+        }
+        return r;
+    }
+    return 0xff;
+}
+
+/* Normal mode: the 100-byte "enter download mode" request ([0x13]=0x55, zeros around). */
+static bool xdj_bl_is_enter(const uint8_t *m)
+{
+    int i;
+    if (m[0x13] != 0x55) {
+        return false;
+    }
+    for (i = 0; i < 0x13; i++) {
+        if (m[i]) {
+            return false;
+        }
+    }
+    for (i = 0x18; i < 100; i++) {
+        if (m[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static uint32_t xdj_subucom_transfer(SSIPeripheral *dev, uint32_t val)
 {
     XdjSubucom *s = XDJ_SUBUCOM(dev);
     uint8_t miso;
+
+    if (s->bl_mode) {
+        s->idx++;
+        s->pos++;
+        return xdj_bl_byte(s, (uint8_t)val);
+    }
 
     if (getenv("SUBUCOM_TRACE")) {
         fprintf(stderr, "SUBUCOM [%5u] mosi=%02x\n",
@@ -747,6 +994,18 @@ static uint32_t xdj_subucom_transfer(SSIPeripheral *dev, uint32_t val)
     }
     miso = (s->pos < sizeof(s->frame)) ? s->frame[s->pos] : 0x00;
     s->pos++;
+    if (s->pos == 100 && xdj_bl_is_enter(s->mosi)) {
+        /* the updater asks the MCU to enter its flash bootloader */
+        s->bl_mode = true;
+        s->bl_exit = false;
+        memset(s->bl_resp, 0, sizeof(s->bl_resp));
+        xdj_bl_respond(s, 0xfe, 0x00);
+        s->bl_state = XDJ_BL_RESP;           /* host: wait ACK=1, read 16, wait ACK=0 */
+        xdj_bl_ack(true);
+        if (getenv("XDJ_BL_LOG")) {
+            fprintf(stderr, "SUB-BL enter download mode\n");
+        }
+    }
     return miso;
 }
 
