@@ -37,9 +37,11 @@
 #       Keeps the DVFS/GPT timer path advancing so the firmware does not stall.
 #
 #   patches/06-imx6-usb-insert-hook.patch
-#       Runtime USB-insert simulation: touching /tmp/usb_insert drives a detect
-#       line LOW after boot so rbp mounts+scans the drive (without the init
-#       deadlock patch 04 avoids by idling the lines high).
+#       Runtime USB FAULT-flag injection: touching /tmp/usb_insert (USB1) or
+#       /tmp/usb2_insert (USB2) drives GPIO4_IO30 / GPIO7_IO12 LOW. These are
+#       rbp's active-low USB fault flags (NOT insert-detect lines, as first
+#       assumed): LOW on a mounted slot shows "USB Error. Remove the device.".
+#       Normal inserts must NOT touch them -- the attach wakes HOST1 (patch 10).
 #
 #   patches/07-imx6-multifield-holds.patch
 #       Extends the Subucom control-injection harness (added in patch 02) to apply
@@ -113,6 +115,14 @@
 #       XDJ_AUTOLEVEL=0; settle delay XDJ_AUTOLEVEL_DELAY_MS (default 4000).
 #       Verified: routing flips to DECK on its own, and stays DECK even with an
 #       unrelated hold present; deck plays to the host. QEMU-side only.
+#
+#   patches/14-imx6-subucom-frame-hook.patch
+#       Calls xdj_subucom_frame_start() at the start of every ECSPI burst
+#       (imx_spi_flush_txfifo). That call previously existed only as an
+#       uncommitted local edit, so a clean build sent all-zero sub-ucom frames and
+#       NO panel control reached rbp. Also raises MAXHOLD to 64 (the web panel now
+#       sends its full state) and makes auto-level centre both COLOR pots and bring
+#       up CH2 as well as CH1.
 #
 #   patches/03-sabrelite-sabresd-sd.patch
 #       The XDJ-RX firmware's real board is SABRE-SD (MACH_TYPE 3980), which

@@ -1,5 +1,13 @@
 # Handover: rbp USB library-accept (the "USB Error" flaky race)
 
+> **2026-11-15 update — the remaining "USB Error" on a correct post-boot insert is SOLVED.**
+> It was caused by our own insert recipe: `/tmp/usb2_insert` / `/tmp/usb_insert` (patch 06)
+> drive GPIO7_IO12 / GPIO4_IO30, which are rbp's **active-low USB fault flags**, not
+> insert-detect lines (gpiodrv `0xcc`/`0x7e`; `UsbStorageManager` GPIO listener `0x250020`,
+> dispatch `0x2500cc`, hide-timer `CautionTimer` @ `mgr+0x3e4`, fire `0x251e4c`). Insert with
+> `device_add` alone. Details: `docs/usb-mount-howto.md` banner. Below is historical.
+
+
 **For:** a fresh session continuing ONLY the USB library-accept problem. Everything
 else in the emulator works; this is the last gate before a loaded track.
 

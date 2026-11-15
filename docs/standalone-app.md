@@ -169,8 +169,9 @@ copyright-free design (the old device-photo background was removed). Full detail
 ## 8. USB media
 
 **At boot:** `maybe_insert_usb` (host) optionally inserts `XDJ_USB` on `XDJ_USB_SLOT` once `rbp` is
-polling (hub ports 1.2=usb1, 1.1=usb2), writing the detect file (`/tmp/usb_insert` / `/tmp/usb2_insert`)
-that QEMU patch 06/10 watches. **At runtime:** the panel's USB LOAD buttons POST `/usb <slot> <path>`
+polling (hub ports 1.2=usb1, 1.1=usb2). The attach alone wakes HOST1 (patch 10). It does **not**
+write `/tmp/usb_insert` / `/tmp/usb2_insert` (it clears them): patch 06's files drive rbp's
+active-low USB fault flags, and asserting one causes "USB Error. Remove the device.". **At runtime:** the panel's USB LOAD buttons POST `/usb <slot> <path>`
 and the server does the same `drive_add`/`device_add` over QMP, **ejecting any previous insertion
 first** (USB STOP only unmounts in the firmware; the QEMU device stays plugged). Read-only
 (`snapshot=on`) by default. See `docs/usb-mount-howto.md`, `docs/usb-slot-topology.md`.

@@ -20,7 +20,7 @@ interoperability/preservation on owned hardware.
 
 ## Layout
 - `xdjrx_upd.py`, `fetch_key.py` — `.UPD` firmware decrypt/extract/pack + AES key fetch → skill `upd-firmware-format`.
-- `qemu/` — `build-qemu.sh`, `patches/01..11`, `watch.sh`, `build-nand.sh`, `cramfs_extract.py`.
+- `qemu/` — `build-qemu.sh`, `patches/01..14`, `watch.sh`, `build-nand.sh`, `cramfs_extract.py`.
 - `qemu_prepare.py` — kernel boot blobs (trampoline/atags/vmlinux). `run.sh` — from-scratch build+boot.
 - `build/` (git-ignored) — `qemu-src/` (patched QEMU), `extract/rbp` (the analyzed binary), `qemu/` (boot blobs, nand.img).
 - `tools/xdj-panel/` — the virtual web panel (`server.py`, `panel.html`) + `debug/` (RE launcher & helpers: `relaunch.sh`, `rsp.py`, `tables.py`, `mon.py`, `ser.py`, `inj.py`, `sweep_*.py`).
@@ -34,7 +34,15 @@ interoperability/preservation on owned hardware.
   `1`=DECK `0`=LINE, injectable + live. The separate **LINE-vs-PHONO** (EXT-TYPE) switch is
   GPIO **119/120** (`switchState +0xa0/+0xb0`); `0x1013`/`LinePhonoSW` = that EXT-TYPE control.
 - **GPIO 117/118, 134/135, 162-165 are rbp OUTPUT pins** (mux/control), not switch inputs.
+- **GPIO4_IO30 / GPIO7_IO12 (ids 0x7e/0xcc) are active-low USB FAULT flags, not insert-detect.**
+  Insert a USB with `device_add` only; `touch /tmp/usb*_insert` (patch 06) asserts the fault →
+  "USB Error. Remove the device." (that was the long-standing "USB Error on a correct insert").
 - **Browse encoder:** ROTATE = counter `rbp[0x54]/[0x55]`; PUSH = `rbp[0x5d]` bit 4 (code `0x4205`).
+- **Panel input needs QEMU patch 14** (ECSPI burst → `xdj_subucom_frame_start`); without it the
+  slave sends all-zero frames and *no* control reaches rbp. The **runtime-verified control map** is
+  the top table of `docs/subucom-frame-map.md` (captured at dispatcher `0x2a47c0`, named via the
+  debug-console vocabulary). **Jog** = period `rbp[0x0c]` + 16-bit counter `rbp[0x0e]` + flags
+  `rbp[0x10]` .0 touch/.1 reverse (deck2 +0x10).
 - **Audio** works (patch 11, SDMA/SSI/AUDMUX; sonifier → SDMA ch1 = MasterOut). Audible needs
   routing=DECK + gains up (on-air gate `FUN_00065028`).
 

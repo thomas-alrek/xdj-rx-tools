@@ -32,7 +32,7 @@ else
 fi
 
 exec env XDJ_AUDIO_DEBUG=1 "$QEMU" \
-  -M sabrelite -smp 1 -m 256 -no-reboot \
+  -M sabrelite -smp "${XDJ_SMP:-1}" -m 256 -no-reboot \
   -name "Pioneer XDJ-RX (inject/gdb)" \
   -display cocoa,zoom-to-fit=on \
   -audio coreaudio,timer-period=1451 \

@@ -5,9 +5,9 @@
  
  static XdjSubucom *g_xdj_subucom;
 +/*
-+ * The two USB-storage "device present" detect-line GPIOs (GPIO4_IO30 = USB1,
-+ * GPIO7_IO12 = USB2), captured at realize so the harness can simulate a USB
-+ * insertion at runtime by driving the line LOW (see xdj_subucom_frame_start).
++ * The two front-USB active-low FAULT-flag GPIOs (GPIO4_IO30 = USB1, GPIO7_IO12
++ * = USB2; gpiodrv ids 0x7e/0xcc), captured at realize so the harness can inject
++ * a USB fault at runtime by driving one LOW (see xdj_subucom_frame_start).
 + */
 +static DeviceState *g_xdj_usb_gpio[2];
  
@@ -18,13 +18,13 @@
          return;
      }
 +    /*
-+     * USB-insert simulation. The detect lines idle HIGH ("no USB"); driving one
-+     * LOW (as a real insertion does) makes rbp mount+scan the drive and register
-+     * it as a browsable rekordbox source. Done at runtime -- after rbp's panel
-+     * poll thread exists -- so it does not hit the init deadlock that patch 04
-+     * avoids by idling the lines HIGH.
-+     *   touch /tmp/usb_insert  -> USB1 present (GPIO4_IO30 driven LOW)
-+     *   rm    /tmp/usb_insert  -> USB1 removed (GPIO4_IO30 back HIGH)
++     * USB fault-flag injection. These are NOT insert-detect lines: rbp's
++     * UsbStorageManager (listener 0x250020) reads them as active-low USB fault
++     * flags; LOW on a mounted slot raises "USB Error. Remove the device." and
++     * HIGH clears it (500 ms timer). Normal inserts must leave them HIGH -- the
++     * attach itself wakes HOST1 (patch 10). Idle HIGH from reset per patch 04.
++     *   touch /tmp/usb_insert  -> USB1 fault asserted (GPIO4_IO30 driven LOW)
++     *   rm    /tmp/usb_insert  -> USB1 fault cleared  (GPIO4_IO30 back HIGH)
 +     *   /tmp/usb2_insert does the same for USB2 (GPIO7_IO12).
 +     */
 +    {

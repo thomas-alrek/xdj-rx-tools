@@ -438,8 +438,8 @@ fn clean_stale(cfg: &Config) {
     for s in ["qmp.sock", "vnc.sock", "ctrl.sock", "key.sock", "usb_usb1.img", "usb_usb2.img"] {
         let _ = std::fs::remove_file(cfg.rt(s));
     }
-    // The USB detect-GPIO hooks (patch 06) are still global /tmp paths (not yet
-    // per-instance) — clear them so a stale insert doesn't carry across runs.
+    // The patch-06 USB fault-flag hooks are still global /tmp paths (not yet
+    // per-instance) — clear them so a stale fault doesn't carry across runs.
     for f in ["/tmp/usb_insert", "/tmp/usb2_insert"] {
         let _ = std::fs::remove_file(f);
     }
@@ -720,7 +720,8 @@ fn unmount_host_disk(dev: &str) {
 }
 
 /// If XDJ_USB is set, mount it into the guest AFTER rbp is polling, reproducing the
-/// hardware insert choreography (hub-only boot -> post-boot device_add + detect GPIO).
+/// hardware insert choreography (hub-only boot -> post-boot device_add; no GPIO —
+/// the patch-06 lines are USB fault flags, see the note at the insert below).
 ///   XDJ_USB=<image.img|/dev/diskN>   the backing: a disk image, or a host block device
 ///   XDJ_USB_SLOT=usb1|usb2           front slot (default usb2 = hub port 1.1)
 ///   XDJ_USB_WRITE=1                   persist writes (default: snapshot=on, discarded —
@@ -763,7 +764,7 @@ async fn maybe_insert_usb(runtime_dir: PathBuf) {
         return;
     }
 
-    let (port, detect) = if slot == "usb1" {
+    let (port, fault) = if slot == "usb1" {
         ("1.2", "/tmp/usb_insert")
     } else {
         ("1.1", "/tmp/usb2_insert")
@@ -786,12 +787,12 @@ async fn maybe_insert_usb(runtime_dir: PathBuf) {
                     eprintln!("[usb] qmp: {t}");
                 }
             }
-            // Assert the slot's detect GPIO (patch 06) so the firmware resumes HOST1.
-            if let Err(e) = std::fs::write(detect, b"") {
-                eprintln!("[usb] could not assert {detect}: {e}");
-            } else {
-                eprintln!("[usb] asserted {detect}; the slot should mount shortly");
-            }
+            // Do NOT create the patch-06 file here: GPIO4_IO30 / GPIO7_IO12 are rbp's
+            // active-low USB *fault* flags, not insert-detect lines, and holding one low
+            // raises "USB Error. Remove the device." once the slot mounts. The attach
+            // itself wakes HOST1 (patch 10, USBNC OWIR). Clear any stale fault file.
+            let _ = std::fs::remove_file(fault);
+            eprintln!("[usb] attached; the slot should mount shortly");
         }
         Err(e) => eprintln!("[usb] insert failed: {e}"),
     }

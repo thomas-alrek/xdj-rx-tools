@@ -49,7 +49,7 @@ Regenerate after *any* build-tree edit so the committed patches reproduce the ru
 | 03 | `sabrelite-sabresd-sd` | SABRE-SD board: SD rootfs on **uSDHC3** (`-drive if=none,id=xdjsd`), console on `ttymxc0` |
 | 04 | `imx6-usb-detect-gpio` | `psr-reset` for USB-detect pad-status pins (idle HIGH; avoids false "USB present") |
 | 05 | `imx6-dvfs-gpt-kick` | keeps the GPT/clock path moving (DVFS) so boot doesn't stall |
-| 06 | `imx6-usb-insert-hook` | detect-GPIO insert hooks: `touch /tmp/usb_insert` / `/tmp/usb2_insert` asserts a slot's insert line |
+| 06 | `imx6-usb-insert-hook` | USB **fault-flag** injection: `touch /tmp/usb_insert` / `/tmp/usb2_insert` drives GPIO4_IO30 / GPIO7_IO12 LOW = rbp's active-low USB fault → "USB Error". NOT an insert line (misnamed); normal inserts = `device_add` only |
 | 07 | `imx6-multifield-holds` | up to MAXHOLD **persistent** A/B inject holds parsed from all ctrl lines (complementary two-field faders, tempo = `0x04` neg + `0x0a` pos); **Phase 1 control socket**: reads the snapshot from chardev `id=xdjctrl` (NUL-framed) when present, else file `XDJ_CTRL_PATH`/`/tmp/subucom_ctrl`. Shared `xdj_parse_ctrl` + chardev receive (also used by 09); BQL-serialized, no locks |
 | 08 | `usb-highspeed-hub` | a **USB-2.0** hub (stock `usb-hub` is USB-1.1 and HOST1 rejects it) |
 | 09 | `imx6-mainucom-keys` | drives i.MX6 GPIO lines rbp reads via `/dev/gpiodrv` (top-panel source/DECK keys); `g_xdj_gpio[8]` + `psr-reset` idle levels; key int from chardev `id=xdjkey` (Phase 1) when present, else `XDJ_KEY_PATH`/`/tmp/mainkey` (momentary) |

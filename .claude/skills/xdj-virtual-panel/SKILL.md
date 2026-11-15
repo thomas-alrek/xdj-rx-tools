@@ -50,8 +50,9 @@ panel POSTs into control writes. Run (dev): `python3 tools/xdj-panel/server.py -
 
 | route | body | effect |
 |---|---|---|
-| `POST /ctrl` | `A <off> <val16>` / `B <off> <mask>` / `a` / `b` | write a sub-ucom spec (replaces the ctrl file; persistent holds re-appended) |
-| `POST /release` | — | drop the momentary control (keeps browse counter + input-select) |
+| `POST /ctrl` | `A <off> <val16>` / `B <off> <mask>` / `S <off> <mask> <bits>` / `a` / `b` | set analog / hold button / set switch / one-shot (full state re-sent) |
+| `POST /release` | held `B` line(s) / empty | let go of that button (empty = all held buttons) |
+| `POST /jog` | `<deck> move <deg> <sec>` / `<deck> touch <0\|1>` | jog wheel counter/period/flags |
 | `POST /input` | `<0\|1> DECK\|LINE` | per-channel source switch (holds `B 33 80`/`B 43 80`); default DECK |
 | `POST /browse` | signed detents | ramp the browse counter at `rbp[0x54]/[0x55]` (±1/step, ~45 ms dwell) |
 | `POST /mainkey` `/mainkey_release` | gpio / — | hold/release a MAIN-UCOM GPIO key |
@@ -59,24 +60,35 @@ panel POSTs into control writes. Run (dev): `python3 tools/xdj-panel/server.py -
 | `GET /raw` | — | framebuffer (`X-Width`/`X-Height` headers, body `w*h*3`) |
 | `GET /cal-ref` | — | dev calibration overlay image (`XDJ_CAL_REF`; 404 if unset) |
 
-## Inject/hold model (important)
-Each `/ctrl` POST **replaces** `/tmp/subucom_ctrl` (or pushes a NUL-framed snapshot on the
-`--ctrl-sock` chardev). The server persists only the **browse counter** and **input-select** holds;
-`_compose_ctrl()` re-appends them to every write. One-shot `b`/`a` presses ride **on top of** holds
-(patch 07). A new persistent control needs the same treatment: a server state var + append in
-`_compose_ctrl()` + preserve in `/release`.
+## Inject/hold model (important — reworked 2026-11-14)
+The QEMU harness treats each snapshot as the **whole** frame state (an omitted field falls back
+to the auto-level default / 0). So `server.py` keeps the panel's **full state** and re-sends all
+of it on every write (`_compose_ctrl`):
+- `_analog {off: val}` — every fader/knob moved (persistent; `A` lines).
+- `_held {(off,mask)}` — buttons currently down; **many at once** (SHIFT combos), OR-merged per
+  byte. `B` line on press, `POST /release` with that same line on release (empty body = all).
+- `_switch {(off,mask): bits}` — multi-position switches (`S <off> <mask> <bits>`): FX SELECT,
+  CH SELECT, XF CURVE, MIC — they share byte `0x5a`/`0x5b` with buttons.
+- `_jog` per deck — counter `+0x0e`, period `+0x0c`, flags `+0x10` (touch/reverse); `POST /jog`
+  `"<deck> move <deg> <sec>"` / `"<deck> touch <0|1>"`; an idle thread zeroes the period.
+- browse counter (`0x54`) and INPUT SELECT holds, as before. One-shot `a`/`b` ride on top.
+Buttons are **held while pressed** (real-hardware semantics), not one-shots. The panel sends all
+analog/switch defaults once at load (`pushInitialState`) so the emulator matches the UI. Needs
+QEMU **patch 14** (frame hook + `MAXHOLD` 64). The control table `C` in `panel.html` is
+runtime-verified — see the top table in `docs/subucom-frame-map.md` before changing a spec.
 
 ## USB mount from the panel (`/usb`, LOAD buttons)
 `USB1 LOAD` / `USB2 LOAD` sit above the USB STOP buttons. The button opens a **native file dialog**
 (in the app, via the Tauri dialog plugin — `window.__TAURI__.dialog.open`; dev browser falls back to
 a typed-path prompt), then POSTs `<slot> <path>` to `/usb`. `mount_usb()`:
 1. **Ejects first** (`device_del` + `drive_del` of the previous panel insert *and* the boot
-   auto-insert id) and removes the detect file — USB STOP is only a firmware unmount, the QEMU
+   auto-insert id) and removes any stale patch-06 fault file — USB STOP is only a firmware unmount, the QEMU
    device stays plugged, so a second LOAD would hit "Duplicate ID" / port-in-use.
 2. Symlinks the image to a space-free path, `drive_add`+`device_add` on the hub (port **1.2** = usb1,
    **1.1** = usb2) with a **fresh unique id**, read-only (`snapshot=on`) by default.
-3. Writes the detect file (`/tmp/usb_insert` / `/tmp/usb2_insert`) — the insertion edge patch 10/06
-   watches, so the firmware resumes HOST1 and mounts. Mirrors the host's `maybe_insert_usb`
+3. Does **not** write `/tmp/usb_insert` / `/tmp/usb2_insert` (it removes any stale one). Those
+   patch-06 files drive rbp's active-low USB **fault** flags — asserting one causes "USB Error.
+   Remove the device." The attach alone wakes HOST1 (patch 10). Mirrors the host's `maybe_insert_usb`
    (docs/usb-mount-howto.md, usb-slot-topology.md). Monitor access: QMP `human-monitor-command`
    when `--qmp` is set, else raw HMP on `--mon`.
 
@@ -99,7 +111,10 @@ a typed-path prompt), then POSTs `<slot> <path>` to `/usb`. `mount_usb()`:
   modest `transform:scale(1.28)` and `overflow:visible` (too much + `overflow:hidden` clips the dial).
 - Audio needs routing=DECK (source switch) **and** gains up (on-air gate) — bring the faders up.
 - Browse counter must appear in **every** frame once moved or the firmware reads a huge delta;
-  `_compose_ctrl` handles it — don't bypass it.
+  `_compose_ctrl` handles it — don't bypass it (same for the jog and TIME counters).
+- To verify a mapping without the LCD: break on the dispatcher `0x2a47c0` (`r1`=code,
+  `r2`=state, `r3`=deck) — but on `-smp 1`, step off each bp, and keep halts sparse (the UI
+  stops reacting after many halts; reboot before visual checks).
 - The log box re-enables `user-select` (the panel is `user-select:none` globally).
 
 ## References

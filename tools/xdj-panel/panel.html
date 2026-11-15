@@ -76,6 +76,8 @@
   .btn.jogbtn.down,.btn.jogbtn:active{background:radial-gradient(circle at 50% 32%,#6c737e,#30353d);box-shadow:inset 0 2px 7px #000b}
   .btn.jogbtn.play{background:radial-gradient(circle at 50% 32%,#51805f,#1d3827 72%);border-color:#3f7a57;color:#ddffea}
   .btn.jogbtn.play.down,.btn.jogbtn.play:active{background:radial-gradient(circle at 50% 32%,#63df93,#1e7a46)}
+  .btn.sw{flex-direction:column;gap:.1cqw}
+  .btn.sw .swv{color:var(--accent);font-size:.55cqw}
   .btn.unmapped{color:#6a727d;background:linear-gradient(180deg,#1a1e24,#14171c);border-color:#2a2f37;cursor:default}
   .btn.unmapped:hover{color:#6a727d;border-color:#2a2f37}
 
@@ -164,66 +166,81 @@
 
 <script>
 // ===== control registry (metadata) =======================================
+// ===== control registry ===================================================
+// Verified against the firmware: every spec below was injected into a running rbp and
+// the code it dispatched was captured at the panel event dispatcher (0x2a47c0), then
+// named with rbp's own debug-console vocabulary (button/knob/rotary tables). See
+// docs/subucom-frame-map.md. Buttons are HELD while pressed (B) and released by name;
+// switches are persistent multi-bit fields (S off mask bits); A = 16-bit analog.
 const C = {
-  mic1:{l:'MIC1',t:'knob',spec:'A 44',v:512}, mic2:{l:'MIC2',t:'knob',spec:'A 46',v:512},
-  miceqhi:{l:'HI',t:'knob',v:512}, miceqlow:{l:'LOW',t:'knob',v:512},
-  micsw:{l:'MIC'}, usb1stop:{l:'USB1 STOP',spec:'b 5d 01'}, usb1load:{l:'USB1 LOAD',usb:'usb1'},
+  // mic / master strips (MIC level knobs are not in the sub-ucom frame)
+  mic1:{l:'MIC1'}, mic2:{l:'MIC2'},
+  miceqhi:{l:'HI',t:'knob',spec:'A 46',v:512}, miceqlow:{l:'LOW',t:'knob',spec:'A 44',v:512},
+  micsw:{l:'MIC',t:'switch',off:0x5b,mask:0xc0,pos:['OFF','ON','TALK'],bits:[0x40,0x00,0x80],v:1},
+  usb1stop:{l:'USB1 STOP',spec:'B 5e 10'}, usb1load:{l:'USB1 LOAD',usb:'usb1'},
+  usb2stop:{l:'USB2 STOP',spec:'B 5e 08'}, usb2load:{l:'USB2 LOAD',usb:'usb2'},
+  booth:{l:'BOOTH',t:'knob',spec:'A 48',v:512}, masterlvl:{l:'MASTER',t:'knob',spec:'A 4a',v:1023},
+  mrec:{l:'MASTER REC'}, tmark:{l:'TRACK MARK',spec:'B 5e 02'},
+  // display keys (top-panel MAIN-UCOM GPIOs) + quantize
   src_rb:{l:'rekordbox',gpio:159}, src_midi:{l:'MIDI',gpio:161},
   src_usb1:{l:'USB1',gpio:160}, src_usb2:{l:'USB2',gpio:158},
-  quant:{l:'QUANTIZE',spec:'B 19 01'}, deck12:{l:'DECK 1/2',gpio:149}, timemd:{l:'TIME MODE',gpio:146},
-  booth:{l:'BOOTH',t:'knob',spec:'A 48',v:512}, masterlvl:{l:'MASTER',t:'knob',spec:'A 50',v:512},
-  mrec:{l:'MASTER REC'}, tmark:{l:'TRACK MARK'}, usb2stop:{l:'USB2 STOP',spec:'b 5d 02'}, usb2load:{l:'USB2 LOAD',usb:'usb2'},
+  quant:{l:'QUANTIZE',spec:'B 5e 20'}, deck12:{l:'DECK 1/2',gpio:149}, timemd:{l:'TIME MODE',gpio:146},
+  // browse section
+  browse:{l:'BROWSE',spec:'B 5f 08'}, taglist:{l:'TAG LIST',spec:'B 5f 04'},
+  info:{l:'INFO',spec:'B 5f 02'}, menu:{l:'MENU',spec:'B 5f 01'},
+  back:{l:'BACK',spec:'B 5e 01'}, tagtrk:{l:'TAG TRK',spec:'B 5d 80',tip:'TAG TRACK'},
+  enc:{l:'BROWSE',t:'encoder',pushSpec:'B 5d 10'},
+  loadL:{l:'◄ LOAD',spec:'B 5d 40',tip:'LOAD to deck 1'}, loadR:{l:'LOAD ►',spec:'B 5d 20',tip:'LOAD to deck 2'},
+  // channel strips
   deck1src:{l:'PH/LN',gpio:119}, deck2src:{l:'PH/LN',gpio:120},
-  trim1:{l:'TRIM',t:'knob',spec:'A 26',v:512}, trim2:{l:'TRIM',t:'knob',spec:'A 36',v:512},
+  trim1:{l:'TRIM',t:'knob',spec:'A 26',v:1023}, trim2:{l:'TRIM',t:'knob',spec:'A 36',v:1023},
   eq_hi1:{l:'HI',t:'knob',spec:'A 24',v:512}, eq_hi2:{l:'HI',t:'knob',spec:'A 34',v:512},
-  eq_mid1:{l:'MID',t:'knob',spec:'A 28',v:512}, eq_mid2:{l:'MID',t:'knob',spec:'A 38',v:512},
-  eq_low1:{l:'LOW',t:'knob',spec:'A 2a',v:512}, eq_low2:{l:'LOW',t:'knob',spec:'A 3a',v:512},
-  color1:{l:'COLOR',t:'knob',spec:'A 2c',v:512}, color2:{l:'COLOR',t:'knob',spec:'A 3c',v:512},
-  ch1:{l:'CH1',t:'vfader',spec:'A 44',v:0}, ch2:{l:'CH2',t:'vfader',spec:'A 4c',v:0},
-  browse:{l:'BROWSE',spec:'B 16 01'}, taglist:{l:'TAG LIST',spec:'b 5e 02'},
-  info:{l:'INFO',spec:'b 5f 08'}, menu:{l:'MENU',spec:'b 5f 01',longpress:true},
-  back:{l:'BACK',spec:'b 5e 01'}, tagtrk:{l:'TAG TRK'},
-  enc:{l:'BROWSE',t:'encoder',pushSpec:'b 5d 10'},
-  loadL:{l:'◄ LOAD',spec:'b 5d 40'}, loadR:{l:'LOAD ►',spec:'b 5d 20'},
-  scfx_noise:{l:'NOISE'}, scfx_gate:{l:'GATE'}, scfx_crush:{l:'CRUSH'}, scfx_filter:{l:'FILTER'},
-  beatL:{l:'BEAT ◄',spec:'B 56 01'}, beatR:{l:'BEAT ►',spec:'B 56 02'},
-  fxsel:{l:'FX SELECT',t:'rotary',specUp:'b 5a 04',specDown:'b 5a 01'},
-  fxch:{l:'CH SELECT',spec:'B 5a 20',round:true}, fxlev:{l:'LEVEL',t:'knob',spec:'A 54',v:512},
-  fxon:{l:'ON/OFF',spec:'B 5b 04',round:true}, fxtap:{l:'TAP',spec:'B 5b 08',round:true}, fxtime:{l:'TIME',t:'knob',v:512},
-  hp_mix:{l:'HP MIX',t:'knob',spec:'A 4a',v:512}, hp_lvl:{l:'HP LVL',t:'knob',spec:'A 4c',v:512},
-  cue1:{l:'CUE1',spec:'B 4c 01'}, cue2:{l:'CUE2',spec:'B 4c 02'}, xfcurve:{l:'XF CURVE'},
+  eq_mid1:{l:'MID',t:'knob',spec:'A 2a',v:512}, eq_mid2:{l:'MID',t:'knob',spec:'A 3a',v:512},
+  eq_low1:{l:'LOW',t:'knob',spec:'A 28',v:512}, eq_low2:{l:'LOW',t:'knob',spec:'A 38',v:512},
+  color1:{l:'COLOR',t:'knob',spec:'A 2e',v:512}, color2:{l:'COLOR',t:'knob',spec:'A 3e',v:512},
+  ch1:{l:'CH1',t:'vfader',spec:'A 2c',v:1023}, ch2:{l:'CH2',t:'vfader',spec:'A 3c',v:1023},
   xf:{l:'CROSSFADER',t:'xfader',spec:'A 4e',v:512},
-  d1in:{l:'IN',spec:'B 13 01'}, d1out:{l:'OUT',spec:'b 13 02'}, d1reloop:{l:'RELOOP',spec:'b 12 80'},
-  d1_delete:{l:'DEL',spec:'b 13 10'}, d1_memory:{l:'MEM',spec:'b 13 20'},
-  d1_call_l:{l:'◄',spec:null}, d1_call_r:{l:'►',spec:null},
-  d1_vinyladj:{l:'V.ADJ',t:'knob',v:512}, d1trng:{l:'RANGE',spec:'B 12 08'},
-  d1_jogmode:{l:'JOG',spec:'b 12 40'}, d1_rev:{l:'REV',spec:'b 13 01'},
-  d1_tsL:{l:'◄',spec:null}, d1_tsR:{l:'►',spec:null}, d1_srchL:{l:'◄◄',spec:'b 13 08'}, d1_srchR:{l:'►►'},
-  d1jog:{l:'',t:'jog',specUp:'b 13 20',specDown:'b 13 10'},
-  d1sync:{l:'SYNC',spec:'b 12 20'}, d1_syncmaster:{l:'MST',spec:'b 12 10'},
-  d1_mastertempo:{l:'M.T',spec:'b 12 04'}, d1slip:{l:'SLIP',spec:'b 11 02'},
-  d1h1:{l:'A',spec:'b 10 80',pad:true}, d1h2:{l:'B',spec:'b 10 40',pad:true},
-  d1h3:{l:'C',spec:'b 10 20',pad:true}, d1h4:{l:'D',spec:'b 10 10',pad:true},
-  d1_hotcuemode:{l:'HOT CUE',spec:'b 11 08'}, d1auto:{l:'BEAT LOOP',spec:'b 11 04'},
-  d1_loopslice:{l:'LOOP SLICE'}, d1shift:{l:'SHIFT',spec:'b 12 01'},
-  d1cue:{l:'CUE',spec:'b 13 80',big:true}, d1play:{l:'▶❙❙',spec:'b 13 40',big:true,play:true},
-  d1tempo:{l:'TEMPO',t:'vfader-c',specNeg:'A 04',specPos:'A 0a',v:512},
-  d2in:{l:'IN',spec:'B 23 01'}, d2out:{l:'OUT',spec:'b 23 02'}, d2reloop:{l:'RELOOP',spec:'b 22 80'},
-  d2_delete:{l:'DEL',spec:'b 23 10'}, d2_memory:{l:'MEM',spec:'b 23 20'},
-  d2_call_l:{l:'◄',spec:null}, d2_call_r:{l:'►',spec:null},
-  d2_vinyladj:{l:'V.ADJ',t:'knob',v:512}, d2trng:{l:'RANGE',spec:'B 22 08'},
-  d2_jogmode:{l:'JOG',spec:'b 22 40'}, d2_rev:{l:'REV',spec:'b 23 01'},
-  d2_tsL:{l:'◄',spec:null}, d2_tsR:{l:'►',spec:null}, d2_srchL:{l:'◄◄',spec:'b 23 08'}, d2_srchR:{l:'►►'},
-  d2jog:{l:'',t:'jog',specUp:'b 23 20',specDown:'b 23 10'},
-  d2sync:{l:'SYNC',spec:'b 22 20'}, d2_syncmaster:{l:'MST',spec:'b 22 10'},
-  d2_mastertempo:{l:'M.T',spec:'b 22 04'}, d2slip:{l:'SLIP',spec:'b 21 02'},
-  d2h1:{l:'A',spec:'b 20 80',pad:true}, d2h2:{l:'B',spec:'b 20 40',pad:true},
-  d2h3:{l:'C',spec:'b 20 20',pad:true}, d2h4:{l:'D',spec:'b 20 10',pad:true},
-  d2_hotcuemode:{l:'HOT CUE',spec:'b 21 08'}, d2auto:{l:'BEAT LOOP',spec:'b 21 04'},
-  d2_loopslice:{l:'LOOP SLICE'}, d2shift:{l:'SHIFT',spec:'b 22 01'},
-  d2cue:{l:'CUE',spec:'b 23 80',big:true}, d2play:{l:'▶❙❙',spec:'b 23 40',big:true,play:true},
-  d2tempo:{l:'TEMPO',t:'vfader-c',specNeg:'A 14',specPos:'A 1a',v:512},
+  xfcurve:{l:'XF CURVE',t:'switch',off:0x5b,mask:0x30,pos:['1','2','3'],bits:[0x10,0x00,0x20],v:1},
+  // sound colour FX
+  scfx_noise:{l:'NOISE',spec:'B 59 80'}, scfx_gate:{l:'GATE',spec:'B 59 40'},
+  scfx_crush:{l:'CRUSH',spec:'B 59 20'}, scfx_filter:{l:'FILTER',spec:'B 59 10'},
+  // headphones
+  hp_mix:{l:'HP MIX',t:'knob',spec:'A 52',v:512}, hp_lvl:{l:'HP LVL',t:'knob',spec:'A 50',v:512},
+  cue1:{l:'CUE1',spec:'B 5b 02'}, cue2:{l:'CUE2',spec:'B 5b 01'},
+  // beat FX
+  beatL:{l:'BEAT ◄',spec:'B 5a 02'}, beatR:{l:'BEAT ►',spec:'B 5a 01'},
+  fxsel:{l:'FX SELECT',t:'selector',off:0x5a,mask:0xe0,bitsOf:p=>(7-p)<<5,v:0,
+    pos:['DELAY','ECHO','SPIRAL','REVERB','TRANS','FLANGER','PITCH','ROLL']},
+  fxch:{l:'CH SELECT',t:'selector',off:0x5a,mask:0x1c,bitsOf:p=>(5-p)<<2,v:5,
+    pos:['1','2','MIC','CF.1','CF.2','MASTER']},
+  fxtime:{l:'TIME',t:'counter',spec:'A 56'},
+  fxlev:{l:'DEPTH',tip:'LEVEL/DEPTH',t:'knob',spec:'A 4c',v:512},
+  fxon:{l:'ON/OFF',spec:'B 5b 04',round:true}, fxtap:{l:'TAP',spec:'B 5b 08',round:true},
 };
+
+function deckControls(n){ const o=(n-1)*0x10, h=v=>(v+o).toString(16).padStart(2,'0'), p='d'+n;
+  const B=(off,m)=>'B '+h(off)+' '+m;
+  Object.assign(C,{
+    [p+'in']:{l:'IN',spec:B(0x13,'02')}, [p+'out']:{l:'OUT',spec:B(0x13,'01')}, [p+'reloop']:{l:'RELOOP',spec:B(0x12,'80')},
+    [p+'_call_l']:{l:'◄',spec:B(0x13,'20'),tip:'CUE/LOOP CALL ◄'}, [p+'_call_r']:{l:'►',spec:B(0x13,'10'),tip:'CUE/LOOP CALL ►'},
+    [p+'_delete']:{l:'DEL',spec:B(0x13,'08')}, [p+'_memory']:{l:'MEM',spec:B(0x13,'04')},
+    [p+'_vinyladj']:{l:'BRAKE',tip:'VINYL SPEED ADJ (TOUCH/BRAKE)',t:'knob',spec:'A '+h(0x06),v:512},
+    [p+'_rev']:{l:'REV',spec:B(0x12,'02')}, [p+'slip']:{l:'SLIP',spec:B(0x11,'01')},
+    [p+'_jogmode']:{l:'VINYL',spec:B(0x12,'40')}, [p+'sync']:{l:'SYNC',spec:B(0x12,'20')},
+    [p+'_syncmaster']:{l:'MST',spec:B(0x12,'10'),tip:'MASTER'}, [p+'trng']:{l:'RANGE',spec:B(0x12,'08'),tip:'TEMPO RANGE'},
+    [p+'_mastertempo']:{l:'M.T',spec:B(0x12,'04'),tip:'MASTER TEMPO'},
+    [p+'_tsL']:{l:'|◄◄',spec:B(0x11,'80'),tip:'TRACK SEARCH ◄'}, [p+'_tsR']:{l:'►►|',spec:B(0x11,'40'),tip:'TRACK SEARCH ►'},
+    [p+'_srchL']:{l:'◄◄',spec:B(0x11,'20'),tip:'SEARCH ◄◄'}, [p+'_srchR']:{l:'►►',spec:B(0x11,'10'),tip:'SEARCH ►►'},
+    [p+'jog']:{l:'',t:'jog',deck:n},
+    [p+'h1']:{l:'A',spec:B(0x10,'80'),pad:true}, [p+'h2']:{l:'B',spec:B(0x10,'40'),pad:true},
+    [p+'h3']:{l:'C',spec:B(0x10,'20'),pad:true}, [p+'h4']:{l:'D',spec:B(0x10,'10'),pad:true},
+    [p+'_hotcuemode']:{l:'HOT CUE',spec:B(0x11,'08')}, [p+'auto']:{l:'BEAT LOOP',spec:B(0x11,'04')},
+    [p+'_loopslice']:{l:'LOOP SLICE',spec:B(0x11,'02')}, [p+'shift']:{l:'SHIFT',spec:B(0x12,'01')},
+    [p+'cue']:{l:'CUE',spec:B(0x13,'80'),big:true}, [p+'play']:{l:'▶❙❙',spec:B(0x13,'40'),big:true,play:true},
+    [p+'tempo']:{l:'TEMPO',t:'vfader-c',specNeg:'A '+h(0x04),specPos:'A '+h(0x0a),v:512},
+  });
+}
+deckControls(1); deckControls(2);
 // ===== layout ============================================================
 // Grid layout in design units on a W x H canvas (converted to % of #stage below), so
 // rows/columns line up exactly. Both decks share ONE layout (identical, not mirrored),
@@ -325,7 +342,7 @@ function log(m){ const t=new Date().toLocaleTimeString();
   if(logbox.textContent.length>4000) logbox.textContent=logbox.textContent.slice(0,4000); }
 async function post(p,b){ try{ await fetch(p,{method:'POST',body:b||''}); }catch(e){ log('POST '+p+' failed'); } }
 function sctrl(spec){ post('/ctrl',spec); }
-function release(){ post('/release'); }
+function release(spec){ post('/release', spec||''); }   // spec = the held line to let go of; '' = all
 function mainkey(n){ post('/mainkey',String(n)); }
 function mainkeyRelease(){ post('/mainkey_release'); }
 const _src={0:'DECK',1:'DECK'};
@@ -373,20 +390,29 @@ const cap=(t)=>{ const e=d('cap'); e.textContent=t; return e; };
 function btnCell(id){ const c=C[id];
   const el=d('btn'+(c.round?' round':'')+(c.big?' jogbtn':'')+(c.pad?' pad':'')+(c.play?' play':''));
   const mapped=!!(c.spec||c.gpio||c.usb); if(!mapped) el.classList.add('unmapped');
-  el.textContent=c.l; el.title=c.l+(c.spec?('  ['+c.spec+']'):(c.gpio?('  [gpio '+c.gpio+']'):(c.usb?'  (mount a USB image/device)':'  (unmapped)')));
-  let lp=null;
+  el.textContent=c.l; const name=c.tip||c.l;
+  el.title=name+(c.spec?('  ['+c.spec+']'):(c.gpio?('  [gpio '+c.gpio+']'):(c.usb?'  (mount a USB image/device)':'  (not in the panel frame)')));
+  // Real-hardware semantics: the bit is HELD for as long as the button is down
+  // (so long-press, SHIFT combos and hold-to-scan work), released by name on up.
   el.addEventListener('pointerdown',e=>{ e.preventDefault();
     if(c.usb){ el.classList.add('down'); setTimeout(()=>el.classList.remove('down'),160); mountUsb(c.usb); return; }
     if(c.gpio){ el.classList.add('down'); mainkey(c.gpio); return; }
-    if(!c.spec){ log('· '+c.l+' — unmapped'); return; }
-    el.classList.add('down'); sctrl(c.spec);
-    if(c.longpress) lp=setTimeout(()=>sctrl('B '+c.spec.replace(/^[bB] /,'')),1100);
-    log('▸ '+c.l+'  '+c.spec); });
-  const up=()=>{ if(c.gpio){ el.classList.remove('down'); mainkeyRelease(); return; }
-    if(c.spec){ if(lp){clearTimeout(lp);lp=null;} el.classList.remove('down'); release(); } };
-  el.addEventListener('pointerup',up);
-  el.addEventListener('pointerleave',()=>{ if(el.classList.contains('down')) up(); });
+    if(!c.spec){ log('· '+name+' — not in the panel frame'); return; }
+    try{ el.setPointerCapture(e.pointerId); }catch(_){}
+    el.classList.add('down'); sctrl(c.spec); log('▸ '+name+'  '+c.spec); });
+  const up=()=>{ if(!el.classList.contains('down')) return; el.classList.remove('down');
+    if(c.gpio){ mainkeyRelease(); return; }
+    if(c.spec) release(c.spec); };
+  el.addEventListener('pointerup',up); el.addEventListener('pointercancel',up); el.addEventListener('lostpointercapture',up);
   return el;
+}
+// Multi-position switch (XF CURVE, MIC OFF/ON/TALK): click cycles; a persistent field.
+const swLine=(c,bits)=>'S '+c.off.toString(16)+' '+c.mask.toString(16)+' '+bits.toString(16);
+function switchCell(id){ const c=C[id]; let p=c.v||0;
+  const el=d('btn sw'); const show=()=>{ el.innerHTML=''; const a=d('swl'); a.textContent=c.l; const b=d('swv'); b.textContent=c.pos[p]; el.append(a,b); };
+  el.title=c.l+' — click to switch ('+c.pos.join(' / ')+')';
+  el.addEventListener('pointerdown',e=>{ e.preventDefault(); p=(p+1)%c.pos.length; show(); sctrl(swLine(c,c.bits[p])); log('▸ '+c.l+' = '+c.pos[p]); });
+  show(); return el;
 }
 function knobCell(id){ const c=C[id]; const el=d('cell knob'); const m=d();
   try{ const k=new Kn.Knob(m,Object.assign({},KS,{mode:'bounded',min:0,max:1023,value:c.v==null?512:c.v,size:100}));
@@ -420,13 +446,23 @@ function xfaderCell(id){ const c=C[id]; const el=d('cell xf'); const track=d('ht
   const end=()=>{ drag=false; }; track.addEventListener('pointerup',end); track.addEventListener('pointercancel',end);
   show(); el.append(track); el.title=c.l; return el;
 }
-function rotaryCell(id){ const c=C[id]; const el=d('cell rot'); const m=d(); let last=null,acc=0,t=0; const STEP=.5;
-  const det=s=>{ const sp=s>0?c.specUp:c.specDown; if(sp) sctrl(sp); };
-  try{ const k=Kn.createInfiniteKnob(m,Object.assign({},KS,{size:120,gripBumps:false}));
-    k.onChange(e=>{ if(last==null){last=e.value;return;} let dd=e.value-last; last=e.value; acc+=dd; const now=performance.now();
-      while(acc>=STEP){acc-=STEP; if(now-t>16){det(1);t=now;}} while(acc<=-STEP){acc+=STEP; if(now-t>16){det(-1);t=now;}} });
-  }catch(e){ m.textContent='⊘'; }
-  el.append(kwrap(m)); if(c.l) el.appendChild(cap(c.l)); el.title=c.l; return el;
+// Endless-knob widget helper: calls step(+1/-1) per detent of `deg` degrees.
+function infinite(m,opts,deg,step){ let last=null,acc=0;
+  const k=Kn.createInfiniteKnob(m,Object.assign({},KS,opts));
+  k.onChange(e=>{ if(last==null){last=e.value;return;} acc+=e.value-last; last=e.value;
+    while(acc>=deg){acc-=deg; step(1);} while(acc<=-deg){acc+=deg; step(-1);} }); return k; }
+// Rotary SELECTOR switch (FX SELECT 8 positions, CH SELECT 6): absolute position
+// packed into a byte field -- turn to step, the caption shows the position.
+function selectorCell(id){ const c=C[id]; const el=d('cell rot'); const m=d(); let p=c.v||0; const capEl=cap('');
+  const n=c.pos.length; const show=()=>{ capEl.textContent=c.pos[p]; capEl.title=c.l; };
+  const set=()=>{ show(); sctrl(swLine(c,c.bitsOf(p))); };
+  try{ infinite(m,{size:120,gripBumps:false},.9,s=>{ const q=Math.max(0,Math.min(n-1,p+s)); if(q!==p){ p=q; set(); } }); }catch(e){ m.textContent='⊘'; }
+  el.append(kwrap(m),capEl); show(); el.title=c.l+' — turn to select ('+c.pos.join(' / ')+')'; return el;
+}
+// Endless ENCODER reported as a 16-bit counter the firmware diffs (BEAT FX TIME @0x56).
+function counterCell(id){ const c=C[id]; const el=d('cell rot'); const m=d(); let n=0;
+  try{ infinite(m,{size:120,gripBumps:false},.5,s=>{ n=(n+s)&0xffff; sctrl(c.spec+' '+n.toString(16)); }); }catch(e){ m.textContent='⊘'; }
+  el.append(kwrap(m),cap(c.l)); el.title=c.l+' — endless encoder'; return el;
 }
 function encoderCell(id){ const c=C[id]; const el=d('cell enc'); const m=d(); let last=null,acc=0,t=0; const STEP=.35;
   try{ const k=Kn.createInfiniteKnob(m,Object.assign({},KS,{size:120,gripBumps:true,gripBumpCount:30,
@@ -439,7 +475,7 @@ function encoderCell(id){ const c=C[id]; const el=d('cell enc'); const m=d(); le
   const push=d('encpush'); push.textContent='PUSH';
   push.addEventListener('pointerdown',ev=>{ ev.preventDefault(); ev.stopPropagation(); push.classList.add('down');
     sctrl(c.pushSpec); log('▸ BROWSE push'); });
-  const pup=()=>{ if(push.classList.contains('down')){ push.classList.remove('down'); release(); } };
+  const pup=()=>{ if(push.classList.contains('down')){ push.classList.remove('down'); release(c.pushSpec); } };
   push.addEventListener('pointerup',pup); push.addEventListener('pointerleave',pup);
   kw.appendChild(push); el.appendChild(kw);
   let wa=0,wt=null; el.addEventListener('wheel',ev=>{ ev.preventDefault(); let dy=ev.deltaY;
@@ -448,28 +484,33 @@ function encoderCell(id){ const c=C[id]; const el=d('cell enc'); const m=d(); le
       if(s){ wa-=s*80; post('/browse',String(s)); } else if(Math.abs(wa)>320) wa=0; },70); },{passive:false});
   el.title='BROWSE — rotate to scroll, push to select'; return el;
 }
+// Jog: rbp reads a 16-bit position counter + pulse period + direction/touch flags
+// (FUN_00283dc4 -> code 0x4306). The panel streams the platter angle to /jog, which
+// turns it into counter ticks and a speed-derived period; touch = holding the platter.
 function jogCell(id){ const c=C[id]; const el=d('cell jogcell'); const j=d('jog');
   const spin=d('jogspin'); j.append(spin,d('jogshade'),d('jogcap'));
   let rot=0; const turn=dd=>{ rot+=dd; spin.style.transform='rotate('+rot+'deg)'; };   // visual platter angle
-  let dragging=false,lastA=null,acc=0,t=0; const STEP=12;
+  let pend=0, tLast=performance.now(), timer=null;
+  const flush=()=>{ timer=null; if(!pend) return; const now=performance.now();
+    post('/jog', c.deck+' move '+pend.toFixed(2)+' '+Math.max(.005,(now-tLast)/1000).toFixed(4)); pend=0; tLast=now; };
+  const move=dd=>{ turn(dd); if(!pend) tLast=performance.now()-16; pend+=dd; if(!timer) timer=setTimeout(flush,16); };
+  let dragging=false,lastA=null;
   const ang=e=>{ const r=j.getBoundingClientRect(); return Math.atan2(e.clientY-(r.top+r.height/2),e.clientX-(r.left+r.width/2))*180/Math.PI; };
-  const det=s=>{ const sp=s>0?c.specUp:c.specDown; if(sp) sctrl(sp); };
   j.addEventListener('pointerdown',e=>{ e.preventDefault(); dragging=true; lastA=ang(e); j.classList.add('touch');
-    try{ j.setPointerCapture(e.pointerId); }catch(_){} });
+    try{ j.setPointerCapture(e.pointerId); }catch(_){} post('/jog', c.deck+' touch 1'); });
   j.addEventListener('pointermove',e=>{ if(!dragging) return; const a=ang(e); let dd=a-lastA;
-    if(dd>180)dd-=360; if(dd<-180)dd+=360; lastA=a; turn(dd); acc+=dd; const now=performance.now();
-    while(acc>=STEP){acc-=STEP; if(now-t>14){det(1);t=now;}} while(acc<=-STEP){acc+=STEP; if(now-t>14){det(-1);t=now;}} });
-  const end=()=>{ dragging=false; lastA=null; j.classList.remove('touch'); };
+    if(dd>180)dd-=360; if(dd<-180)dd+=360; lastA=a; move(dd); });
+  const end=()=>{ if(!dragging) return; dragging=false; lastA=null; j.classList.remove('touch'); flush(); post('/jog', c.deck+' touch 0'); };
   j.addEventListener('pointerup',end); j.addEventListener('pointercancel',end); j.addEventListener('lostpointercapture',end);
-  let wa=0,wt=null; el.addEventListener('wheel',ev=>{ ev.preventDefault(); let dy=ev.deltaY;
-    if(ev.deltaMode===1)dy*=16; else if(ev.deltaMode===2)dy*=400; wa+=dy;
-    if(!wt) wt=setTimeout(()=>{ wt=null; let s=Math.max(-4,Math.min(4,Math.trunc(wa/60)));
-      if(s){ wa-=s*60; turn(s*STEP); for(let i=0;i<Math.abs(s);i++) det(s>0?1:-1); } else if(Math.abs(wa)>240) wa=0; },60); },{passive:false});
-  el.append(j); el.title=(c.l||'JOG')+' — drag to scratch / pitch-bend'; return el;
+  // scroll wheel = nudge the platter edge (pitch bend), no touch
+  el.addEventListener('wheel',ev=>{ ev.preventDefault(); let dy=ev.deltaY;
+    if(ev.deltaMode===1)dy*=16; else if(ev.deltaMode===2)dy*=400; move(Math.max(-30,Math.min(30,dy/4))); },{passive:false});
+  el.append(j); el.title='JOG — drag the platter (touch + scratch), scroll to nudge'; return el;
 }
 function cell(id){ const c=C[id]; if(!c) return d();
   switch(c.t){ case 'knob':return knobCell(id); case 'vfader':case 'vfader-c':return faderCell(id);
-    case 'xfader':return xfaderCell(id); case 'rotary':return rotaryCell(id);
+    case 'xfader':return xfaderCell(id); case 'selector':return selectorCell(id);
+    case 'counter':return counterCell(id); case 'switch':return switchCell(id);
     case 'encoder':return encoderCell(id); case 'jog':return jogCell(id);
     default:return btnCell(id); } }
 
@@ -531,9 +572,21 @@ function init(){
   build(); startScreen(); calOverlay();
   document.getElementById('src0').addEventListener('click',()=>toggleSrc(0));
   document.getElementById('src1').addEventListener('click',()=>toggleSrc(1));
-  document.getElementById('brel').addEventListener('click',()=>{ release(); mainkeyRelease();
+  document.getElementById('brel').addEventListener('click',()=>{ release(''); mainkeyRelease();
     document.querySelectorAll('.btn.down,.encpush.down').forEach(e=>e.classList.remove('down')); log('⏹ release all'); });
   setSrc(0,'DECK'); setSrc(1,'DECK');
+  pushInitialState();
+}
+// Send every analog/switch control's starting value once, so the emulator matches
+// what the panel shows (otherwise an untouched control sits at the boot default).
+function pushInitialState(){ const lines=[];
+  for(const id in C){ const c=C[id];
+    if(c.t==='vfader-c' && c.specNeg){ const v=c.v==null?512:c.v; lines.push(c.specNeg+' '+v.toString(16), c.specPos+' '+(1023-v).toString(16)); }
+    else if(isAnalog(c.spec) && c.v!=null && c.t!=='counter') lines.push(c.spec+' '+Math.round(c.v).toString(16));
+    else if(c.t==='switch') lines.push(swLine(c,c.bits[c.v||0]));
+    else if(c.t==='selector') lines.push(swLine(c,c.bitsOf(c.v||0)));
+  }
+  if(lines.length) post('/ctrl', lines.join('\n'));
 }
 init();
 </script>

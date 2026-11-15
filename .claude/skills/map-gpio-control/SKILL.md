@@ -1,6 +1,6 @@
 ---
 name: map-gpio-control
-description: Find and drive an XDJ-RX control that rbp reads/writes as a GPIO (via /dev/gpiodrv) - source/input-select switches, line/phono switches, USB-detect, top-panel source keys, and rbp's output control lines (mux commands). Use when a control is NOT a sub-ucom frame field (no fader/button/knob/rotary match) and you suspect a discrete GPIO level, or when deciding whether a pin is a drivable input vs an rbp-driven output.
+description: Find and drive an XDJ-RX control that rbp reads/writes as a GPIO (via /dev/gpiodrv) - source/input-select switches, line/phono switches, USB fault flags, top-panel source keys, and rbp's output control lines (mux commands). Use when a control is NOT a sub-ucom frame field (no fader/button/knob/rotary match) and you suspect a discrete GPIO level, or when deciding whether a pin is a drivable input vs an rbp-driven output.
 ---
 
 # Mapping a GPIO control (rbp `/dev/gpiodrv` via `common::GpioManager`)
@@ -32,7 +32,7 @@ Run `procedure_callers(FUN_0002be28)` and read each caller's args. Baseline inve
 | `FUN_00066688` (mixer master) | 117,118 | out | analog-mux command (NOT the switch input) |
 | `_INIT_72` | 134,135 | out | global control lines |
 | `FUN_0021a4ac` (PanelComController) | 162-165 | out | panel control lines |
-| `FUN_0024e834` (deck/Player ctor) | 126 / 204 | in | USB-media detect (deck1/deck2) |
+| `FUN_0024e834` (deck/Player ctor) | 126 / 204 | in | USB fault flag USB1/USB2, active-low (LOW on a mounted slot → "USB Error. Remove the device."; NOT insert-detect) |
 | `FUN_0023b5e8` (ISetting/SwitchTestMode) | 119,120 | in | **EXT TYPE (LINE/PHONO) switch** ch0/ch1 |
 | `FUN_00274a38` | 119,120,146,149,158-161 | in | main-ucom top-panel keys |
 

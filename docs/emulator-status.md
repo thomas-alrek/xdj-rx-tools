@@ -143,11 +143,13 @@ rbp's `DBSA_Task_USB` thread watches. Verified with the rekordbox test image
 (`test/usb/`, PIONEER/rekordbox/export.pdb etc.). The earlier "doesn't enumerate"
 note was from the pre-SABRE-SD wiring and is obsolete.
 
-**TODO bugfix (2026-11-12):** a *correct* post-boot insert still sometimes raises
-the `USB Error. Remove the device.` modal even though the drive enumerated and
-mounted. It is mostly misleading — "pressing" USB2 (`inj.py mainkey 158`) clears it
-and the library browses normally. Root cause (spurious USB-error path in rbp's
-mount/accept) not yet tracked down. Don't `device_del` to retry (it tears down the
+**✅ FIXED (2026-11-15):** the `USB Error. Remove the device.` modal on a *correct*
+post-boot insert was self-inflicted. The insert recipe touched `/tmp/usb2_insert`
+(patch 06), which drives GPIO7_IO12 LOW. That line (and GPIO4_IO30 for USB1) is rbp's
+**active-low USB fault flag** (gpiodrv `0xcc`/`0x7e`; `UsbStorageManager` listener
+`0x250020`: LOW on a mounted slot → show caution, HIGH → clear after 500 ms). Insert
+with `device_add` only (patch 10 wakes HOST1) → mount + library accept, no modal.
+Panel server + xdj-host fixed; see `docs/usb-mount-howto.md`. Don't `device_del` to retry (it tears down the
 `id=usbstick` drive backend); reboot + insert once instead.
 
 Two live caveats:
@@ -190,9 +192,9 @@ Control surface (buttons/jogs/faders) comes via the Sub-ucom panel MCU over SPI
 (`/dev/subucom_spi1.0`). **The panel now boots and rbp actively reads it.** The
 root cause of "rbp never reads the panel" was *not* a disabled poll — it was a
 **boot deadlock** in panel init: rbp pushes an initial USB state to the panel
-(triggered by a USB-detect GPIO reading 0) via `peer->send()` *before* the panel
+(triggered by a USB fault-flag GPIO reading 0 — originally thought to be USB-detect) via `peer->send()` *before* the panel
 poll thread exists, and spins forever. QEMU reset every GPIO input to 0 ("USB
-present"); on real hw the USB-detect lines idle HIGH. **Fixed** by
+present"); on real hw these USB fault flags idle HIGH. **Fixed** by
 `qemu/patches/04-imx6-usb-detect-gpio.patch` (reset GPIO4_IO30 / GPIO7_IO12 high —
 no firmware change). Verified on a stock boot: `/dev/subucom_spi1.0` open, the
 `UiMain` poll thread running + epoll up, and `SUBUCOM_TRACE=1` shows it clocking

@@ -17,6 +17,48 @@ each an unrolled `ldrb [cur,#OFF]; ldrb [prev,#OFF]; eor; tst #MASK; …` patter
 - **Mixer/analog continuous** → decoder near `0x282400–0x282800`; 16-bit LE ÷1023.0 → codes
   `0x50xx/0x60xx` via `FUN_002adee8`. *(offsets being finalized)*
 
+## ✅ 2026-11-14 — RUNTIME-VERIFIED MAP (supersedes the tables below where they differ)
+
+Method: every frame bit / analog field was injected into a running rbp (patch 14 build) and the
+event it produced was captured at the panel dispatcher **`0x2a47c0`** `(obj, code, state, deck, …)`
+(`state` 0 = press, 2 = release, 3 = relative, 4 = absolute value). Codes were then named with
+rbp's own debug-console vocabulary (`button`/`knob`/`rotary` handlers `FUN_0001ec50`/`0001e69c`/
+`0001e49c`, see `docs/debug-console-protocol.md`), and switch positions were read off the LCD.
+**Earlier positional labels were wrong in several places** (DEL/MEM, LOOP IN/OUT, REV, SLIP,
+SEARCH, CALL, EQ MID/LOW, MIC, HP, USB STOP, QUANTIZE, CUE1/2, BROWSE/INFO/TAG LIST).
+
+**Deck** (deck 1 shown; **deck 2 = +0x10**):
+| rbp | control (code) |
+|---|---|
+| `0x04`/`0x0a` | TEMPO fader, complementary pair |
+| `0x06` | VINYL SPEED ADJ TOUCH/BRAKE knob (`0x411d`, ÷1023) — `0x08` unused |
+| `0x0c` / `0x0e` | **JOG**: pulse period (speed = 416.67/period; 0/0xffff = stopped) / 16-bit position counter (fw diffs it, wraps at 65535) → `0x4306` via `FUN_00283dc4` |
+| `0x10` | .0 JOG TOUCH (`0x430e`) · .1 jog direction (reverse) · .4 pad D · .5 pad C · .6 pad B · .7 pad A (`0x411a..17`) |
+| `0x11` | .0 SLIP (`0x4116`) · .1 LOOP SLICE (`0x4115`) · .2 BEAT LOOP (`0x4114`) · .3 HOT CUE (`0x4113`) · .4 SEARCH ►► (`0x411b`) · .5 SEARCH ◄◄ (`0x411c`) · .6 TRACK ►►\| (`0x421b`) · .7 TRACK \|◄◄ (`0x421c`) |
+| `0x12` | .0 SHIFT · .1 REV · .2 MASTER TEMPO · .3 TEMPO RANGE · .4 MASTER · .5 SYNC · .6 VINYL · .7 RELOOP/EXIT |
+| `0x13` | .0 LOOP OUT (`0x410f`) · .1 LOOP IN (`0x410d`) · .2 MEMORY (`0x4121`) · .3 DELETE (`0x4120`) · .4 CALL ► (`0x431e`) · .5 CALL ◄ (`0x431f`) · .6 PLAY · .7 CUE |
+
+**Mixer** (channel 1; **channel 2 = +0x10**): `0x24` EQ HI (`5008`) · `0x26` TRIM (`5007`) ·
+`0x28` EQ **LOW** (`500a`) · `0x2a` EQ **MID** (`5009`) · `0x2c` CH FADER (`5011`) · `0x2e` COLOR (`508b`) ·
+`0x33`.7/`0x43`.7 INPUT SELECT DECK (`0x5112`).
+
+**Master / centre:**
+| rbp | control (code) |
+|---|---|
+| `0x44` / `0x46` | MIC EQ **LOW** (`805`) / MIC EQ **HI** (`804`) — MIC *level* is not in this frame |
+| `0x48` `0x4a` `0x4c` `0x4e` `0x50` `0x52` | BOOTH · MASTER · BEAT FX LEVEL/DEPTH · CROSSFADER · HP LEVEL · HP MIX |
+| `0x54` / `0x56` | BROWSE encoder counter / BEAT FX **TIME** encoder counter (`0x448a`, relative) |
+| `0x59` | .4 FILTER · .5 CRUSH · .6 GATE · .7 NOISE (sound colour FX, `0x5095..98`) |
+| `0x5a` | .0 BEAT ► (`4494`) · .1 BEAT ◄ (`4493`) · bits 2-4 **CH SELECT** v → pos 5−v: 1, 2, MIC, CF.1, CF.2, MASTER (`448e`) · bits 5-7 **FX SELECT** v → pos 7−v: DELAY, ECHO, SPIRAL, REVERB, TRANS, FLANGER, PITCH, ROLL (`448d`) |
+| `0x5b` | .0 CUE CH2 · .1 CUE CH1 (`5014`) · .2 BEAT FX ON/OFF (`4487`) · .3 TAP (`4486`) · bits 4-5 XF CURVE (v1→0, v0→1, v2→2; `6010`) · bits 6-7 MIC switch OFF/ON/TALK (same encoding; `803`) |
+| `0x5d` | .0 **active-low status** (`0x8001`; not a key) · .4 BROWSE PUSH · .5 LOAD deck 2 · .6 LOAD deck 1 · .7 TAG TRACK |
+| `0x5e` | .0 BACK (`4206`) · .1 TRACK MARK (`409`) · .2 `0x401` (unnamed) · .3 USB2 STOP · .4 USB1 STOP (`8002`) · .5 QUANTIZE (`4488`) |
+| `0x5f` | .0 MENU (`20a`) · .1 INFO (`204`) · .2 TAG LIST (`209`) · .3 BROWSE (`208`) |
+
+Visually confirmed on the LCD: FX/CH SELECT names, TEMPO RANGE, QUANTIZE, MASTER.
+**Prerequisite:** QEMU patch 14 (the ECSPI burst hook) — without it the slave sends all-zero
+frames and *no* control reaches rbp.
+
 Confidence: ✅ = screen-verified; ◆ = firmware-decoded + code matches RX3 (strong); ○ =
 firmware-decoded, RX-specific code / positional label (verify before trusting the label);
 inj = `b <rbp_off> <mask>` for buttons, `A <rbp_off> <val16>` for analog.
@@ -162,7 +204,7 @@ channel routing table (`tools/xdj-panel/debug/tables.py`; ch0.routed @`0x107acdc
 while toggling. Found with `tools/xdj-panel/debug/sweep_full.py` (sweep every frame byte, watch routed_src).
 
 **NOT a GPIO.** GPIO 117/118 (and 134/135, 162-165) are rbp *output* pins (mux/control lines),
-proven inert for routing. The only switch *inputs* via `/dev/gpiodrv` are USB-detect (126/204)
+proven inert for routing. The only switch *inputs* via `/dev/gpiodrv` are the USB fault flags (126/204, active-low; *not* USB-detect)
 and the EXT-TYPE/LINE-PHONO switch (GPIO 119/120 → switchState `+0xa0`/`+0xb0`). The deck-vs-ext
 *source* select is this frame bit, applied to the channel's `+0x254` requested-source by rbp's
 own (C++ vtable) applier → router `FUN_00080a74`. See the engine mechanism below for the data path.
@@ -282,8 +324,8 @@ clean "no gdb" fix is emulator/firmware-side, not a panel operation:
 **gdb-free tooling built this session** (scratchpad): `rsp.py` (raw RSP: mem/reg read-write, Z0/Z2,
 continue/stop), `tables.py` (dump both tables), `inj.py` (gain-preserving one-shot/hold/mainkey
 injects), `mon.py`/`ser.py` (HMP monitor + guest console), `relaunch.sh` (debug launcher). USB
-bring-up per `docs/usb-mount-howto.md` (hub-only boot → post-boot `device_add` → `touch
-/tmp/usb2_insert`); known "USB Error" is cleared by pressing the USB2 source key again. Load a track
+bring-up per `docs/usb-mount-howto.md` (hub-only boot → post-boot `device_add`; do **not** `touch
+/tmp/usb2_insert` — that's the USB fault flag, the old cause of "USB Error"). Load a track
 by PUSH-drilling to it then one more PUSH → TRACK MENU → PUSH on LOAD TO DECK1.
 
 ## Not in this frame / unresolved

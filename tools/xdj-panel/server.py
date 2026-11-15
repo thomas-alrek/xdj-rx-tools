@@ -6,8 +6,10 @@ Serves index.html and turns panel actions into the emulator's control-injection
 protocol, and streams the QEMU framebuffer to the browser as raw RGB (drawn on a
 <canvas>) — no per-frame image encoding, over a persistent monitor connection:
 
-  POST /ctrl     body="B 12 08"  -> write that spec line to /tmp/subucom_ctrl
-  POST /release                  -> remove /tmp/subucom_ctrl (release held control)
+  POST /ctrl     body="A 2c 3ff" / "B 12 08" / "b 5e 01" / "S 5a e0 20"
+                 -> set analog / hold button / one-shot / set switch field
+  POST /release  body="B 12 08" (or empty = all)          -> let go of held button(s)
+  POST /jog      body="1 move <deg> <sec>" | "1 touch 1"  -> jog wheel (counter/period/flags)
   GET  /raw                      -> latest framebuffer as raw RGB
                                     (headers X-Width / X-Height; body w*h*3 bytes)
 
@@ -173,23 +175,117 @@ def _write_key(data):
             pass
 
 
-def _compose_ctrl(lines):
-    """Build the ctrl-file body. Once the browse encoder has moved, the 16-bit
-    counter at 0x54/0x55 MUST be present in EVERY frame: if a later frame drops
-    it, the firmware reads 0x54 jumping back to 0 as a big rotate delta (so e.g.
-    a push scrolls instead of drilling in). The QEMU harness (patch 07, updated)
-    applies one-shot 'b'/'a' presses ON TOP of holds, so we no longer promote
-    them to holds -- they stay one-shots (a sustained hold on the encoder push
-    would trigger the wrong mode) and just ride alongside the held counter."""
-    out = [ln.strip() for ln in lines if ln.strip()]
-    if _browse_active and not any(l.lower().startswith("a 54") for l in out):
+# ---- full panel state -------------------------------------------------------
+# The QEMU harness takes the WHOLE desired frame state per snapshot (a missing line
+# = that field falls back to the auto-level default / 0). So the server keeps the
+# panel's complete state and every write re-sends all of it:
+#   _analog  {off: val16}        every fader/knob the operator has moved (persistent)
+#   _held    {(off, mask): n}    buttons currently held down (any number at once,
+#                                e.g. SHIFT + a pad), OR-merged per byte on output
+#   _switch  {(off, mask): bits} multi-position switches packed into a byte field
+#                                (FX SELECT, CH SELECT, XF CURVE, MIC) -- persistent
+#   _jog     per-deck jog counter / period / direction / touch (see /jog)
+# plus the browse counter and INPUT-SELECT holds kept by the routes below.
+_analog = {}
+_held = {}
+_switch = {}                            # {(off, mask): bits}  multi-position switches
+_JOG_BASE = {1: 0x00, 2: 0x10}          # deck2 = deck1 + 0x10
+# deck-relative: period @0x0c, counter @0x0e, flags @0x10 (bit0 touch, bit1 reverse)
+_jog = {d: {"cnt": 0, "per": 0, "rev": 0, "touch": 0, "active": False, "t": 0.0}
+        for d in _JOG_BASE}
+JOG_TICKS_PER_REV = 1024                # counter ticks per platter turn (model)
+JOG_SPEED_K = 416.67                    # rbp: speed = 416.67 / period  (FUN_00283dc4)
+JOG_NORMAL_RPS = 100.0 / 3 / 60         # 33 1/3 rpm -> firmware speed 1.0
+JOG_IDLE_S = 0.12                       # no motion for this long -> period 0 (stopped)
+
+
+def _jog_lines():
+    out = []
+    for d, j in _jog.items():
+        if not j["active"]:
+            continue
+        b = _JOG_BASE[d]
+        out.append("A %02x %x" % (b + 0x0c, j["per"] & 0xffff))
+        out.append("A %02x %x" % (b + 0x0e, j["cnt"] & 0xffff))
+        flags = (0x01 if j["touch"] else 0) | (0x02 if j["rev"] else 0)
+        if flags:
+            out.append("B %02x %02x" % (b + 0x10, flags))
+    return out
+
+
+def _compose_ctrl(lines=()):
+    """Full snapshot = persistent state + any one-shot lines passed in.
+
+    Persistent state (analog values, held buttons, jog, browse counter, input
+    select) is re-sent on EVERY write: the harness treats the snapshot as the whole
+    truth, so anything omitted would snap back. Once the browse encoder has moved,
+    its 16-bit counter at 0x54/0x55 MUST be in every frame (a drop reads as a huge
+    rotate delta). One-shot 'b'/'a' lines ride on top (the harness fires them once)."""
+    out = ["A %02x %x" % (off, val & 0xffff) for off, val in sorted(_analog.items())]
+    merged = {}
+    for (off, mask) in _held:
+        merged[off] = merged.get(off, 0) | mask
+    for (off, mask), bits in _switch.items():
+        if bits & mask:
+            merged[off] = merged.get(off, 0) | (bits & mask)
+    out += ["B %02x %02x" % (off, m) for off, m in sorted(merged.items())]
+    out += _jog_lines()
+    if _browse_active:
         out.append("A 54 %x" % _browse_counter)
-    # Persistent INPUT-SELECT holds (DECK channels) ride alongside, deduped.
-    have = {l.lower() for l in out}
-    for hl in _input_hold_lines():
-        if hl.lower() not in have:
-            out.append(hl)
+    out += _input_hold_lines()
+    out += [ln.strip() for ln in lines if ln.strip() and ln.strip()[0] in "ab"]
     return "\n".join(out) + "\n"
+
+
+def _apply_lines(lines):
+    """Fold A/B spec lines into the persistent state; return the one-shot lines."""
+    shots = []
+    for ln in lines:
+        parts = ln.split()
+        if len(parts) == 4 and parts[0] == "S":      # S <off> <mask> <bits>
+            try:
+                _switch[(int(parts[1], 16), int(parts[2], 16))] = int(parts[3], 16)
+            except ValueError:
+                pass
+            continue
+        if len(parts) != 3 or parts[0] not in "ABab":
+            continue
+        try:
+            off, val = int(parts[1], 16), int(parts[2], 16)
+        except ValueError:
+            continue
+        if parts[0] == "A":
+            if off == 0x54:
+                continue                    # the browse counter is owned by /browse
+            _analog[off] = val
+        elif parts[0] == "B":
+            _held[(off, val)] = 1
+        else:
+            shots.append(ln)
+    return shots
+
+
+def _push():
+    _write_ctrl(_compose_ctrl())
+
+
+def _jog_idle_loop():
+    """A real jog reports period 0 once the platter stops; model that by zeroing the
+    period JOG_IDLE_S after the last move (the counter keeps its position)."""
+    while True:
+        time.sleep(0.04)
+        now = time.time()
+        with _browse_lock:
+            dirty = False
+            for j in _jog.values():
+                if j["per"] and now - j["t"] > JOG_IDLE_S:
+                    j["per"] = 0
+                    dirty = True
+            if dirty:
+                try:
+                    _push()
+                except Exception:
+                    pass
 
 
 def _parse_ppm(data):
@@ -273,7 +369,7 @@ def grab_raw():
             return None
 
 
-# ---- USB mount (drive_add/device_add on the hub + assert the detect GPIO file) ----
+# ---- USB mount (drive_add/device_add on the hub; the attach itself wakes HOST1) ----
 # Mirrors the app/host `maybe_insert_usb` choreography so a panel LOAD button can mount
 # a disk image (or physical device) on the fly. Over QMP in the .app (--qmp), or the raw
 # HMP monitor in dev (--mon). docs/usb-mount-howto.md / usb-slot-topology.md.
@@ -339,7 +435,7 @@ _usb_cur = {"usb1": None, "usb2": None}
 
 def eject_usb(slot):
     """Detach whatever the panel (or the boot auto-insert) put on this slot."""
-    detect = "/tmp/usb_insert" if slot == "usb1" else "/tmp/usb2_insert"
+    fault = "/tmp/usb_insert" if slot == "usb1" else "/tmp/usb2_insert"
     cur = _usb_cur.get(slot)
     # Candidates: our previous panel insertion + the host's boot auto-insert id.
     pairs = []
@@ -352,7 +448,7 @@ def eject_usb(slot):
     for drive, _dev in pairs:
         _mon_quiet(["drive_del %s" % drive])
     try:
-        os.remove(detect)                        # removal edge for the detect GPIO
+        os.remove(fault)                         # never leave the USB fault flag asserted
     except FileNotFoundError:
         pass
     _usb_cur[slot] = None
@@ -362,7 +458,7 @@ def eject_usb(slot):
 def mount_usb(slot, imgpath, write=False):
     """Insert `imgpath` (file or /dev device) on the given front slot (usb1|usb2),
     ejecting any previous insertion first so re-LOAD works without a duplicate-ID."""
-    port, detect = ("1.2", "/tmp/usb_insert") if slot == "usb1" else ("1.1", "/tmp/usb2_insert")
+    port, fault = ("1.2", "/tmp/usb_insert") if slot == "usb1" else ("1.1", "/tmp/usb2_insert")
     real = os.path.realpath(imgpath)
     # A physical disk must be released by the host OS first (macOS/Linux, best-effort).
     if imgpath.startswith("/dev/"):
@@ -393,8 +489,14 @@ def mount_usb(slot, imgpath, write=False):
     if '"error"' in blob or "failed" in blob or "duplicate" in blob or "in use" in blob:
         raise RuntimeError("monitor rejected insert: %s" % outs)
     _usb_cur[slot] = (did, dev)
-    # Assert the slot's detect GPIO so the firmware resumes HOST1 and mounts it.
-    with open(detect, "wb"):
+    # Do NOT create the patch-06 file (/tmp/usb*_insert) here. Those GPIOs
+    # (GPIO4_IO30 / GPIO7_IO12) are rbp's active-low USB *fault* flags, not
+    # insert-detect lines; holding one low raises "USB Error. Remove the device."
+    # once the slot mounts. Host1 resume on attach comes from patch 10 (USBNC OWIR).
+    # Clear a stale fault file left by an older build/tool so the flag stays OK.
+    try:
+        os.remove(fault)
+    except FileNotFoundError:
         pass
     return "mounted %s on %s%s" % (os.path.basename(real), slot.upper(),
                                    "" if write else " (read-only)")
@@ -473,29 +575,70 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(n).decode("utf-8", "replace") if n else ""
         path = self.path.split("?", 1)[0]
         if path == "/ctrl":
-            # one spec per line; multiple lines = simultaneous holds (e.g. a tempo
-            # fader driving both its complementary frame fields at once).
+            # One spec per line. A = set an analog value (persists), B = press and
+            # HOLD a button bit (until /release names it), a/b = one-shot,
+            # S <off> <mask> <bits> = set a multi-position switch field (persists). Several
+            # lines = simultaneous (e.g. the tempo fader's two complementary fields).
             lines = [ln.strip() for ln in body.strip().split("\n") if ln.strip()]
             if lines:
                 try:
                     with _browse_lock:
-                        _write_ctrl(_compose_ctrl(lines))
+                        shots = _apply_lines(lines)
+                        _write_ctrl(_compose_ctrl(shots))
                     self._send(200, "text/plain", b"ok")
                 except Exception as e:
                     self._send(500, "text/plain", str(e).encode())
             else:
                 self._send(400, "text/plain", b"empty")
         elif path == "/release":
+            # Body = the B lines to let go of (one button's bits). Empty body =
+            # release EVERY held button (the panel's "Release all"). Analog values,
+            # jog, browse counter and input select are kept.
             try:
                 with _browse_lock:
-                    # Keep persistent state (browse counter + INPUT-SELECT holds);
-                    # only the momentary control is dropped. _write_ctrl handles the
-                    # empty-snapshot release for both transports.
-                    _write_ctrl(_compose_ctrl([]))
+                    names = [ln.split() for ln in body.strip().split("\n") if ln.strip()]
+                    if not names:
+                        _held.clear()
+                        for j in _jog.values():
+                            j["touch"] = 0
+                    for parts in names:
+                        if len(parts) == 3 and parts[0] in "Bb":
+                            try:
+                                _held.pop((int(parts[1], 16), int(parts[2], 16)), None)
+                            except ValueError:
+                                pass
+                    _push()
             except Exception as e:
                 self._send(500, "text/plain", str(e).encode())
                 return
             self._send(200, "text/plain", b"ok")
+        elif path == "/jog":
+            # Jog wheel. Body: "<deck> move <degrees> <seconds>"  (platter turned by
+            # <degrees> over <seconds>; +cw) or "<deck> touch <0|1>". rbp reads a
+            # 16-bit position counter (deck +0x0e; it diffs successive values), a
+            # pulse period (+0x0c; speed = 416.67/period, 0 = stopped) and flags
+            # (+0x10: bit0 touch, bit1 reverse) -- FUN_00283dc4, code 0x4306.
+            parts = body.strip().split()
+            try:
+                d = int(parts[0]); j = _jog[d]
+                with _browse_lock:
+                    if parts[1] == "touch":
+                        j["touch"] = 1 if parts[2] == "1" else 0
+                        j["active"] = True
+                    elif parts[1] == "move":
+                        deg, dt = float(parts[2]), max(1e-3, float(parts[3]))
+                        ticks = int(round(deg / 360.0 * JOG_TICKS_PER_REV))
+                        if ticks:
+                            rps = abs(deg) / 360.0 / dt
+                            speed = rps / JOG_NORMAL_RPS
+                            j["cnt"] = (j["cnt"] + ticks) & 0xffff
+                            j["per"] = max(1, min(0xfffe, int(round(JOG_SPEED_K / max(speed, 1e-3)))))
+                            j["rev"] = 1 if ticks < 0 else 0
+                            j["t"] = time.time(); j["active"] = True
+                    _push()
+                self._send(200, "text/plain", b"ok")
+            except (IndexError, KeyError, ValueError):
+                self._send(400, "text/plain", b"use '<1|2> move <deg> <sec>' or '<1|2> touch <0|1>'")
         elif path == "/input":
             # INPUT SELECT (per-channel source switch): body "<ch> DECK|LINE".
             # ch 0 = deck1/CH1, 1 = deck2/CH2. Persistent hold; default DECK.
@@ -505,10 +648,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     _input_src[int(parts[0])] = 1 if parts[1] == "DECK" else 0
                 try:
                     with _browse_lock:
-                        # preserve any currently-held lines; swap only the source holds
-                        cur = [l for l in _read_ctrl().splitlines() if l.strip()]
-                        kept = [l for l in cur if l.lower()[:4] not in ("b 33", "b 43")]
-                        _write_ctrl(_compose_ctrl(kept))
+                        _push()
                     self._send(200, "text/plain", b"ok")
                 except Exception as e:
                     self._send(500, "text/plain", str(e).encode())
@@ -553,9 +693,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 # 0 too -- reset to match, else the first write is one huge delta that
                 # jumps to the list end.
                 with _browse_lock:
-                    held = _read_ctrl().lower()
-                    if "a 54" not in held:
-                        _browse_counter = 0
                     _browse_active = True
                 # Step one detent at a time, re-acquiring the lock each step so a push
                 # (/ctrl) can interleave and still see the current counter.
@@ -563,8 +700,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     with _browse_lock:
                         _browse_counter = (_browse_counter + step) & 0xffff
                         try:
-                            _write_ctrl("\n".join(
-                                ["A 54 %x" % _browse_counter] + _input_hold_lines()) + "\n")
+                            _push()
                         except Exception:
                             break
                     time.sleep(0.045)
@@ -635,6 +771,7 @@ def main():
             print("input-select default: CH1=DECK CH2=DECK")
         except Exception:
             pass
+        threading.Thread(target=_jog_idle_loop, daemon=True).start()
         print("Ctrl-C to stop.")
         try:
             httpd.serve_forever()

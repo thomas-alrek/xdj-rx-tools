@@ -41,17 +41,18 @@ Boot **hub-only** (no `-device usb-storage` at boot — the debug launcher alrea
 wait for the home screen, then:
 ```
 monitor:  device_add usb-storage,bus=usb-bus.1,port=1.1,drive=usbstick,id=xdjusb,removable=on
-host:     touch /tmp/usb2_insert
 ```
-Mounts `/media/usb2/sda1`. Cold-plugging at boot → "USB Error" modal; always insert post-boot.
+Mounts `/media/usb2/sda1`; USB2 browser shows the library, no modal. Cold-plugging at boot →
+"USB Error"; always insert post-boot. **That `device_add` is the whole insert** (patch 10 wakes
+HOST1 from the attach).
 
-**Caveat — the "USB Error" modal also appears on a *correct* post-boot insert** (a
-`USB Error. Remove the device.` popup, even though the drive enumerated and
-mounted fine). It is **mostly misleading**: clear it by **"pressing" USB2**
-(`python3 tools/xdj-panel/debug/inj.py mainkey 158`) and the USB2 browser then
-shows the library (ARTIST/ALBUM/TRACK/… categories). Verified live 2026-11-12.
-**→ TODO bugfix:** track down why a valid mount still raises the modal (spurious
-USB-error path in rbp's mount/accept handling). **Do NOT retry by `device_del`** —
+**Never `touch /tmp/usb2_insert` (or `/tmp/usb_insert`) to insert.** Patch 06's files drive
+GPIO7_IO12 / GPIO4_IO30, which rbp reads as **active-low USB fault flags** (gpiodrv ids
+`0xcc`/`0x7e`, `UsbStorageManager` listener `0x250020`): LOW on a mounted slot →
+`USB Error. Remove the device.` ~20 s (guest) later; `rm` the file → cleared in ~0.5 s.
+That was the long-standing "USB Error on a correct insert" (fixed 2026-11-15; the panel
+server and xdj-host no longer create the file). Use the files only to inject a USB fault.
+**Do NOT retry by `device_del`** —
 that tears down the `-drive if=none,id=usbstick` backend (later `device_add`s then
 fail `can't find value 'usbstick'`); if a mount won't take, **reboot and insert
 once** instead.

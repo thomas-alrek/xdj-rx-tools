@@ -17,7 +17,7 @@
   `pick_file` on the local setup window; the dialog plugin JS API + a `remote` capability +
   `dialog:allow-open` on the external panel (app commands are ACL-blocked for remote origins).
 - **Panel-driven USB LOAD** — `/usb` endpoint mounts a disk image/device on a slot over QMP
-  (`drive_add`/`device_add` + detect file), **eject-first** so re-loading works. See skill [build-xdj-app].
+  (`drive_add`/`device_add` only — no patch-06 file, see usb-mount-howto), **eject-first** so re-loading works. See skill [build-xdj-app].
 - **Bug fixes:** first-run firmware load failed with "panel didn't come up" — prep's build scripts
   polluted the stdout the shell reads as `XDJ_FW_DIR` (clean now; scripts → stderr + last-line read);
   file dialog froze the app (`blocking_pick_file` on the main thread → non-blocking callback); orphaned
@@ -231,7 +231,8 @@ way, after boot. **Orchestrator plumbing done** in [app/host](../app/host) (`may
 - Boot **hub-only** (USB-2.0 hub on `usb-bus.1` port 1), then after rbp is up (console
   marker `Resolve xrun` + `XDJ_USB_DELAY`s settle) run the proven insert choreography over
   QMP: `drive_add` + `device_add usb-storage,bus=usb-bus.1,port=1.1` (USB2) / `1.2` (USB1),
-  then assert the slot's detect GPIO (`/tmp/usb2_insert` / `/tmp/usb_insert`, patch 06).
+  and nothing else. (Originally it also asserted `/tmp/usb2_insert` / `/tmp/usb_insert` — that
+  was the "USB Error" bug: those pins are rbp's active-low USB *fault* flags. Fixed 2026-11-15.)
 - Driven by env: `XDJ_USB=<image.img|/dev/diskN>`, `XDJ_USB_SLOT=usb1|usb2` (default usb2),
   `XDJ_USB_WRITE=1` (default: `snapshot=on`, writes discarded — protects a real stick).
   A physical device is `diskutil unmountDisk`'d (mac) / `umount`'d (linux) first.
