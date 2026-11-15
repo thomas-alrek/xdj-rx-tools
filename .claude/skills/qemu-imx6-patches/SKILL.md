@@ -10,6 +10,11 @@ and **never patched**. Base: **QEMU 11.1.0**, machine **`-M sabrelite`** (i.MX6Q
 but booted as the real board (**SABRE-SD, MACH_TYPE 3980, `ATAG_REVISION=0x500`**) via a loader
 trampoline + hand-built ATAGs (`qemu_prepare.py` builds `tramp.bin`/`atags.bin`/`vmlinux.bin`).
 
+
+**macOS timer granularity (read before chasing latency):** without patch 21 any QEMU main-loop
+timer below 1 ms fires ~1 ms late on macOS (no `ppoll`). That's why the audio pacer (patch 16)
+runs on its own thread and why EHCI USB transfers crawled. Millisecond-quantized device timing on
+a Mac → suspect this first.
 ## Build
 - `qemu/build-qemu.sh` applies `qemu/patches/*.patch` (recorded in `<src>/.xdj-patches`, so a re-run on an existing tree is idempotent — the old reverse-dry-run check re-applied patch 02 once later patches changed its context) to the QEMU 11.1.0 source and builds into
   `build/qemu-src/qemu-11.1.0/build/qemu-system-arm`.
@@ -61,6 +66,8 @@ Regenerate after *any* build-tree edit so the committed patches reproduce the ru
 | 15 | `imx6-subucom-led-backchannel` | captures rbp's **MOSI `SubTxData`** (LEDs / meters / jog ring), CRC-gates the 20-byte payload, publishes changes as `T <hex>` up `xdjctrl` (socket) or `/tmp/subucom_tx` (`XDJ_TX_PATH`); `XDJ_TX_LOG=1`. Map: `docs/subucom-led-map.md` |
 | 16 | `imx6-audio-paced-sdma` | **fixes audio stutter**: SDMA periods were completed in bursts from the host audio callback (~2 per call = rbp's whole 2×64-frame ALSA ring → constant `ALSA: Resolve xrun`). A **pacer thread** (own thread: macOS main-loop timers can't tick every 1.45 ms) completes one period per channel per tick, copies the master period into a PCM FIFO the host callback drains, and trims its rate ±8% by FIFO level (locks the playhead to the host audio clock; late wake-ups resync, never burst). `XDJ_AUDIO_LATENCY_MS` (FIFO target, default 20), `XDJ_AUDIO_STATS=1` (5 s stats). |
 | 17 | `imx6-source-key-leds` | rekordbox/MIDI/USB1/USB2 key LEDs = rbp GPIO outputs **162–165** (GPIO6_IO02..05, active-high, one-hot). Connects those output lines (`qdev_connect_gpio_out` → `xdj_srcled_set`), mirrors a bitmask and appends it to the patch-15 LED line as a 21st byte (`T <40 hex> <2 hex>`), re-publishing on each change. Panel byte `0x14`. |
+| 20 | `usb-chipidea-highspeed` | **high-speed USB behind the HOST1 hub** (track loads): ChipIdea `PORTSC[27:26]` PSPD speed (Linux reads it on TDI controllers; was 0 = 12 Mbit/s), hub `PORT_STAT_HIGH_SPEED`, **USBSTS[7] SRI** reads 1 (the BSP's `fsl_platform_h1_set_usb_phy_dis()` busy-waits on it for HS links — without it `khubd` spins and the hub never enumerates), and microframe (125 µs) async re-polling for 5 ms after async activity (`tdi`/`tdi_busy_until` in `EHCIState`). |
+| 21 | `macos-submillisecond-poll` | `util/qemu-timer.c`: no `ppoll` on macOS → `qemu_poll_ns` rounded every timeout **up** to whole ms, so all sub-ms main-loop timers ran ~1 ms late. Polls whole ms, then `nanosleep`s the remainder. With 20: USB 1.3 → 5.6 MB/s. Global — affects every QEMU timer on macOS. |
 | 18 | `imx6-auth-chip-i2c4` | **fixes E-7206 AUTH CHIP ERROR**: adds the missing **I2C4** controller (`0x021F8000`, SPI 35 = guest `/dev/i2c-3`, mapped over the catch-all) + `xdj-mfi-cp` I2C slave at `0x10` answering the MFi coprocessor identity registers (reg0 `0x05`, reg1 `0x01`, protocol 2.0, device ID `0x200`; no signing/cert). Also puts the **sub-ucom version word** in frame bytes 2–3 (`0x0035` = "0.35", `XDJ_SUBUCOM_VER`). |
 | 19 | `imx6-update-mode-strap` | `XDJ_BOOT_UPDATE=1` sets **GPIO3_IO30** (sub-ucom update request) HIGH via `psr-reset` → initramfs USB firmware-update mode (D001 screen). |
 

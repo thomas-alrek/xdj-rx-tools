@@ -157,6 +157,9 @@ fn start_host(state: &AppState, fw_dir: &Path) -> Result<(), String> {
     // when launched from Finder (where stderr would otherwise go to the system log).
     let mut cmd = host_command(&state.repo);
     cmd.env("XDJ_FW_DIR", fw_dir);
+    // Start powered off: the panel's power button (or File > Power, or the
+    // "Power On at Launch" preference) turns the emulator on via the sidecar.
+    cmd.env("XDJ_AUTOSTART", "0");
     let _ = std::fs::create_dir_all(app_data_root());
     if let Ok(f) = std::fs::File::create(app_data_root().join("host.log")) {
         if let Ok(f2) = f.try_clone() {
@@ -211,8 +214,8 @@ fn show_emulator(app: &tauri::AppHandle) {
     } else if let Err(e) =
         WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
             .title("Pioneer XDJ-RX")
-            .inner_size(1480.0, 900.0)
-            .min_inner_size(1000.0, 680.0)
+            .inner_size(1480.0, 1480.0 * DECK_AR.1 / DECK_AR.0)
+            .min_inner_size(1000.0, 1000.0 * DECK_AR.1 / DECK_AR.0)
             .build()
     {
         eprintln!("[shell] could not open emulator window: {e}");
@@ -231,6 +234,15 @@ const SCREEN_FB: (f64, f64) = (800.0, 480.0);
 /// Tauri has no aspect-ratio option; on macOS this is NSWindow.contentAspectRatio, which
 /// constrains the content area (not the title bar) during live resize.
 fn lock_screen_aspect(window: &tauri::Window) {
+    lock_aspect(window, SCREEN_FB.0, SCREEN_FB.1);
+}
+
+/// The virtual deck's visible canvas (panel.html VW x VH = design W x H minus CROP on each
+/// side); the main window is locked to it so the deck fills the window with no letterbox.
+const DECK_AR: (f64, f64) = (2110.0, 1152.0);
+
+/// Lock a window's content area to w:h during live resize (macOS NSWindow.contentAspectRatio).
+fn lock_aspect(window: &tauri::Window, ar_w: f64, ar_h: f64) {
     #[cfg(target_os = "macos")]
     {
         let w = window.clone();
@@ -238,12 +250,12 @@ fn lock_screen_aspect(window: &tauri::Window) {
             if let Ok(ptr) = w.ns_window() {
                 // SAFETY: ns_window() is this window's live NSWindow; we're on the main thread.
                 let ns: &objc2_app_kit::NSWindow = unsafe { &*(ptr as *const objc2_app_kit::NSWindow) };
-                ns.setContentAspectRatio(objc2_foundation::NSSize::new(SCREEN_FB.0, SCREEN_FB.1));
+                ns.setContentAspectRatio(objc2_foundation::NSSize::new(ar_w, ar_h));
             }
         });
     }
     #[cfg(not(target_os = "macos"))]
-    let _ = window;
+    let _ = (window, ar_w, ar_h);
 }
 
 /// Handle a dropped firmware file: prep (with progress) then boot it.
@@ -424,8 +436,10 @@ fn main() {
         .manage(AppState { repo: repo.clone(), host: Mutex::new(None), busy: Mutex::new(false) })
         .invoke_handler(tauri::generate_handler![set_key_hex, key_present, browse_firmware, browse_key])
         .on_page_load(|webview, _| {
-            if webview.label() == "screen" {
-                lock_screen_aspect(&webview.window());
+            match webview.label() {
+                "screen" => lock_screen_aspect(&webview.window()),
+                "main" => lock_aspect(&webview.window(), DECK_AR.0, DECK_AR.1),
+                _ => {}
             }
         })
         .setup(move |app| {

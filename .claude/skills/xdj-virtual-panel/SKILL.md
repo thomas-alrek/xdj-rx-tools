@@ -69,6 +69,19 @@ device **photo** as its background; that photo was deleted and must never ship a
   rbp LED changes (`<-`, blink toggles and meter/jog bytes suppressed) and panel notes (`·`); the
   system log tails the guest console (`--console`; default `console.log` beside `--ctrl-sock` = the
   app's runtime dir, else `/tmp/xdj_console.log`, which `relaunch.sh` writes via chardev `logfile=`).
+- **POWER switch** (top-left, `t:'power'`, red LED = on; hidden unless `GET /power` says
+  `available`, i.e. run by `xdj-host`). Click = `POST /power on[ update]|off` (sidecar → host
+  `power.sock`, see [build-xdj-app]). File menu: *Power On / Off*, check items *Enter Firmware Update
+  Mode (at next power on)* and *Power On at Launch* (both `localStorage` prefs `xdj.updateMode` /
+  `xdj.powerOnLaunch`). Powered off: LED stream sends `off` (panel darkens everything) and `#screen`
+  gets a black `.off` overlay. **USB LOAD while off is queued** (`/usb` → `_pending_usb`) and inserted
+  after power on once the guest is ready: normal boot = console `Resolve xrun` + 6 s, update mode =
+  `USB update mount` + 2 s (same choreography as `maybe_insert_usb`). On ctrl-socket reconnect (a fresh
+  QEMU) the sidecar re-sends the full panel state (`_repush`).
+- **The deck is the root**: `.stagewrap` has no padding and `#stage` no border/radius/shadow; the
+  visible canvas is the design canvas cropped by `CROP`=16 units per side (`VW`x`VH` = 2110x1152, via
+  CSS vars `--vw/--vh`), and the app window is aspect-locked to exactly that (`DECK_AR` in the shell). Don't put CSS transitions on things toggled by
+  `visibility` (an offscreen WKWebView never ticks them — the power button uses `transition:none`).
 - **Pop-out screen** (**double-click the screen**, or View > Pop Out Screen): the same page with `?screen=1` renders only `#screen`,
   letterboxed in a resizable window, and never pushes state/holds (view-only; a second VNC client).
   In the app it is a Tauri `WebviewWindow` labelled `screen` (JS API; needs
@@ -100,6 +113,8 @@ panel POSTs into control writes. Run (dev): `python3 tools/xdj-panel/server.py -
 | `POST /mainkey` `/mainkey_release` | gpio / — | hold/release a MAIN-UCOM GPIO key |
 | `POST /usb` | `<usb1\|usb2> <path>` | mount a disk image/device on a front slot (see below) |
 | `GET /raw` | — | framebuffer (`X-Width`/`X-Height` headers, body `w*h*3`) |
+| `GET /power` | — | `{available, state:on/off, update, pending:{slot:path}}` (host power control) |
+| `POST /power` | `on` / `on update` / `off` / `toggle` | power the emulator via `xdj-host` (503 when not run by it) |
 | `GET /log/subucom` `/log/console` | — | **SSE** log lines (backlog first); page `GET /logs.html?src=…` |
 | `POST /log/note` | text | append a panel note to the sub-ucom log |
 | `GET /leds` | — | **SSE** stream of rbp's 20-byte LED payload (`data: <40 hex>` per change); `?once=1` = JSON |
@@ -180,6 +195,10 @@ Map + open items: `docs/subucom-led-map.md`. Map a new LED with `debug/ledprobe.
 - To verify a mapping without the LCD: break on the dispatcher `0x2a47c0` (`r1`=code,
   `r2`=state, `r3`=deck) — but on `-smp 1`, step off each bp, and keep halts sparse (the UI
   stops reacting after many halts; reboot before visual checks).
+- **Double-click on the noVNC screen never fires `dblclick`**: noVNC `setCapture()`s on mousedown,
+  which in WebKit lays a full-window proxy div over the page. The pop-out detects two `pointerdown`s
+  in the **capture phase** instead. Dev-browser tests use the `/raw` canvas (no noVNC) and won't show
+  this — test in the app.
 - The panel is `user-select:none` globally; text to copy lives in the log windows (`logs.html`).
 - Loading the panel page **pushes its full default state** (`pushInitialState`) — opening a second
   panel tab or a headless snapshot resets the emulator's mixer to the panel defaults.

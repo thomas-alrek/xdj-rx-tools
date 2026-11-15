@@ -13,6 +13,7 @@ protocol, and streams the QEMU framebuffer to the browser as raw RGB (drawn on a
   GET  /raw                      -> latest framebuffer as raw RGB
                                     (headers X-Width / X-Height; body w*h*3 bytes)
   GET  /logs.html?src=subucom|console -> log window page; GET /log/<src> = its SSE stream
+  POST /power  on|off|toggle [update] -> power the emulator (xdj-host); GET /power = state
   POST /log/note                 -> append a panel note to the sub-ucom log
   GET  /leds                     -> Server-Sent Events: one "data: <40|42 hex>" per change of
                                     rbp's 20-byte LED/meter payload (SubTxData, QEMU patch 15;
@@ -160,6 +161,69 @@ def _console_loop():
         time.sleep(0.25)
 
 
+# ---- power (desktop app: xdj-host owns QEMU; we forward the panel's power button) ----
+# xdj-host listens on <runtime>/power.sock: "on" | "on update" | "off" | "status" -> one
+# line "on" / "on update" / "off". Without it (dev/debug launcher) power is unavailable.
+POWER_SOCK = None
+_pending_usb = {}             # slot -> image path, inserted once the guest is ready
+_power_lock = threading.Lock()
+
+
+def _power_cmd(cmd):
+    if not POWER_SOCK or not os.path.exists(POWER_SOCK):
+        return None
+    try:
+        with socket.socket(socket.AF_UNIX) as c:
+            c.settimeout(5.0)
+            c.connect(POWER_SOCK)
+            c.sendall((cmd + "\n").encode())
+            return c.makefile().readline().strip() or None
+    except Exception:
+        return None
+
+
+def _leds_off():
+    # Powered off: tell the panel to darken every LED / meter / jog ring.
+    with _leds_cv:
+        _leds["hex"] = "off"
+        _leds["seq"] += 1
+        _leds_cv.notify_all()
+
+
+def _console_has(marker):
+    try:
+        with open(CONSOLE, "rb") as f:
+            return marker.encode() in f.read()
+    except Exception:
+        return False
+
+
+def _insert_pending(update):
+    # Mirror xdj-host's maybe_insert_usb choreography: insert only once the guest is
+    # ready for it -- rbp polling its USB manager (normal boot: "Resolve xrun" + settle),
+    # or the initramfs waiting for the update stick ("USB update mount").
+    marker, settle = ("USB update mount", 2) if update else ("Resolve xrun", 6)
+    t0 = time.time()
+    while time.time() - t0 < 300:
+        if _power_cmd("status") in (None, "off"):
+            return
+        if _console_has(marker):
+            break
+        time.sleep(1.0)
+    else:
+        _logline("subucom", "·  USB insert: gave up waiting for the guest")
+        return
+    time.sleep(settle)
+    with _power_lock:
+        items = list(_pending_usb.items())
+        _pending_usb.clear()
+    for slot, img in items:
+        try:
+            _logline("subucom", "·  inserting queued %s: %s" % (slot, mount_usb(slot, img)))
+        except Exception as e:
+            _logline("subucom", "·  queued %s insert failed: %s" % (slot, e))
+
+
 def _leds_update(hexstr):
     # "<40 hex>" = SubTxData; QEMU (patch 17) appends " <2 hex>" = source-key LEDs
     # (GPIO 162..165: bit0 rekordbox, bit1 MIDI, bit2 USB1, bit3 USB2). Served as one
@@ -194,6 +258,15 @@ def _leds_file_loop():
         time.sleep(0.03)
 
 
+def _repush():
+    time.sleep(0.3)
+    try:
+        with _browse_lock:
+            _push()
+    except Exception:
+        pass
+
+
 def _leds_sock_loop():
     """Socket mode: read "T <hex>" lines QEMU writes back on the xdjctrl connection.
     Shares the persistent connection _sock_send uses (one client per chardev)."""
@@ -208,6 +281,8 @@ def _leds_sock_loop():
                     conn.connect(CTRL_SOCK)
                     _conn["ctrl"] = conn
                     buf = b""
+                    # A (re)started QEMU has no panel state yet: send the full snapshot.
+                    threading.Thread(target=_repush, daemon=True).start()
                 except Exception:
                     conn = None
         if conn is None:
@@ -726,6 +801,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send_file("calibration.json", base=ASSETS)
             else:
                 self._send(404, "application/json", b"{}")
+        elif path == "/power":
+            st = _power_cmd("status")
+            with _power_lock:
+                pend = dict(_pending_usb)
+            body = {"available": st is not None, "state": (st or "off").split()[0],
+                    "update": bool(st and st.endswith("update")), "pending": pend}
+            self._send(200, "application/json", json.dumps(body).encode())
         elif path == "/logs.html":
             self._send_file("logs.html")
         elif path in ("/log/subucom", "/log/console"):
@@ -804,6 +886,46 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 ln.strip() for ln in body.strip().split("\n") if ln.strip()) or "(all)"))
         elif path == "/jog" and "touch" in body:
             _logline("subucom", "-> jog              " + body.strip())
+        if path == "/power":
+            # Body: "on" | "on update" | "off" | "toggle" | "toggle update".
+            w = body.split()
+            cur = _power_cmd("status")
+            if cur is None:
+                self._send(503, "text/plain", b"power control unavailable (not run by xdj-host)"); return
+            want = w[0] if w else "toggle"
+            upd = "update" in w[1:]
+            if want == "toggle":
+                want = "off" if cur.startswith("on") else "on"
+            if want == "on":
+                st = _power_cmd("on update" if upd else "on")
+                _logline("subucom", "·  POWER ON" + (" (firmware update mode)" if upd else ""))
+                _logline("console", "──────── power on%s ────────" % (" (update mode)" if upd else ""))
+                with _power_lock:
+                    has_pending = bool(_pending_usb)
+                if has_pending:
+                    threading.Thread(target=_insert_pending, args=(upd,), daemon=True).start()
+            else:
+                st = _power_cmd("off")
+                _leds_off()
+                with _sock_lock:
+                    for k in ("ctrl", "key"):
+                        try:
+                            if _conn[k]:
+                                _conn[k].close()
+                        except Exception:
+                            pass
+                        _conn[k] = None
+                _logline("subucom", "·  POWER OFF")
+                _logline("console", "──────── power off ────────")
+            self._send(200, "text/plain", (st or "?").encode()); return
+        if path == "/usb":
+            parts = body.strip().split(" ", 1)
+            if (len(parts) == 2 and parts[0] in ("usb1", "usb2") and os.path.exists(parts[1].strip())
+                    and _power_cmd("status") == "off"):
+                with _power_lock:
+                    _pending_usb[parts[0]] = parts[1].strip()
+                self._send(200, "text/plain", ("%s queued: %s (inserted after power on)"
+                                               % (parts[0], parts[1].strip())).encode()); return
         if path == "/ctrl":
             # One spec per line. A = set an analog value (persists), B = press and
             # HOLD a button bit (until /release names it), a/b = one-shot,
@@ -984,11 +1106,17 @@ def main():
     ap.add_argument("--console", default=None,
                     help="guest console log file to show in View > System log (default: "
                          "console.log next to --ctrl-sock, else /tmp/xdj_console.log)")
+    ap.add_argument("--power-sock", default=None,
+                    help="xdj-host power control socket (default: power.sock beside --ctrl-sock)")
     args = ap.parse_args()
-    global CONSOLE
+    global CONSOLE, POWER_SOCK
+    POWER_SOCK = args.power_sock or (os.path.join(os.path.dirname(args.ctrl_sock), "power.sock")
+                                     if args.ctrl_sock else None)
     CONSOLE = args.console or (os.path.join(os.path.dirname(args.ctrl_sock), "console.log")
-                               if args.ctrl_sock and os.path.exists(os.path.join(
+                               if args.ctrl_sock and (os.path.exists(os.path.join(
                                    os.path.dirname(args.ctrl_sock), "console.log"))
+                                   or os.path.exists(POWER_SOCK or "/nonexistent")
+                                   or os.environ.get("XDJ_FW_DIR"))
                                else "/tmp/xdj_console.log")
     MON = args.mon
     QMP = args.qmp

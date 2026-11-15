@@ -184,6 +184,18 @@ A pacer thread now completes one period per 1.45 ms, rate-locked to the host via
 decks + BEAT FX + Color FX + tempo: 378 → 2 guest xruns in 30 s, no host underruns.
 Cost: ~20 ms more output latency (`XDJ_AUDIO_LATENCY_MS`).
 
+**Track-load speed (2026-11-15, patches 20–21):** loads were ~4× slower than hardware. Causes found:
+the USB hub + stick enumerated at **12 Mbit/s** (ChipIdea PORTSC speed bits not modelled; fixing that
+exposed a BSP busy-wait on USBSTS SRI that hung `khubd`), and on macOS every sub-ms QEMU timer fired
+~1 ms late (no `ppoll`), so each 8 KB request (the firmware's own cap) cost ~4.6 ms. Now 480 Mbit/s,
+raw reads 1.3 → 5.6 MB/s, a 60 MB WAV load 10.6 → 7.4 s. The remaining gap is emulated-CPU
+turnaround per request; rbp's thread pinning matches the real dual-core unit.
+
+**Desktop app power control (2026-11-15):** the app starts **powered off**; the panel's POWER switch
+(red LED) / File menu powers QEMU on or cuts it (`xdj-host` `power.sock`). USB images loaded while off
+are inserted after boot; *Enter Firmware Update Mode* boots the update path (patch 19). The window is
+the deck only, aspect-locked.
+
 **Auth chip / service modes (2026-11-15, patches 18–19):** E-7206 AUTH CHIP ERROR fixed (I2C4 +
 MFi coprocessor identity at 0x10); sub-ucom reports version 0.35; **test mode** (hold MEMORY + TEMPO
 RANGE from boot) and **firmware-update mode** (`XDJ_BOOT_UPDATE=1`, D001 screen) both reachable.

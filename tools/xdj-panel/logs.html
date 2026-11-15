@@ -39,6 +39,11 @@ document.title='XDJ-RX — '+NAME; document.getElementById('ttl').textContent=NA
 const out=document.getElementById('out'), st=document.getElementById('st');
 const flt=document.getElementById('flt');
 let lines=[], paused=false, follow=true; const MAX=8000;
+// Tail mode = "scrolled to the bottom": new lines keep it pinned there; scroll up to stop,
+// scroll back to the bottom (or click Follow) to resume. The Follow button just shows it.
+const atBottom=()=>out.scrollTop+out.clientHeight>=out.scrollHeight-8;
+const followBtn=()=>document.getElementById('follow');
+function setFollow(v){ follow=v; followBtn().classList.toggle('on',v); }
 const cls=t=>src!=='subucom'?'':(t.includes('-> ')?'tx':t.includes('<- ')?'rx':t.includes('·')?'note':'');
 function render(){ const f=flt.value.toLowerCase(); const frag=document.createDocumentFragment();
   for(const t of lines){ if(f && !t.toLowerCase().includes(f)) continue;
@@ -46,23 +51,23 @@ function render(){ const f=flt.value.toLowerCase(); const frag=document.createDo
   out.replaceChildren(frag); if(follow) out.scrollTop=out.scrollHeight; }
 function add(t){ lines.push(t); if(lines.length>MAX) lines.splice(0,lines.length-MAX);
   if(paused) return; const f=flt.value.toLowerCase(); if(f && !t.toLowerCase().includes(f)) return;
+  const stick=follow||atBottom();                 // decide before the new line changes the height
   const e=document.createElement('div'); e.className='l '+cls(t); e.textContent=t; out.appendChild(e);
   while(out.childNodes.length>MAX) out.removeChild(out.firstChild);
-  if(follow) out.scrollTop=out.scrollHeight; }
+  if(stick){ out.scrollTop=out.scrollHeight; if(!follow) setFollow(true); } }
 const es=new EventSource('/log/'+src);
 es.onopen=()=>{ st.textContent='live'; };
 es.onerror=()=>{ st.textContent='reconnecting…'; };
 es.onmessage=e=>add(e.data);
 document.getElementById('pause').onclick=e=>{ paused=!paused; e.target.classList.toggle('on',paused);
   e.target.textContent=paused?'Resume':'Pause'; if(!paused) render(); };
-document.getElementById('follow').onclick=e=>{ follow=!follow; e.target.classList.toggle('on',follow); if(follow) out.scrollTop=out.scrollHeight; };
+document.getElementById('follow').onclick=()=>{ setFollow(true); out.scrollTop=out.scrollHeight; };
 document.getElementById('clr').onclick=()=>{ lines=[]; out.replaceChildren(); };
 document.getElementById('copy').onclick=()=>{ const t=lines.join('\n');
   (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).catch(()=>{
     const r=document.createRange(); r.selectNodeContents(out); const s=getSelection(); s.removeAllRanges(); s.addRange(r); document.execCommand('copy'); }); };
 flt.oninput=render;
-out.addEventListener('scroll',()=>{ const atEnd=out.scrollTop+out.clientHeight>=out.scrollHeight-4;
-  if(!atEnd && follow){ follow=false; document.getElementById('follow').classList.remove('on'); } });
+out.addEventListener('scroll',()=>{ const b=atBottom(); if(b!==follow) setFollow(b); });
 </script>
 </body>
 </html>

@@ -73,7 +73,7 @@ cp xdjrx_upd.py qemu_prepare.py "$RES/scripts/"
 cp qemu/build-nand.py qemu/cramfs_extract.py "$RES/scripts/qemu/"
 
 # panel sidecar + assets + noVNC
-cp tools/xdj-panel/server.py tools/xdj-panel/panel.html "$RES/panel/"
+cp tools/xdj-panel/server.py tools/xdj-panel/panel.html tools/xdj-panel/logs.html "$RES/panel/"
 [ -d tools/xdj-panel/assets ] && cp -R tools/xdj-panel/assets "$RES/panel/assets"   # optional (removed in the UI rebuild)
 cp -R app/ui/novnc "$RES/ui/novnc"
 # Knobs library (npm: audio-knobs). Install if missing, then vendor just dist/.

@@ -154,6 +154,17 @@
 #       XDJ_BOOT_UPDATE=1 drives GPIO3_IO30 (the sub-ucom's update request) HIGH
 #       from reset, so the initramfs boots into USB firmware-update mode.
 #
+#   patches/20-usb-chipidea-highspeed.patch
+#       High-speed USB behind the HOST1 hub (track loads): ChipIdea PORTSC PSPD speed
+#       bits + hub PORT_STAT_HIGH_SPEED (was enumerating at 12 Mbit/s), USBSTS SRI
+#       (the BSP busy-waits on it for HS links -> khubd spun forever), and microframe
+#       async polling while busy (the firmware caps USB requests at 8 KB).
+#
+#   patches/21-macos-submillisecond-poll.patch
+#       macOS has no ppoll: qemu_poll_ns rounded every timeout up to whole ms, so sub-ms
+#       timers fired ~1 ms late. Poll whole ms, nanosleep the remainder. USB reads
+#       1.3 -> 5.6 MB/s together with patch 20.
+#
 #   patches/03-sabrelite-sabresd-sd.patch
 #       The XDJ-RX firmware's real board is SABRE-SD (MACH_TYPE 3980), which
 #       registers ECSPI2 (bus 1) for the panel MCU + audio codecs, on a

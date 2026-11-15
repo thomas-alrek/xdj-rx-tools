@@ -69,6 +69,24 @@ to update them.
   block (`http://127.0.0.1:*`, `http://localhost:*`) to `app/shell/capabilities/default.json` so the
   external page may use IPC at all. `remote` capabilities are stable on Tauri 2.12 (no `unstable`).
 
+## Power control (the app starts powered OFF)
+The shell launches `xdj-host` with `XDJ_AUTOSTART=0`: the sidecar, VNC bridge and panel come up, QEMU
+does not. `xdj-host` owns QEMU's lifecycle and listens on **`<runtime>/power.sock`** (line protocol:
+`on` | `on update` | `off` | `status` → one line `on` / `on update` / `off`). `on update` sets
+`XDJ_BOOT_UPDATE=1` for QEMU (patch 19, firmware-update boot). `off` kills QEMU instantly (a power
+cut — the app's nand image is persistent writeback, like the real unit's flash). Each power-on
+deletes the old sockets + `console.log`. QEMU exiting on its own = powered off; only the sidecar
+dying, SIGTERM, Ctrl-C or the shell vanishing end `xdj-host`. Without `XDJ_AUTOSTART=0` (CLI use)
+it powers on at start as before. The panel side (button, prefs, queued USB) is in [xdj-virtual-panel].
+Testing a second instance next to a running app: `XDJ_RUNTIME_DIR=/tmp/<short>` (socket paths ≤ 104
+chars), `XDJ_PANEL_PORT`/`XDJ_VNC_WS_PORT`, `XDJAUDIO=none`, and a *copy* of the nand (`XDJ_NAND`) —
+but two emulators contend for the host (one stalled the other's boot), so keep it short.
+
+## Window = the deck
+`main` is locked to the deck's aspect **2110:1152** (`DECK_AR`, `lock_aspect` via
+`NSWindow.contentAspectRatio` in `on_page_load`) and sized to it, so the deck fills the window with
+no letterbox; `panel.html` draws the stage edge to edge (no outer padding/border/radius).
+
 ## Native menu bar + extra windows
 The panel page builds the **app menu** itself via the Tauri JS menu API (`buildAppMenu` in
 `panel.html`; permission `core:menu:default` in `capabilities/default.json`) — the main window holds

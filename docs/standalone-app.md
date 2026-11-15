@@ -90,8 +90,11 @@ hash, `run/` (sockets + logs when packaged), `host.log`, `last-firmware`.
    reads the prepared dir from its **stdout** (see §4).
 4. → **`start_host`** spawns `xdj-host` with `XDJ_FW_DIR=<dir>`, redirects its stdio to
    `app-data/host.log`, and waits up to 60 s for the panel port (8765) to open (`wait_port`).
-5. `xdj-host` (run mode): `preflight` (qemu + nand + boot blobs present) → `spawn_qemu` →
-   `spawn_sidecar` (server.py) → start the VNC→WS bridge → `maybe_insert_usb` → supervise.
+5. `xdj-host` (run mode): `preflight` (qemu + nand + boot blobs present) → `spawn_sidecar`
+   (server.py) → start the VNC→WS bridge and the `power.sock` listener → supervise. The shell passes
+   `XDJ_AUTOSTART=0`, so **QEMU is not started yet**: the emulator is powered off until the panel's
+   POWER switch / File > Power (or the *Power On at Launch* preference) sends `on` (`spawn_qemu`).
+   Without `XDJ_AUTOSTART=0` (CLI use) it powers on at once and runs `maybe_insert_usb` as before.
    The sidecar binds :8765 within ~1 s, so `wait_port` returns and the shell opens the **main**
    window at `http://127.0.0.1:8765/?vnc=ws://127.0.0.1:6080/`.
 6. The panel (`panel.html`) connects to the screen over noVNC (the `?vnc=` WebSocket) and drives
@@ -162,7 +165,13 @@ copyright-free design (the old device-photo background was removed). Full detail
 **`xdj-virtual-panel`** skill; the essentials:
 - Screen = noVNC over the `?vnc=` WebSocket (the host's VNC-unix→WS bridge on :6080).
 - Controls = HTTP POSTs (`/ctrl`, `/browse`, `/input`, `/mainkey`, `/usb`) → the control channels.
-- Layout is absolute and photo-calibrated; widgets are the `audio-knobs` npm lib + custom jog/faders.
+- Layout is absolute (grid in design units); widgets are the `audio-knobs` npm lib + custom jog/faders.
+- The window holds only the deck (aspect-locked 2110:1152); everything else is the **native menu
+  bar** the page builds (File / Edit / Mixer / Deck 1 / Deck 2 / Color FX / FX / Master / View /
+  Window), the pop-out screen (double-click) and the Sub uCom / System log windows (`logs.html`).
+- **Power**: top-left POWER switch with a red LED; `POST /power` → host `power.sock`. USB images
+  loaded while off are queued and inserted once the guest is ready; *Enter Firmware Update Mode*
+  powers on with `XDJ_BOOT_UPDATE=1`.
 
 ---
 
@@ -196,8 +205,10 @@ There are two correct ways to open a dialog, and **which one you must use depend
 
 ## 10. Lifecycle & teardown
 
-The host supervises with `tokio::select!` over: qemu exit, sidecar exit, Ctrl-C, and **parent
-death** (it polls `XDJ_PARENT_PID` with `libc::kill(pid,0)`). Any of these tears the rest down. The
+The host supervises with a `tokio::select!` loop over: power commands (`power.sock`), qemu exit,
+sidecar exit, Ctrl-C, SIGTERM and **parent death** (it polls `XDJ_PARENT_PID` with
+`libc::kill(pid,0)`). **QEMU exiting only means "powered off"** (the loop continues; the panel can
+power on again); any of the others tears everything down. The
 shell stops the host on the emulator window's `CloseRequested`/`Destroyed` and on `ExitRequested`,
 via **SIGTERM** (lets the host clean up; SIGKILL as a backstop). Net effect: **no orphaned QEMU**,
 however the app dies. Only one instance runs at a time (ports 8765/6080 are fixed; `start_host`
@@ -224,6 +235,7 @@ noted; sensible defaults for both dev (repo) and packaged (`XDJ_RESOURCES`) layo
 | `XDJ_USB` / `XDJ_USB_SLOT` / `XDJ_USB_DELAY` | Boot-time USB auto-insert. |
 | `XDJ_NOVNC_DIR` / `XDJ_KNOBS_DIR` | Bundled asset dirs handed to the sidecar. |
 | `XDJAUDIO` / `XDJSMP` | Audio backend / vCPU count. |
+| `XDJ_AUTOSTART` | `0` = start powered off (the shell sets this); default/other = power on at start. |
 | `XDJ_CAL_REF` | Dev-only: reference photo for the panel's `?cal` calibration overlay (served at `/cal-ref`; 404 if unset). |
 | `XDJ_FORCE_SETUP` | Shell: always show the drop screen (testing). |
 

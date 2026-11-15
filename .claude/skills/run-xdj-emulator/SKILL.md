@@ -96,6 +96,20 @@ with `XDJ_AUDIO_STATS=1` for a 5 s line: `underruns`/`gap` (host ran dry), `minf
 (rbp didn't re-arm a period in time = guest CPU too slow), `pace=689/s` (must equal 44100/64),
 `resync` (pacer woke >1 period late). More headroom: `XDJ_AUDIO_LATENCY_MS=40` (adds latency).
 
+### Track loads slow? (measure — 2026-11-15 findings)
+- The pad LEDs A→D are the load progress bar: time it from `/tmp/subucom_tx` byte `0x02` bits 7..4
+  (deck 2: byte `0x06`) after `B 5d 40`. 60 MB WAV: 10.6 s before patches 20/21, 7.4 s after.
+- Raw read speed: `sync; echo 3 > /proc/sys/vm/drop_caches; dd if=<wav> of=/dev/null bs=256k count=80`
+  on the guest (`ser.py`; long output → read `/tmp/xdj_console.log`). 1.3 → 5.6 MB/s with 20/21.
+- Link speed: `cat /sys/bus/usb/devices/2-1*/speed` must be **480**. The firmware itself sets
+  `max_sectors_kb=8` (`/etc/udev/rules.d/usb-iosched.sh`), so per-request latency rules throughput —
+  don't change that (firmware), fix latency QEMU-side.
+- Threads: rbp pins everything to **CPU 0** except the audio path (`JuceALSA`, `FGPR:1/2` on CPU 1)
+  — same as the real **dual-core** unit (firmware `thread_smp_affinity` folds mask 3 → 1). `top -H -p
+  $(pidof rbp)` in the guest; the loader threads are `PcmReader:N`, `Tot_LoadTASK`, `PageBufferedInput`.
+- Guest kernel busy-loop? `cat /proc/<pid>/stat` state R + high stime, then sample PCs with HMP
+  `info registers -a` and resolve kernel addresses against the guest's `/proc/kallsyms`.
+
 ### Deck loaded but SILENT? (debug recipe)
 1. **Stray `/tmp/subucom_ctrl`** is the #1 cause — any hold there (even an unrelated leftover
    like the web panel's browse `A 54 0`) overrides auto-level per-control; if it sets routing or a

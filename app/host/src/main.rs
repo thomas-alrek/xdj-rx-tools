@@ -283,17 +283,78 @@ fn log_stdio(cfg: &Config, name: &str) -> (Stdio, Stdio) {
     (Stdio::inherit(), Stdio::inherit())
 }
 
-fn spawn_qemu(cfg: &Config) -> std::io::Result<Child> {
+/// Start QEMU. `update` boots the firmware-update path (QEMU patch 19: the sub-ucom's
+/// update-request line GPIO3_IO30 held HIGH from reset).
+fn spawn_qemu(cfg: &Config, update: bool) -> std::io::Result<Child> {
     let args = qemu_args(cfg);
-    eprintln!("[host] qemu: {} {}", cfg.qemu.display(), args.join(" "));
+    eprintln!("[host] qemu{}: {} {}", if update { " (update mode)" } else { "" },
+              cfg.qemu.display(), args.join(" "));
+    // A fresh console.log per power-on (the sidecar's System log and the USB-insert
+    // wait both read it), and no stale sockets from the previous run.
+    for s in ["qmp.sock", "vnc.sock", "ctrl.sock", "key.sock", "console.log"] {
+        let _ = std::fs::remove_file(cfg.rt(s));
+    }
     let (out, err) = log_stdio(cfg, "qemu.log");
-    Command::new(&cfg.qemu)
-        .args(&args)
-        .current_dir(&cfg.repo)
-        .stdout(out)
-        .stderr(err)
-        .kill_on_drop(true)
-        .spawn()
+    let mut c = Command::new(&cfg.qemu);
+    c.args(&args).current_dir(&cfg.repo).stdout(out).stderr(err).kill_on_drop(true);
+    if update {
+        c.env("XDJ_BOOT_UPDATE", "1");
+    } else {
+        c.env_remove("XDJ_BOOT_UPDATE");
+    }
+    c.spawn()
+}
+
+/// Power control channel: a line protocol on `<runtime>/power.sock` used by the panel
+/// sidecar (POST /power). Commands: `on`, `on update`, `off`, `status`; each answers
+/// with one line `on` / `on update` / `off`.
+enum PowerCmd {
+    On(bool),
+    Off,
+    Status,
+}
+
+async fn power_listener(path: PathBuf, tx: tokio::sync::mpsc::Sender<(PowerCmd, tokio::sync::oneshot::Sender<String>)>) {
+    let _ = std::fs::remove_file(&path);
+    let listener = match tokio::net::UnixListener::bind(&path) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("[host] power socket {}: {e}", path.display());
+            return;
+        }
+    };
+    loop {
+        let Ok((stream, _)) = listener.accept().await else { continue };
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let (rd, mut wr) = stream.into_split();
+            let mut lines = BufReader::new(rd).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let w: Vec<&str> = line.split_whitespace().collect();
+                let cmd = match w.first().copied() {
+                    Some("on") => PowerCmd::On(w.get(1) == Some(&"update")),
+                    Some("off") => PowerCmd::Off,
+                    _ => PowerCmd::Status,
+                };
+                let (rtx, rrx) = tokio::sync::oneshot::channel();
+                if tx.send((cmd, rtx)).await.is_err() {
+                    return;
+                }
+                let reply = rrx.await.unwrap_or_else(|_| "off".into());
+                if wr.write_all(format!("{reply}\n").as_bytes()).await.is_err() {
+                    return;
+                }
+            }
+        });
+    }
+}
+
+/// Wait for a child that may not exist (powered off = pending forever).
+async fn wait_opt(c: &mut Option<Child>) -> std::io::Result<std::process::ExitStatus> {
+    match c {
+        Some(ch) => ch.wait().await,
+        None => std::future::pending().await,
+    }
 }
 
 fn spawn_sidecar(cfg: &Config) -> std::io::Result<Child> {
@@ -435,7 +496,7 @@ async fn parent_gone() {
 }
 
 fn clean_stale(cfg: &Config) {
-    for s in ["qmp.sock", "vnc.sock", "ctrl.sock", "key.sock", "usb_usb1.img", "usb_usb2.img"] {
+    for s in ["qmp.sock", "vnc.sock", "ctrl.sock", "key.sock", "power.sock", "usb_usb1.img", "usb_usb2.img"] {
         let _ = std::fs::remove_file(cfg.rt(s));
     }
     // The patch-06 USB fault-flag hooks are still global /tmp paths (not yet
@@ -836,62 +897,109 @@ async fn main() {
     }
     clean_stale(&cfg);
 
-    let mut qemu = match spawn_qemu(&cfg) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("[host] failed to start qemu: {e}");
-            std::process::exit(1);
+    // Power: the emulator starts powered off when XDJ_AUTOSTART=0 (the desktop app:
+    // the panel's power button / File > Power turns it on); otherwise on, as before.
+    let autostart = std::env::var("XDJ_AUTOSTART").map(|v| v != "0").unwrap_or(true);
+    let mut qemu: Option<Child> = None;
+    let mut update_mode = false;
+    let mut usb: Option<tokio::task::JoinHandle<()>> = None;
+    if autostart {
+        match spawn_qemu(&cfg, false) {
+            Ok(c) => qemu = Some(c),
+            Err(e) => {
+                eprintln!("[host] failed to start qemu: {e}");
+                std::process::exit(1);
+            }
         }
-    };
+        // Phase 3b: if XDJ_USB is set, mount it (disk image or host device) once rbp polls.
+        usb = Some(tokio::spawn(maybe_insert_usb(cfg.runtime_dir.clone())));
+    }
     let mut sidecar = match spawn_sidecar(&cfg) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[host] failed to start panel sidecar: {e}");
-            let _ = qemu.kill().await;
+            if let Some(q) = qemu.as_mut() {
+                let _ = q.kill().await;
+            }
             std::process::exit(1);
         }
     };
 
-    // VNC bridge in the background.
+    // VNC bridge in the background (connects to vnc.sock per client, so it survives
+    // power cycles; noVNC just reconnects).
     let vnc_sock = cfg.rt("vnc.sock");
     let ws_port = cfg.vnc_ws_port;
     let bridge = tokio::spawn(run_vnc_ws_bridge(vnc_sock, ws_port));
 
-    // Phase 3b: if XDJ_USB is set, mount it (disk image or host device) once rbp polls.
-    let usb = tokio::spawn(maybe_insert_usb(cfg.runtime_dir.clone()));
+    let (ptx, mut prx) = tokio::sync::mpsc::channel(8);
+    let power = tokio::spawn(power_listener(cfg.rt("power.sock"), ptx));
 
     println!(
-        "\n  XDJ-RX emulator up.\n  Open:  http://127.0.0.1:{}/?vnc=ws://127.0.0.1:{}/\n  (panel = sidecar :{}, screen = noVNC via the WS bridge :{})\n  Ctrl-C to stop.\n",
+        "\n  XDJ-RX emulator {}.\n  Open:  http://127.0.0.1:{}/?vnc=ws://127.0.0.1:{}/\n  (panel = sidecar :{}, screen = noVNC via the WS bridge :{})\n  Ctrl-C to stop.\n",
+        if autostart { "up" } else { "ready (powered off — use the panel's power button)" },
         cfg.panel_port, cfg.vnc_ws_port, cfg.panel_port, cfg.vnc_ws_port
     );
 
-    // Supervise: exit when QEMU or the sidecar dies, or on Ctrl-C; take the rest down.
-    tokio::select! {
-        status = qemu.wait() => {
-            eprintln!("[host] qemu exited: {status:?}");
-            let _ = sidecar.kill().await;
-        }
-        status = sidecar.wait() => {
-            eprintln!("[host] panel sidecar exited: {status:?}");
-            let _ = qemu.kill().await;
-        }
-        _ = tokio::signal::ctrl_c() => {
-            eprintln!("[host] shutting down (Ctrl-C)");
-            let _ = qemu.kill().await;
-            let _ = sidecar.kill().await;
-        }
-        _ = terminated() => {
-            eprintln!("[host] shutting down (SIGTERM)");
-            let _ = qemu.kill().await;
-            let _ = sidecar.kill().await;
-        }
-        _ = parent_gone() => {
-            eprintln!("[host] parent (shell) exited; shutting down");
-            let _ = qemu.kill().await;
-            let _ = sidecar.kill().await;
+    // Supervise: power commands; QEMU exiting = powered off (the guest shut down or
+    // crashed); the sidecar dying, Ctrl-C, SIGTERM or the shell vanishing end it all.
+    loop {
+        tokio::select! {
+            Some((cmd, reply)) = prx.recv() => {
+                match cmd {
+                    PowerCmd::On(upd) => {
+                        if qemu.is_none() {
+                            match spawn_qemu(&cfg, upd) {
+                                Ok(c) => { qemu = Some(c); update_mode = upd; }
+                                Err(e) => eprintln!("[host] power on failed: {e}"),
+                            }
+                        }
+                    }
+                    PowerCmd::Off => {
+                        if let Some(mut q) = qemu.take() {
+                            eprintln!("[host] power off");
+                            let _ = q.kill().await;   // instant power cut, like the switch
+                        }
+                        if let Some(u) = usb.take() { u.abort(); }
+                    }
+                    PowerCmd::Status => {}
+                }
+                let state = match (&qemu, update_mode) {
+                    (Some(_), true) => "on update",
+                    (Some(_), false) => "on",
+                    (None, _) => "off",
+                };
+                let _ = reply.send(state.into());
+            }
+            status = wait_opt(&mut qemu) => {
+                eprintln!("[host] qemu exited: {status:?} (powered off)");
+                qemu = None;
+            }
+            status = sidecar.wait() => {
+                eprintln!("[host] panel sidecar exited: {status:?}");
+                break;
+            }
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("[host] shutting down (Ctrl-C)");
+                let _ = sidecar.kill().await;
+                break;
+            }
+            _ = terminated() => {
+                eprintln!("[host] shutting down (SIGTERM)");
+                let _ = sidecar.kill().await;
+                break;
+            }
+            _ = parent_gone() => {
+                eprintln!("[host] parent (shell) exited; shutting down");
+                let _ = sidecar.kill().await;
+                break;
+            }
         }
     }
+    if let Some(mut q) = qemu.take() {
+        let _ = q.kill().await;
+    }
+    power.abort();
+    if let Some(u) = usb.take() { u.abort(); }
     bridge.abort();
-    usb.abort();
     clean_stale(&cfg);
 }

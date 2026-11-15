@@ -15,10 +15,14 @@
     font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
     -webkit-user-select:none;user-select:none;display:flex;flex-direction:column}
   /* ---- console: fixed device aspect, controls placed absolutely (photo-calibrated) ---- */
-  .stagewrap{flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;padding:10px;container-type:size}
-  #stage{position:relative;aspect-ratio:2142 / 1184;width:min(100cqw,calc(100cqh * 2142 / 1184));height:auto;flex:0 0 auto;
+  /* The deck IS the window: no outer padding/border/radius (the app locks the window to the
+     deck's aspect; in a browser any leftover space is filled with the same background). */
+  .stagewrap{flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;padding:0;container-type:size;
+    background:#0b0d10}
+  /* visible canvas = the design canvas minus CROP on every side (VW x VH, set from JS) */
+  #stage{position:relative;aspect-ratio:var(--vw) / var(--vh);width:min(100cqw,calc(100cqh * var(--vw) / var(--vh)));height:auto;flex:0 0 auto;
     background:radial-gradient(130% 100% at 50% 0%,#16191e,#0a0c0f 72%);
-    border:1px solid #23272e;border-radius:14px;overflow:hidden;container-type:size;box-shadow:0 10px 40px #000a}
+    overflow:hidden;container-type:size}
   /* decorative zone panels behind the controls */
   .pbg{position:absolute;background:linear-gradient(180deg,#14171c,#0f1216);border:1px solid #20242b;border-radius:1cqw;
     box-shadow:inset 0 1px 0 #ffffff08,0 2px 10px #0006}
@@ -158,6 +162,12 @@
      so force our normal pointer over the display area instead of an invisible one. */
   #screen,#screen *{cursor:default!important}
   .flip{display:inline-block;transform:scaleX(-1)}
+  /* POWER switch (desktop app): red LED = powered on */
+  .btn.pwr{display:flex;align-items:center;justify-content:center;gap:.5cqw;transition:none}   /* no transition: visibility must flip instantly */
+  .pwrled{width:.62cqw;height:.62cqw;border-radius:50%;background:#3a1416;box-shadow:inset 0 1px 1px #0008;flex:0 0 auto}
+  .btn.pwr.on .pwrled{background:#ff3b30;box-shadow:0 0 .5cqw #ff3b30,0 0 .15cqw #ff8a80}
+  .btn.pwr.busy{opacity:.6}
+  #screen.off::after,#screen.popped::after{content:'';position:absolute;inset:0;background:#000}
   /* channel INPUT SELECT switch: blue = DECK, amber = LINE/PHONO */
   .btn.srcsw.deck{border-color:#2a6b8f;color:#bfe3ff;background:linear-gradient(180deg,#173847,#10262f)}
   .btn.srcsw.line{border-color:#8a6a2e;color:#ffe0a8;background:linear-gradient(180deg,#3f321d,#2a2113)}
@@ -182,6 +192,7 @@
 // switches are persistent multi-bit fields (S off mask bits); A = 16-bit analog.
 const C = {
   // mic / master strips (MIC level knobs are not in the sub-ucom frame)
+  power:{l:'POWER',t:'power',tip:'Power the emulator on / off (instant, like the switch)'},
   mic1:{l:'MIC1'}, mic2:{l:'MIC2'},
   miceqhi:{l:'HI',t:'knob',spec:'A 46',v:512}, miceqlow:{l:'LOW',t:'knob',spec:'A 44',v:512},
   micsw:{l:'MIC',t:'switch',off:0x5b,mask:0xc0,pos:['OFF','ON','TALK'],bits:[0x40,0x00,0x80],v:1},
@@ -324,6 +335,8 @@ function deckLayout(n,x0){ const p='d'+n, X=v=>x0+v;
 }
 deckLayout(1,D1_X); deckLayout(2,D2_X);
 
+// ---- power switch (top-left corner, desktop app only)
+btn('power',D1_X+80,TOP_Y+44,124,46);
 // ---- mixer
 { const FL=MIX_X+72, S1=MIX_X+182, CC=W/2, S2=MIX_X+MIX_W-182, FR=MIX_X+MIX_W-72, R1=MAIN_Y+56, R2=R1+74;
   // top row: four keys spaced evenly across the mixer (outer ones aligned with the strips' edges)
@@ -350,12 +363,17 @@ deckLayout(1,D1_X); deckLayout(2,D2_X);
   LBL_U.push(['COLOR FX',FL,533],['BEAT FX',FR,523],['HEADPHONES',FL,764]); }
 
 // convert to % of the stage
-const pct=([cx,cy,w,h])=>[cx/W*100,cy/H*100,w/W*100,h/H*100];
-const pctBox=([x,y,w,h])=>[x/W*100,y/H*100,w/W*100,h/H*100];
+// The window shows the canvas cropped by CROP design units on every side, leaving a slim
+// margin around the zone boxes (which sit 24 in). VW x VH = 2110 x 1152 -- keep the app
+// shell's DECK_AR (app/shell/src/main.rs) in sync with it.
+const CROP=16, VW=W-2*CROP, VH=H-2*CROP;
+document.documentElement.style.setProperty('--vw',VW); document.documentElement.style.setProperty('--vh',VH);
+const pct=([cx,cy,w,h])=>[(cx-CROP)/VW*100,(cy-CROP)/VH*100,w/VW*100,h/VH*100];
+const pctBox=([x,y,w,h])=>[(x-CROP)/VW*100,(y-CROP)/VH*100,w/VW*100,h/VH*100];
 const COORDS={}; for(const id in L) COORDS[id]=pct(L[id]);
 const ZONES=ZONE_U.map(pctBox), DISP=pctBox(DISP_U);
 const SCREEN0=(([x,y,w,h])=>({x,y,w,h}))(pctBox(SCREEN_U));
-const LABELS=LBL_U.map(([t,x,y])=>[t,x/W*100,y/H*100]);
+const LABELS=LBL_U.map(([t,x,y])=>[t,(x-CROP)/VW*100,(y-CROP)/VH*100]);
 
 // ===== server I/O =========================================================
 // Panel notes go to the browser console and to View > Sub uCom Log (server ring, /log/note).
@@ -577,10 +595,16 @@ function meterBankCell(id){ const c=C[id]; const el=d('meterbank');
   c.ids.forEach(m=>el.appendChild(meterCell(m)));
   const lv=cap(c.l); lv.classList.add('lv'); el.appendChild(lv);
   el.title='LEVEL — CH1 / MASTER / CH2'; return el; }
+function powerCell(id){ const el=d('btn pwr'); const led=document.createElement('span'); led.className='pwrled';
+  const t=document.createElement('span'); t.textContent=C[id].l; el.append(led,t); el.title=C[id].tip;
+  el.style.visibility='hidden';                // shown once the host reports power control
+  el.addEventListener('pointerdown',e=>{ e.preventDefault(); powerToggle(); });
+  EL[id]=el; return el; }
 function cell(id){ const c=C[id]; if(!c) return d();
   switch(c.t){ case 'knob':return knobCell(id); case 'vfader':case 'vfader-c':return faderCell(id);
     case 'xfader':return xfaderCell(id); case 'selector':return selectorCell(id);
     case 'counter':return counterCell(id); case 'switch':return switchCell(id);
+    case 'power':return powerCell(id);
     case 'encoder':return encoderCell(id); case 'jog':return jogCell(id); case 'meter':return meterCell(id); case 'meterbank':return meterBankCell(id);
     default:return btnCell(id); } }
 
@@ -601,6 +625,17 @@ function build(){
 const VNC=new URLSearchParams(location.search).get('vnc');
 const conn=document.getElementById('conn')||{className:'',textContent:''};   // no status bar any more
 let rfb=null;
+// While the screen is popped out, the deck's own screen is black and its noVNC session
+// is closed (no double decode); it reconnects when the pop-out window closes.
+let screenPopped=false, screenConnect=null;
+function setPopped(on){ if(screenPopped===on) return; screenPopped=on;
+  const sc=document.getElementById('screen'); if(sc) sc.classList.toggle('popped',on);
+  if(on){ if(rfb){ try{ rfb.disconnect(); }catch(_){} } }
+  else if(screenConnect && !(rfb && rfb._rfbConnectionState==='connected')) screenConnect(); }
+// Track a pop-out window: black the deck screen while it exists (Tauri window events).
+function watchPop(w){ setPopped(true); w.once('tauri://destroyed',()=>setPopped(false)); }
+async function adoptPopout(){ const T=window.__TAURI__; if(!(T&&T.webviewWindow)) return;
+  try{ const ex=await T.webviewWindow.WebviewWindow.getByLabel('screen'); if(ex) watchPop(ex); }catch(_){} }
 async function startScreen(){
   const host=document.getElementById('screen'); if(!host) return;
   if(VNC){ let RFB; try{ ({default:RFB}=await import('/novnc/core/rfb.js')); }
@@ -608,11 +643,13 @@ async function startScreen(){
     const connect=()=>{ conn.className='conn'; conn.textContent='screen: connecting…';
       rfb=new RFB(host,VNC); rfb.viewOnly=true; rfb.scaleViewport=true; rfb.clipViewport=false; rfb.background='#000';
       rfb.addEventListener('connect',()=>{ conn.className='conn up'; conn.textContent='screen: live'; });
-      rfb.addEventListener('disconnect',()=>{ conn.className='conn'; conn.textContent='screen: no QEMU'; setTimeout(connect,1000); }); };
+      rfb.addEventListener('disconnect',()=>{ conn.className='conn'; conn.textContent='screen: no QEMU';
+        if(!screenPopped) setTimeout(connect,1000); }); };
+    screenConnect=connect;
     connect();
   } else {
     const cv=document.createElement('canvas'); cv.width=800; cv.height=480; host.appendChild(cv); const cx=cv.getContext('2d'); let img=null;
-    const pump=async()=>{ try{ const r=await fetch('/raw?t='+Date.now(),{cache:'no-store'}); if(!r.ok) throw 0;
+    const pump=async()=>{ if(screenPopped){ setTimeout(pump,500); return; } try{ const r=await fetch('/raw?t='+Date.now(),{cache:'no-store'}); if(!r.ok) throw 0;
       const w=+r.headers.get('X-Width')||800,h=+r.headers.get('X-Height')||480; const buf=new Uint8Array(await r.arrayBuffer());
       if(cv.width!==w||cv.height!==h){ cv.width=w; cv.height=h; img=null; }
       if(!img) img=cx.createImageData(w,h); const o=img.data,n=w*h;
@@ -629,7 +666,10 @@ async function startScreen(){
 // just mirror the bits.
 const LEDS=[], METERS=[], JOGLEDS=[];
 const STEADY_HOLD_MS=550;
-function applyLeds(hex){ if(!hex||hex.length<40) return;
+function ledsOff(){ for(const L of LEDS){ clearTimeout(L.t); L.t=null; L.el.classList.remove('lit'); }
+  for(const M of METERS) M.segs.forEach(s=>s.classList.remove('on'));
+  for(const J of JOGLEDS) J.el.classList.remove('on'); }
+function applyLeds(hex){ if(hex==='off') return ledsOff(); if(!hex||hex.length<40) return;
   const nb=Math.min(21,hex.length>>1), B=new Uint8Array(21);   // [0x14] = source-key LEDs (GPIO 162-165)
   for(let i=0;i<nb;i++) B[i]=parseInt(hex.substr(i*2,2),16);
   for(const L of LEDS){ const on=!!(B[L.b]&L.m)!==L.low;
@@ -669,12 +709,17 @@ async function popScreen(){
   const T=window.__TAURI__;
   if(T&&T.webviewWindow){   // desktop app: a native Tauri window (window.open is a no-op in WKWebView)
     try{ const W=T.webviewWindow.WebviewWindow; const ex=await W.getByLabel('screen');
-      if(ex){ await ex.setFocus(); return; }
+      if(ex){ watchPop(ex); await ex.setFocus(); return; }
       const w=new W('screen',{url,title:'XDJ-RX Screen',width:SCREEN_FB[0],height:SCREEN_FB[1],minWidth:320,minHeight:192,resizable:true});
-      w.once('tauri://error',e=>log('screen window failed: '+JSON.stringify(e.payload)));
-    }catch(e){ log('screen window failed: '+e); }
+      w.once('tauri://created',()=>setPopped(true));
+      w.once('tauri://destroyed',()=>setPopped(false));
+      w.once('tauri://error',e=>{ setPopped(false); log('screen window failed: '+JSON.stringify(e.payload)); });
+    }catch(e){ setPopped(false); log('screen window failed: '+e); }
     return; }
-  const w=window.open(url,'xdj-screen','popup,width=800,height=480'); if(w) w.focus(); else log('pop-up blocked');
+  const w=window.open(url,'xdj-screen','popup,width=800,height=480');
+  if(!w){ log('pop-up blocked'); return; }
+  w.focus(); setPopped(true);
+  const t=setInterval(()=>{ if(w.closed){ clearInterval(t); setPopped(false); } },500);
 }
 const SCREEN_FB=[800,480];   // the LCD framebuffer; the app locks the window to this natively
 function initScreenOnly(){ document.title='XDJ-RX Screen'; document.body.classList.add('screenonly');
@@ -728,6 +773,9 @@ const LVL=id=>[['Off',()=>setW(id,0)],['Half',()=>setW(id,512)],['Full',()=>setW
 const stripReset=n=>()=>['trim','eq_hi','eq_mid','eq_low','color'].forEach(k=>setW(k+n,512));
 const MENU=[
   ['File',[
+    ['Power On / Off',()=>powerToggle()],
+    {check:'updateMode',text:'Enter Firmware Update Mode (at next power on)'},
+    {check:'powerOnLaunch',text:'Power On at Launch'}, '-',
     ['Load USB1 Image…',()=>mountUsb('usb1')], ['Load USB2 Image…',()=>mountUsb('usb2')], '-',
     ['USB1 Stop',()=>tap('usb1stop')], ['USB2 Stop',()=>tap('usb2stop')], '-',
     ['Release All Controls',releaseAll], ['Reload Panel',()=>location.reload()] ]],
@@ -765,10 +813,36 @@ const MENU=[
     ['Pop Out Screen',popScreen], '-',
     ['View Sub uCom Log',()=>openLog('subucom')], ['View System Log',()=>openLog('console')] ]],
 ];
+// ---- power (xdj-host owns QEMU; GET/POST /power on the sidecar) ----------------------
+const PREF={ get:(k,d)=>{ try{ const v=localStorage.getItem('xdj.'+k); return v==null?d:v==='1'; }catch(_){ return d; } },
+  set:(k,v)=>{ try{ localStorage.setItem('xdj.'+k,v?'1':'0'); }catch(_){} } };
+let POWER={available:false,state:'off',update:false};
+function powerUI(){ const b=EL.power; if(!b) return;
+  b.style.visibility=POWER.available?'visible':'hidden';
+  b.classList.toggle('on',POWER.state==='on');
+  b.title=POWER.state==='on'?('Powered on'+(POWER.update?' (firmware update mode)':'')+' — click to power off')
+    :'Powered off — click to power on'+(PREF.get('updateMode',false)?' in FIRMWARE UPDATE mode':'');
+  const sc=document.getElementById('screen'); if(sc) sc.classList.toggle('off',POWER.available&&POWER.state!=='on'); }
+async function powerPoll(){ try{ const r=await fetch('/power',{cache:'no-store'}); const j=await r.json();
+    const was=POWER.state; POWER=j; if(was==='on'&&j.state!=='on') ledsOff(); powerUI(); }catch(_){} }
+async function powerSet(on){ if(!POWER.available) return; const b=EL.power; if(b) b.classList.add('busy');
+  const upd=PREF.get('updateMode',false);
+  try{ await fetch('/power',{method:'POST',body:on?('on'+(upd?' update':'')):'off'}); }catch(_){}
+  if(on) setTimeout(pushInitialState,400);       // a fresh QEMU starts from the panel's state
+  else ledsOff();
+  await powerPoll(); if(b) b.classList.remove('busy'); }
+const powerToggle=()=>powerSet(POWER.state!=='on');
+async function startPower(){ await powerPoll(); setInterval(powerPoll,1500);
+  if(POWER.available && POWER.state!=='on' && PREF.get('powerOnLaunch',false)) powerSet(true); }
+
 async function buildAppMenu(){
   const M=window.__TAURI__ && window.__TAURI__.menu; if(!M) return;   // plain browser: no menu
-  const {Menu,Submenu,MenuItem,PredefinedMenuItem}=M;
+  const {Menu,Submenu,MenuItem,CheckMenuItem,PredefinedMenuItem}=M;
   const mk=async it=>{ if(it==='-') return PredefinedMenuItem.new({item:'Separator'});
+    if(it && it.check){ const key=it.check; let item=null;   // persisted preference checkbox
+      item=await CheckMenuItem.new({text:it.text,checked:PREF.get(key,false),
+        action:async()=>{ const v=await item.isChecked(); PREF.set(key,v); powerUI(); log(it.text+': '+(v?'on':'off')); }});
+      return item; }
     const [text,v]=it; if(Array.isArray(v)) return Submenu.new({text,items:await Promise.all(v.map(mk))});
     return MenuItem.new({text,action:()=>{ try{ v(); }catch(e){ console.warn(e); } }}); };
   try{
@@ -791,9 +865,17 @@ function init(){
   if(SCREEN_ONLY) return initScreenOnly();   // no controls: never pushes state or holds
   if(!Kn) log('Knobs library failed to load (/knobs/knobs.js)');
   build(); startScreen(); calOverlay(); startLeds();
-  document.getElementById('screen').addEventListener('dblclick',e=>{ e.preventDefault(); popScreen(); });
+  // Double-click the screen to pop it out. Detected from pointerdown in the CAPTURE phase:
+  // noVNC (the app's screen) setCapture()s on mousedown, which in WebKit puts a full-window
+  // proxy div over the page, so a 'dblclick' never reaches #screen.
+  { const scr=document.getElementById('screen'); let last=0, lx=0, ly=0;
+    document.addEventListener('pointerdown',e=>{
+      if(e.button!==0 || !scr.contains(e.target)) return;
+      const now=performance.now();
+      if(now-last<450 && Math.abs(e.clientX-lx)<10 && Math.abs(e.clientY-ly)<10){ last=0; popScreen(); }
+      else { last=now; lx=e.clientX; ly=e.clientY; } },true); }
   document.getElementById('screen').title='Double-click to pop the screen out into its own window';
-  buildAppMenu();
+  buildAppMenu(); startPower(); adoptPopout();
   setSrc(0,'DECK'); setSrc(1,'DECK');
   pushInitialState();
 }

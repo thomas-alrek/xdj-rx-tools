@@ -1,0 +1,36 @@
+XDJ-RX patch 21: sub-millisecond main-loop timers on macOS (no ppoll).
+
+QEMU's qemu_poll_ns() falls back to g_poll() with the timeout rounded UP to whole
+milliseconds when ppoll is unavailable (macOS), so every sub-ms timer fired ~1 ms
+late. That is what kept EHCI microframe polling (patch 20) from helping: each USB
+transfer stage still cost ~1.5 ms. Now a timeout with a sub-ms part polls for the
+whole milliseconds, then nanosleeps the remainder and polls once more without
+blocking; an fd event during the remainder is noticed < 1 ms late (no worse than
+before). Linux hosts (ppoll) are unaffected. Guest audio and host CPU unchanged.
+
+--- a/util/qemu-timer.c
++++ b/util/qemu-timer.c
+@@ -343,6 +343,23 @@
+         return ppoll((struct pollfd *)fds, nfds, &ts, NULL);
+     }
+ #else
++    /*
++     * No ppoll (macOS): poll() only takes whole milliseconds, and rounding the
++     * timeout up to the next ms made every sub-ms timer fire ~1 ms late (e.g. the
++     * EHCI controller's microframe polling: each USB transfer stage cost ~1.5 ms,
++     * so mass-storage reads crawled at ~1.7 MB/s). Poll for the whole ms, then
++     * sleep the sub-ms remainder and poll once more without blocking. An fd event
++     * during that remainder is noticed < 1 ms late -- no worse than the rounding.
++     */
++    if (timeout > 0 && (timeout % SCALE_MS) != 0) {
++        int ret = g_poll(fds, nfds, (gint)MIN(timeout / SCALE_MS, INT32_MAX));
++        if (ret != 0) {
++            return ret;
++        }
++        struct timespec ts = { 0, timeout % SCALE_MS };
++        nanosleep(&ts, NULL);
++        return g_poll(fds, nfds, 0);
++    }
+     return g_poll(fds, nfds, qemu_timeout_ns_to_ms(timeout));
+ #endif
+ }

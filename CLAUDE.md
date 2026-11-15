@@ -20,7 +20,7 @@ interoperability/preservation on owned hardware.
 
 ## Layout
 - `xdjrx_upd.py`, `fetch_key.py` — `.UPD` firmware decrypt/extract/pack + AES key fetch → skill `upd-firmware-format`.
-- `qemu/` — `build-qemu.sh`, `patches/01..19`, `watch.sh`, `build-nand.sh`, `cramfs_extract.py`.
+- `qemu/` — `build-qemu.sh`, `patches/01..21`, `watch.sh`, `build-nand.sh`, `cramfs_extract.py`.
 - `qemu_prepare.py` — kernel boot blobs (trampoline/atags/vmlinux). `run.sh` — from-scratch build+boot.
 - `build/` (git-ignored) — `qemu-src/` (patched QEMU), `extract/rbp` (the analyzed binary), `qemu/` (boot blobs, nand.img).
 - `tools/xdj-panel/` — the virtual web panel (`server.py`, `panel.html`, `logs.html`) + `debug/` (RE launcher & helpers: `relaunch.sh`, `rsp.py`, `tables.py`, `mon.py`, `ser.py`, `inj.py`, `sweep_*.py`).
@@ -57,6 +57,9 @@ interoperability/preservation on owned hardware.
   `B 13 04`+`B 12 08` (MEMORY+TEMPO RANGE) in `/tmp/subucom_ctrl` *before* boot (rbp checks only
   the first frame; Mode 5/6/7 = LED/switch/pot oracles); **update mode** = `XDJ_BOOT_UPDATE=1`
   (GPIO3_IO30, patch 19). Frame bytes 2–3 = sub-ucom version (0.35).
+- **USB speed / track loads**: front slots must enumerate at **480 Mbit/s** (patch 20: ChipIdea PSPD +
+  SRI + hub HS status; was 12 Mbit/s) and macOS QEMU timers need patch 21 (sub-ms poll). The firmware
+  caps USB requests at 8 KB itself — per-request latency is what matters. Loads 10.6 → 7.4 s.
 - **E-7206 AUTH CHIP ERROR** = MFi auth coprocessor missing: it's on **I2C4** (`0x021F8000`,
   `/dev/i2c-3`, slave 0x10), which stock QEMU lacks. Patch 18 adds it (identity regs only).
 - **Audio** works (patch 11, SDMA/SSI/AUDMUX; sonifier → SDMA ch1 = MasterOut). Audible needs
