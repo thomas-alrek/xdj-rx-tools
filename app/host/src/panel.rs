@@ -16,6 +16,7 @@
 //!   POST /power    on|off|toggle [update|test]    GET  /power -> {available,state,update,pending}
 //!   GET  /leds (SSE; ?once=1 = JSON)              GET  /log/<subucom|console> (SSE)
 //!   POST /log/note                                GET/POST /cal, /savecal, /cal-ref (dev)
+//!   POST /install-update "<path to .UPD/.zip>"  stick from it + cold boot into update mode
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -992,6 +993,51 @@ async fn post(p: Arc<Panel>, path: &str, body: String) -> Response<Body> {
                 Ok(m) => text(200, m),
                 Err(e) => text(500, e),
             }
+        }
+        "/install-update" => {
+            // File > Install Firmware Update: like the real procedure -- the .UPD on a USB
+            // stick in USB1, power on in update mode. We build the stick (FAT16, XDJRX.UPD)
+            // in the runtime dir, power-cycle into update mode and insert it when the
+            // initramfs asks (insert_pending). The user finishes on screen and power-cycles,
+            // as on the unit.
+            let path = body.trim().to_string();
+            if !Path::new(&path).is_file() {
+                return text(404, format!("no such file: {path}"));
+            }
+            let stick = p.cfg.ctrl_sock.with_file_name("install-update.img");
+            let st2 = stick.clone();
+            let built = tokio::task::spawn_blocking(move || -> Result<String, String> {
+                let upd = xdj_fw::firmware::read_upd_bytes(Path::new(&path))?;
+                let (_, model, _) = xdj_fw::firmware::split_container(&upd)?;
+                if !model.starts_with("XDJAERO") {
+                    return Err(format!("{model:?} is not an XDJ-RX firmware (model must start with XDJAERO)"));
+                }
+                let img = xdj_fw::firmware::update_stick(&upd, SystemTime::now())?;
+                std::fs::write(&st2, img).map_err(|e| format!("{}: {e}", st2.display()))?;
+                Ok(model)
+            })
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
+            let model = match built {
+                Ok(m) => m,
+                Err(e) => {
+                    p.logline("subucom", &format!("·  install update: {e}"));
+                    return text(400, e);
+                }
+            };
+            if p.power_cmd(PowerCmd::Status).await.starts_with("on") {
+                p.power_cmd(PowerCmd::Off).await;
+                p.leds_off();
+                let _ = p.ctrl_tx.send(ConnMsg::Reset);
+                let _ = p.key_tx.send(ConnMsg::Reset);
+            }
+            p.pending_usb.lock().unwrap().insert("usb1".into(), stick.to_string_lossy().into_owned());
+            let st = p.power_cmd(PowerCmd::On(true)).await;
+            let ver = model.trim_start_matches("XDJAERO");
+            p.logline("subucom", &format!("·  INSTALL FIRMWARE UPDATE {ver}: power on (firmware update mode), stick on USB1"));
+            p.logline("console", &format!("──────── install firmware update {ver} (update mode) ────────"));
+            tokio::spawn(insert_pending(p.clone(), true));
+            text(200, format!("installing firmware {ver} ({st}): follow the update screen, then power off/on"))
         }
         "/savecal" => {
             let assets = p.cfg.panel_dir.join("assets");

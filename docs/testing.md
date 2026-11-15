@@ -1,0 +1,32 @@
+# Testing: what checks exist and when to run them
+
+| check | covers | run | time |
+|---|---|---|---|
+| `cd crates/xdj-fw && cargo test --release` | the firmware codecs against the real 2.21 image: ISO / cramfs / tar round trips, a no-change build reproducing every file, overlay build, unpack → edit → repack | after touching `crates/xdj-fw` | ~5 s |
+| `qemu/test_rust_parity.sh <fw.zip> [installed nand-flash.img]` | the Rust firmware/NAND code vs the Python dev tools, byte for byte (decrypt, boot blobs, stick, NAND init/boot, installed check) | after touching either side | ~5 s |
+| `tools/xdj-panel/test_panel_parity.py` | the in-process Rust panel (`app/host/src/panel.rs`) vs `server.py`: every control snapshot, HTTP reply, LED and log line for one scripted session | after touching either panel server | ~30 s |
+| **`tools/test/regress.py`** | the whole thing, live, on a throwaway unit (private `$HOME`, runtime dir, ports) | before merging anything that touches QEMU, the host, the panel or firmware handling | ~8 min |
+
+## `tools/test/regress.py`
+Stages (`--only` picks a subset; `--unit DIR` clones an installed firmware dir instead of
+provisioning; `--keep` keeps the work dir; on failure it is kept anyway, with `host.log`,
+`run/console.log`, `run/qemu.log` and every screendump):
+- **prep** — `xdj-host prep` of the firmware zip.
+- **provision** — a blank unit installs itself (ALL update): env `release=2.21`, the "update
+  complete" screen.
+- **boot** — normal NAND boot reaches the home screen.
+- **panel** — MENU *held* 2 s opens UTILITY, a short MENU tap leaves it (a short tap on the home
+  screen does nothing — not a bug); rbp's LED stream is live.
+- **usb** — BROWSE, then a panel USB LOAD of `test/usb/*.img` on **USB1** (the browser shows USB1)
+  → the stick's rekordbox library replaces "NO USB".
+- **testmode** — File > Power On in Test Mode → VERSION INFORMATION.
+- **custom** — `tools/fw/make-test-upd.sh` builds TEST.UPD one release above what's installed,
+  installs it with File > Install Firmware Update (`POST /install-update`) → env release, USER
+  UPDATE + signature lines, the complete screen, both console markers, test mode right after.
+
+Screens are classified from pixel statistics (`stats()`: black/white/colour/blue/red fractions,
+printed with every result) — no reference screenshots, since the UI is Pioneer's. Run it with
+nothing else heavy on the machine (single-core TCG boots are load-sensitive).
+
+Last full run (2026-11-15): 12/14 on the first pass — the two failures were test bugs (MENU needs a
+hold; the browser shows USB1), fixed and re-run green; custom stage green on a 2.30 unit (2.31).

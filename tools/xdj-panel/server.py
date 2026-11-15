@@ -16,6 +16,7 @@ protocol, and streams the QEMU framebuffer to the browser as raw RGB (drawn on a
   POST /power  on|off|toggle [update|test] -> power the emulator (xdj-host); GET /power = state
                  (test = boot into the service manual's test mode, see _test_mode_boot)
   POST /log/note                 -> append a panel note to the sub-ucom log
+  POST /install-update  body=<path to .UPD/.zip> -> stick from it + cold boot into update mode
   GET  /leds                     -> Server-Sent Events: one "data: <40|42 hex>" per change of
                                     rbp's 20-byte LED/meter payload (SubTxData, xdj-panel.c (was patch 15);
                                     layout docs/subucom-led-map.md). /leds?once=1 = current JSON.
@@ -963,6 +964,50 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 _logline("subucom", "·  POWER OFF")
                 _logline("console", "──────── power off ────────")
             self._send(200, "text/plain", (st or "?").encode()); return
+        if path == "/install-update":
+            # File > Install Firmware Update (same as panel.rs): build a FAT16 stick with the
+            # .UPD in the runtime dir, power-cycle into update mode, insert it on USB1 when the
+            # initramfs asks. Needs xdj-host (power) like the other power routes.
+            upd_path = body.strip()
+            cur = _power_cmd("status")
+            if cur is None:
+                self._send(503, "text/plain", b"power control unavailable (not run by xdj-host)"); return
+            if not os.path.isfile(upd_path):
+                self._send(404, "text/plain", ("no such file: " + upd_path).encode()); return
+            try:
+                import sys as _sys
+                _sys.path.insert(0, os.path.join(HERE, "..", "..", "qemu"))
+                _sys.path.insert(0, os.path.join(HERE, "..", ".."))
+                import xdj_update_stick, xdjrx_upd
+                data, _ = xdjrx_upd.read_upd_bytes(upd_path)
+                _, model, _ = xdjrx_upd.split_container(data)
+                if not model.startswith("XDJAERO"):
+                    raise ValueError("%r is not an XDJ-RX firmware (model must start with XDJAERO)" % model)
+                stick = os.path.join(os.path.dirname(CTRL_SOCK or CTRL), "install-update.img")
+                xdj_update_stick.build(data, stick)
+            except BaseException as e:      # xdjrx_upd uses sys.exit for bad input
+                _logline("subucom", "·  install update: %s" % e)
+                self._send(400, "text/plain", str(e).encode()); return
+            if cur.startswith("on"):
+                _power_cmd("off")
+                _leds_off()
+                with _sock_lock:
+                    for k in ("ctrl", "key"):
+                        try:
+                            if _conn[k]:
+                                _conn[k].close()
+                        except Exception:
+                            pass
+                        _conn[k] = None
+            with _power_lock:
+                _pending_usb["usb1"] = stick
+            st = _power_cmd("on update")
+            ver = model[len("XDJAERO"):]
+            _logline("subucom", "·  INSTALL FIRMWARE UPDATE %s: power on (firmware update mode), stick on USB1" % ver)
+            _logline("console", "──────── install firmware update %s (update mode) ────────" % ver)
+            threading.Thread(target=_insert_pending, args=(True,), daemon=True).start()
+            self._send(200, "text/plain", ("installing firmware %s (%s): follow the update screen, then power off/on"
+                                           % (ver, st)).encode()); return
         if path == "/usb":
             parts = body.strip().split(" ", 1)
             if (len(parts) == 2 and parts[0] in ("usb1", "usb2") and os.path.exists(parts[1].strip())

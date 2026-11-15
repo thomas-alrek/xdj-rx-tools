@@ -792,6 +792,7 @@ const MENU=[
   ['File',[
     ['Power On / Off',()=>powerToggle()],
     ['Power On in Test Mode',()=>powerTest()],
+    ['Install Firmware Update…',()=>installUpdate()],
     {check:'updateMode',text:'Enter Firmware Update Mode (at next power on)'},
     {check:'powerOnLaunch',text:'Power On at Launch'}, '-',
     ['Load USB1 Image…',()=>mountUsb('usb1')], ['Load USB2 Image…',()=>mountUsb('usb2')], '-',
@@ -855,6 +856,20 @@ async function powerSet(on){ if(!POWER.available) return; const b=EL.power; if(b
 const powerToggle=()=>powerSet(POWER.state!=='on');
 // Service-manual test mode: the sidecar cold-boots with DECK 1 MEMORY + TEMPO RANGE held
 // (power-cycling first if on) and lets go once rbp has read them.
+// File > Install Firmware Update…: pick a .UPD (or Pioneer .zip); the server puts it on a
+// virtual USB stick and cold-boots the unit into update mode with it on USB1.
+async function installUpdate(){ if(!POWER.available){ log('install update: needs the desktop app (power control)'); return; }
+  let path=null; const D=window.__TAURI__ && window.__TAURI__.dialog;
+  if(D && D.open){
+    try{ const p=await D.open({multiple:false,directory:false,title:'Select an XDJ-RX firmware update (.UPD)',
+        filters:[{name:'XDJ-RX firmware',extensions:['UPD','upd','zip']},{name:'All files',extensions:['*']}]});
+      if(!p){ log('install update cancelled'); return; } path=Array.isArray(p)?p[0]:p;
+    }catch(e){ log('✖ file dialog failed: '+e); return; }
+  } else { const p=prompt('Install firmware update\nPath to an XDJ-RX .UPD (or a Pioneer .zip):',''); if(p==null) return; path=p.trim(); }
+  if(!path) return;
+  const b=EL.power; if(b) b.classList.add('busy'); log('install firmware update: '+path);
+  try{ const r=await fetch('/install-update',{method:'POST',body:path}); log((r.ok?'⏻ ':'✖ ')+await r.text()); }catch(e){ log('✖ '+e); }
+  setTimeout(pushInitialState,400); await powerPoll(); if(b) b.classList.remove('busy'); }
 async function powerTest(){ if(!POWER.available) return; const b=EL.power; if(b) b.classList.add('busy');
   try{ await fetch('/power',{method:'POST',body:'on test'}); }catch(_){}
   setTimeout(pushInitialState,400);

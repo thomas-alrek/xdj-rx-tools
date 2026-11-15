@@ -22,6 +22,8 @@ Legend: ✅ done · 🔶 partial/diagnosed · ⬜ investigated, not started · �
   `docs/version-display-and-override.md`).
 - **Test mode** from the app (File > Power On in Test Mode): reliable after binding the `xdjctrl`
   chardev at realize (`docs/service-modes.md`).
+- **Custom firmware**: `xdj fw build` (base image + overlay + release) produces a `.UPD` that Pioneer's
+  updater installs; TEST.UPD 2.30 installed and booted (`docs/custom-firmware.md`).
 - **No Python in the app**: prep, NAND and the panel server are Rust in `xdj-host`, each checked
   byte-for-byte against the Python dev tools (`qemu/test_rust_parity.sh`,
   `tools/xdj-panel/test_panel_parity.py`).

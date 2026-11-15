@@ -71,7 +71,8 @@ device **photo** as its background; that photo was deleted and must never ship a
   app's runtime dir, else `/tmp/xdj_console.log`, which `relaunch.sh` writes via chardev `logfile=`).
 - **POWER switch** (top-left, `t:'power'`, red LED = on; hidden unless `GET /power` says
   `available`, i.e. run by `xdj-host`). Click = `POST /power on[ update|test]|off` (panel → host
-  `power.sock`, see [build-xdj-app]). File menu: *Power On / Off*, check items *Enter Firmware Update
+  `power.sock`, see [build-xdj-app]). File menu: *Power On / Off*, *Power On in Test Mode* (`POST /power on test`), *Install Firmware
+  Update…* (`POST /install-update <path>`: stick from the .UPD + update-mode boot, both servers), check items *Enter Firmware Update
   Mode (at next power on)* and *Power On at Launch* (both `localStorage` prefs `xdj.updateMode` /
   `xdj.powerOnLaunch`). Powered off: LED stream sends `off` (panel darkens everything) and `#screen`
   gets a black `.off` overlay. **USB LOAD while off is queued** (`/usb` → `_pending_usb`) and inserted

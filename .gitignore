@@ -26,3 +26,6 @@ test/usb/*.dmg
 tools/xdj-panel/assets/calibration.json
 dist/
 node_modules/
+
+# Rust build output
+target/

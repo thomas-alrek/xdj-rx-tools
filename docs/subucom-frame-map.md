@@ -80,7 +80,7 @@ inj = `b <rbp_off> <mask>` for buttons, `A <rbp_off> <val16>` for analog.
 | 0x5e.2 | 0x401 | (nav, name TBD) | ○ |
 | 0x5e.4 | 0x8002 | (USB-class key, distinct from eject) | ○ |
 | 0x5e.5 | 0x4488 | BEAT FX (sticky) | ○ |
-| 0x5f.0 | 0x20a | MENU (opens SORT) | ✅ |
+| 0x5f.0 | 0x20a | MENU (in the browser: SORT; **held ~1 s+**: UTILITY menu, a short tap leaves it again — a short tap on the home screen does nothing) | ✅ |
 | 0x5f.1 | 0x204 | (center key, name TBD) | ○ |
 | 0x5f.2 | 0x209 | (center key, name TBD) | ○ |
 | 0x5f.3 | 0x208 | (switches browse view) | ○ |
