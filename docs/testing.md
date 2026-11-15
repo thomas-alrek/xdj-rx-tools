@@ -12,11 +12,12 @@ the build tree. Stages (`--only` picks a subset; `--unit DIR` clones an installe
 provisioning; `--keep` keeps the work dir; on failure it is kept anyway, with `host.log`,
 `run/console.log`, `run/qemu.log` and every screendump):
 - **prep** — `xdj-host prep` of the firmware zip.
-- **provision** — a blank unit installs itself (ALL update): env `release=2.21`, the "update
-  complete" screen.
+- **provision** — a blank unit installs itself (ALL update): env `release=2.21`, then the host
+  boots it from NAND by itself.
 - **boot** — normal NAND boot reaches the home screen.
 - **panel** — MENU *held* 2 s opens UTILITY, a short MENU tap leaves it (a short tap on the home
-  screen does nothing — not a bug); rbp's LED stream is live.
+  screen does nothing — not a bug); rbp's LED stream is live; MCP (`POST /mcp`): handshake, tool
+  list, a held `press menu`, a PNG `screenshot`.
 - **usb** — BROWSE, then a panel USB LOAD of `test/usb/*.img` on **USB1** (the browser shows USB1)
   → the stick's rekordbox library replaces "NO USB".
 - **standby** — POWER off while rbp runs → the standby handshake (rbp answers 'S', power cut < 10 s).

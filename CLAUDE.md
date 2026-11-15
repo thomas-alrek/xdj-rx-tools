@@ -25,7 +25,8 @@ preservation on owned hardware.
 
 ## Layout
 - `app/` — the desktop app: `shell/` (Tauri) and `host/` (`xdj-host`: runs QEMU, the in-process
-  virtual-panel server `src/panel.rs`, firmware prep, provisioning/NAND boot, power). No Python.
+  virtual-panel server `src/panel.rs`, the MCP server `src/mcp.rs` (`POST :8765/mcp`), firmware
+  prep, provisioning/NAND boot, power). No Python.
 - `crates/xdj-fw/` — Rust library + **`xdj` CLI**: `fw info|decrypt|unpack|diff|repack|build|pack|stick`,
   `prepare` (kernel boot blobs), `nand init|env|info|boot`. Codecs: `.UPD` crypto, ISO9660+Rock Ridge,
   cramfs, payload tarballs. Tests: `cargo test --release`.
@@ -71,7 +72,7 @@ preservation on owned hardware.
   (*File → Power On in Test Mode*). Known open flake: ~1 boot in 8 comes up normal with correct frames.
 - **The app is a NAND unit**: a blank unit is provisioned by the firmware's own **ALL** update (stick
   built by prep, inserted at `### USB update mount.`), then boots from NAND (`XDJ_BOOT_MEDIA=nand`).
-  Installed = `release=` in the NAND env (the updater ends on "turn the power off/on").
+  Installed = `release=` in the NAND env (the host sees it, then boots the unit from NAND).
   UTILITY → VERSION No. = that env `release`.
 - **No firmware signature**: `check_sig` = footer CRC32 + `XDJAERO` model prefix; the updater md5-checks
   each written partition against its own source. Rebuilt `.UPD`s install like official ones.
@@ -84,6 +85,8 @@ preservation on owned hardware.
 - **Root shell**: boot the SD test bed (it blanks root's password); a NAND unit keeps the stock hash.
 
 ## Workflows (→ skill)
+- Drive a running app from an agent: the MCP server (`claude mcp add --transport http xdj-rx
+  http://127.0.0.1:8765/mcp`; tools in `docs/standalone-app.md` §7a).
 - Run / boot / USB / inject / screenshot / audio / service modes → **`run-xdj-emulator`**.
 - Map a control: GPIO → **`map-gpio-control`**; sub-ucom → **`map-subucom-{button,fader,knob,rotary}`**.
 - Reverse-engineer `rbp` → **`rbp-binary-internals`**.

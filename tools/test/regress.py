@@ -8,9 +8,10 @@ End-to-end regression test for the emulator + desktop-app host, on a throwaway u
 Runs the real xdj-host (release build) with a private $HOME / runtime dir / ports, so it
 never touches the app's cache or a running app. Stages:
   prep       xdj-host prep <fw>: decrypt, boot blobs, update stick
-  provision  blank unit installs itself (ALL update) -> "update complete" screen, installed
+  provision  blank unit installs itself (ALL update) -> installed, then boots from NAND by itself
   boot       normal NAND boot -> home screen
-  panel      MENU held opens UTILITY, a short MENU tap leaves it; rbp's LED stream is live
+  panel      MENU held opens UTILITY, a short MENU tap leaves it; rbp's LED stream is live;
+             MCP: handshake, tool list, a named press, a PNG screenshot
   usb        BROWSE, panel USB LOAD of test/usb/*.img on USB1 -> its library appears
   standby    POWER off while rbp runs: POWER key -> rbp prepares -> TX 'S' -> power cut (< 10 s)
   testmode   File > Power On in Test Mode -> VERSION INFORMATION screen
@@ -81,6 +82,10 @@ class Unit:
                                      data=body.encode() if method == "POST" else None)
         with urllib.request.urlopen(req, timeout=90) as r:
             return r.read().decode("utf-8", "replace")
+
+    def mcp(self, method, params=None):
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}})
+        return json.loads(self.http("POST", "/mcp", body))["result"]
 
     def console(self):
         try:
@@ -223,9 +228,12 @@ def main():
                 time.sleep(10)
             ok = u.env_nand().get("release") == "2.21"
             check("provision: installed", ok, "release=%s after %ds" % (u.env_nand().get("release"), time.time() - t0))
-            time.sleep(15)
-            s = stats(u.shot("provision"))
-            check("provision: complete screen", is_update_done(s), str(s))
+            # the host sees release= in the NAND env, cuts power and boots the unit from NAND
+            t1 = time.time()
+            while time.time() - t1 < 60 and json.loads(u.http("GET", "/power")).get("state") != "on":
+                time.sleep(2)
+            check("provision: boots from NAND", json.loads(u.http("GET", "/power")).get("state") == "on",
+                  "after %ds" % (time.time() - t1))
             u.http("POST", "/power", "off"); time.sleep(3)
         if only & {"boot", "panel", "usb"}:
             log("== normal boot")
@@ -244,6 +252,22 @@ def main():
                 check("panel: MENU tap leaves UTILITY", d < 0.05, "%.1f%% differs from home" % (100 * d))
                 leds = json.loads(u.http("GET", "/leds?once=1"))
                 check("panel: LED stream", leds.get("seq", 0) > 0 and len(leds.get("hex", "")) >= 40, "seq=%s" % leds.get("seq"))
+                # MCP (POST /mcp): handshake, tool list, a named control, a PNG screenshot
+                init = u.mcp("initialize", {"protocolVersion": "2025-06-18"})
+                tools = [t["name"] for t in u.mcp("tools/list")["tools"]]
+                check("mcp: initialize + tools", init.get("serverInfo", {}).get("name") == "xdj-rx"
+                      and {"load_firmware", "press", "set", "insert_usb", "screenshot"} <= set(tools), "%d tools" % len(tools))
+                before = u.shot("mcp0")
+                r = u.mcp("tools/call", {"name": "press", "arguments": {"control": "menu", "hold_ms": 2000}})
+                time.sleep(2)
+                d = diff(before, u.shot("mcp1"))
+                check("mcp: press menu (held)", not r.get("isError") and d > 0.05, "%.1f%% changed" % (100 * d))
+                u.mcp("tools/call", {"name": "press", "arguments": {"control": "menu"}}); time.sleep(2)
+                img = u.mcp("tools/call", {"name": "screenshot", "arguments": {}})["content"][0]
+                import base64
+                png = base64.b64decode(img.get("data", "")) if img.get("type") == "image" else b""
+                check("mcp: screenshot PNG", png[:8] == b"\x89PNG\r\n\x1a\n" and png[16:24] == bytes.fromhex("00000320000001e0"),
+                      "%d bytes" % len(png))
             if "usb" in only and r:
                 img = sorted(glob.glob(os.path.join(ROOT, "test/usb/*.img")))
                 if img:

@@ -137,6 +137,9 @@ from its emulated NAND — [firmware-update-and-nand.md](firmware-update-and-nan
   when rbp is up). USB images loaded while off are inserted after boot. File menu: *Power On in Test
   Mode*, *Install Firmware Update…*, *Enter Firmware Update Mode*. The window shows the deck only,
   aspect-locked. Prep, NAND handling and the panel server are Rust in `xdj-host` (no Python).
+- **MCP server** (`POST :8765/mcp`, [standalone-app.md §7a](standalone-app.md#7a-mcp-server-automation)):
+  agents and scripts drive the running app — power, `load_firmware`, every control by name, USB,
+  PNG screenshots, LEDs, console.
 - **UTILITY → VERSION No.** shows the installed release, e.g. `Ver 2.21` —
   [version-display-and-override.md](version-display-and-override.md).
 

@@ -26,6 +26,8 @@ modifying and repacking the firmware's `.UPD` update files.
   audio reaches your speakers.
 - **Virtual front panel**: every deck, mixer and browse control (except the microphone), with the
   LEDs, level meters and jog rings driven by the firmware.
+- **Scriptable over MCP**: an AI agent or test harness can load firmware, press any control, insert
+  USB images and take screenshots.
 - **A real unit, not a test rig**: the app emulates the NAND flash and installs the firmware with
   Pioneer's own updater, exactly as a factory-fresh unit. UTILITY → VERSION No. reads the real
   version.
@@ -91,7 +93,7 @@ open dist/XDJ-RX.app
    (a few seconds), then powers the unit on and **installs the firmware** with Pioneer's own
    updater, like a new unit from the factory (about a minute).
 3. When the update screen says *"Firmware update is complete"*, the app boots the unit from its
-   flash. You'll see the rekordbox home screen; from then on the app just boots it (*File → Power
+   flash by itself. You'll see the rekordbox home screen; from then on the app just boots it (*File → Power
    On at Launch* is on by default).
 
 ### 5. Use it
@@ -105,6 +107,10 @@ open dist/XDJ-RX.app
   *File → Power On in Test Mode* opens the service test mode.
 - **Updates**: *File → Install Firmware Update…* takes any `.UPD` (official or your own).
 - **Logs**: *View → Sub uCom Log* (panel traffic and LEDs) / *View → System Log* (the Linux console).
+- **Automation (MCP)**: while the app runs, an MCP server at `http://127.0.0.1:8765/mcp` exposes the
+  unit to AI agents and scripts — power, `load_firmware`, every control by name, USB, screenshots,
+  LEDs, console. Claude Code: `claude mcp add --transport http xdj-rx http://127.0.0.1:8765/mcp`.
+  Tools: [docs/standalone-app.md §7a](docs/standalone-app.md#7a-mcp-server-automation).
 
 ## Custom firmware
 

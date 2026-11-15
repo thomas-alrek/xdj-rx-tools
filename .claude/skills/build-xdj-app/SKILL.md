@@ -18,6 +18,12 @@ window. Architecture: **`docs/standalone-app.md`**. **Never patches `rbp`/kernel
   `xdj-host prep <upd>` (prepare+cache, prints the dir) and `xdj-host` (run: preflight → panel server +
   VNC↔WS bridge + QEMU, supervise, tear everything down together).
 - **`app/host/src/panel.rs`** — the virtual-panel server, in-process (port of `tools/xdj-panel/server.py`, which stays for dev; keep them identical with `tools/xdj-panel/test_panel_parity.py`). See [xdj-virtual-panel].
+- **`app/host/src/mcp.rs`** — the MCP server (Streamable HTTP JSON-RPC, stateless) on the panel port,
+  `POST /mcp`: power, `load_firmware` (→ `PowerCmd::LoadFirmware`: prep, switch `Config.fw` to that
+  dir, power on Provision/Normal), named controls (`press`/`set`, the table in `controls()`), USB,
+  PNG `screenshot` (QMP screendump), LEDs, console. Tools call the panel's own `get`/`post`, so they
+  behave exactly like panel clicks. Tool list: `docs/standalone-app.md` §7a. Add a control there
+  when mapping a new one.
 - **`app/ui/`** — `index.html` (setup page), vendored `novnc/`, `node_modules/audio-knobs`.
 - **`packaging/build-macos-app.sh`** — assembles `dist/XDJ-RX.app`.
 
@@ -35,9 +41,9 @@ window. Architecture: **`docs/standalone-app.md`**. **Never patches `rbp`/kernel
    `docs/standalone-app.md` §4a. No `provisioned.stamp` → **Provision** at once (regardless of
    `XDJ_AUTOSTART`): `nand::init` (`crates/xdj-fw/src/nand.rs`, = `xdj nand init`) + update mode
    with `XDJ_UPDATE_TYPE=20` (ALL), stick on USB1 after `### USB update mount.` → the firmware's own
-   updater installs everything. **"Installed" = `release=` in the NAND env** (`xdj nand info`), since
-   the updater stops on "turn off the power" and its success line usually never prints; the result
-   is cached as `provisioned.stamp` → **Normal**. Normal/Update power-ons run `nand::boot` first
+   updater installs everything. **"Installed" = `release=` in the NAND env** (`xdj nand info`; the
+   console success line never prints — the updater's last `umount /mnt/usb` stays busy).
+   `provision_watch` sees it, waits 10 s, cuts power, writes `provisioned.stamp` → boots **Normal**. Normal/Update power-ons run `nand::boot` first
    (kernel_bank → `nand-boot/` blobs). Always `XDJ_BOOT_MEDIA=nand
    XDJ_NAND_IMG=<dir>/nand-flash.img XDJ_PANELCOM_IMG=<dir>/panelcom-flash.bin`.
    The SD image (`qemu/build-nand.py`) is dev-only (watch.sh / relaunch.sh / root shell).

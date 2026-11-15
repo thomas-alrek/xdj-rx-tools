@@ -111,6 +111,9 @@ shipped.
 - **Dev / debug launcher: `tools/xdj-panel/server.py`**: the same routes plus `/tmp`-file mode, the HMP
   screendump (`/raw`) and calibration. Run: `python3 tools/xdj-panel/server.py --port 8765 --mon
   /tmp/d_mon4.sock`.
+- **MCP** (`app/host/src/mcp.rs`, `POST /mcp`, app only — not in `server.py`): agent tools layered on
+  the routes below (`press`, `set`, `browse`, `insert_usb`, `screenshot`…). A newly mapped control
+  also goes into its `controls()` name table.
 - **Change both, then run `tools/xdj-panel/test_panel_parity.py`**: it plays one scripted session
   against each (fake chardev sockets record every snapshot) and diffs snapshots, HTTP replies, LEDs and
   the control log. Byte-for-byte quirks matter (e.g. `%02x` of negatives, unknown `/jog` verbs = ok).
@@ -194,7 +197,8 @@ Map + open items: `docs/subucom-led-map.md`. Map a new LED with `debug/ledprobe.
    (design units, see Layout above). `t` ∈ `knob|vfader|vfader-c|xfader|rotary|
    encoder|jog|` (default = button). Buttons: `spec` (sub-ucom), `gpio` (mainkey), `pad`/`big`/
    `round` styling, `longpress`, `usb`, `led:[byte,bit,low]`/`ledc` (LED from `/leds`).
-3. JS helpers in `panel.html`: `sctrl(spec)`, `release()`, `mainkey(n)`, `post(path,body)`,
+3. Give it a name in `app/host/src/mcp.rs` `controls()` (MCP `press`/`set`).
+4. JS helpers in `panel.html`: `sctrl(spec)`, `release()`, `mainkey(n)`, `post(path,body)`,
    `doMount(slot,path)`. `cell(id)` dispatches by `t`.
 
 ## Gotchas

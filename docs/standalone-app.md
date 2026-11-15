@@ -135,15 +135,16 @@ The app emulates the real unit: **no SD card**, everything lives in the emulated
 - **Provision** (no installed system; every power-on until one succeeds): `nand::init`
   (erased NAND + the firmware's `fw_env.txt` = u-boot's default env), erased MCU flash, boot the
   prep blobs with `XDJ_BOOT_UPDATE=1 XDJ_UPDATE_TYPE=20` (ALL). `provision_watch` inserts the stick
-  on USB1 2 s after the console's `### USB update mount. ###`, then waits for
-  `### USB update success.` → kill QEMU, write `provisioned.stamp`, boot **Normal**. On
-  `### USB update error.` QEMU is left running (the screen shows the updater's error). The ALL
-  update also writes `release`/`rev_*` into the env, which UTILITY → VERSION No. shows.
+  on USB1 2 s after the console's `### USB update mount. ###`, then waits for the install to
+  finish: the NAND env gains `release=` (the ALL update's last write, `finEnv`; the console's
+  `### USB update success.` also counts but never prints in practice — the updater's final
+  `umount /mnt/usb` stays busy). 10 s later → kill QEMU, write `provisioned.stamp`, boot
+  **Normal**. On `### USB update error.` QEMU is left running (the screen shows the updater's
+  error). The env's `release`/`rev_*` are what UTILITY → VERSION No. shows.
   Details of the updater, the MCU bootloader and the NAND model:
   [firmware-update-and-nand.md](firmware-update-and-nand.md).
 - **Installed?** `provisioned.stamp`, else the NAND env has `release=` (written by the ALL update's
-  last step; the factory env lacks it) — the updater ends on "turn off the power", so the console
-  success line usually never prints and this is what catches a finished install.
+  last step; the factory env lacks it).
 - **Normal / Update**: each power-on runs `nand::boot` → `<dir>/nand-boot` (u-boot's
   `bootcmd_nand` host-side: `kernel_bank` → that bank's uImage → blobs + bootargs), so a firmware
   update done inside the emulator boots the new kernel. Update = `XDJ_BOOT_UPDATE=1`.
@@ -219,6 +220,42 @@ copyright-free design (no device photography). Full detail is in the
 - **Power**: top-left POWER switch with a red LED; `POST /power` → host `power.sock`. USB images
   loaded while off are queued and inserted once the guest is ready; *Enter Firmware Update Mode*
   powers on with `XDJ_BOOT_UPDATE=1`.
+
+---
+
+## 7a. MCP server (automation)
+
+The panel server also speaks **MCP** (Model Context Protocol, Streamable HTTP, stateless JSON
+responses) at `POST http://127.0.0.1:8765/mcp` — `app/host/src/mcp.rs`. It is up whenever the app
+(or `xdj-host`) runs, so an AI agent or a test script can drive the unit:
+
+```sh
+claude mcp add --transport http xdj-rx http://127.0.0.1:8765/mcp
+```
+
+Every tool goes through the panel's own routes, so an automated press is exactly a click on the
+virtual panel (same state model, snapshots, logs).
+
+| tool | does |
+|---|---|
+| `status` | power state, active firmware dir, installed release (NAND env), rbp running, LED payload |
+| `power` | `on` / `off` (the standby handshake) / `on_update` / `on_test` |
+| `load_firmware` | prepare a `.UPD`/`.zip` and boot it: it becomes the active firmware (its own NAND unit, provisioned first if blank) and the app's firmware on next launch |
+| `install_firmware_update` | File > Install Firmware Update: the updater installs a `.UPD` on the current unit |
+| `list_controls` | every control name with its frame field |
+| `press` | a named button (`deck1.play`, `menu`, `master_rec`, `rekordbox`…) or `B <off> <mask>`, held `hold_ms` (MENU: ~2000 for UTILITY) |
+| `set` | a fader/knob (`ch1.fader`, `crossfader`, `deck1.tempo`…) to 0..1023 |
+| `send_raw` / `release` | raw frame lines (`docs/subucom-frame-map.md`) / release holds |
+| `browse`, `jog`, `input_select` | the browse encoder, a jog wheel (turn/touch), channel DECK/LINE |
+| `insert_usb` | a disk image or `/dev/diskN` into USB1/USB2 (queued while off) |
+| `screenshot` | the 800×480 screen as a PNG image |
+| `leds` | rbp's LED/meter payload (`docs/subucom-led-map.md`) |
+| `console`, `wait_for_console` | the guest console (tail / grep), wait for a marker (`Resolve xrun` = firmware up) |
+
+Names: deck 1/2 buttons `deck<N>.<name>`, mixer `ch<N>.<eq_hi|eq_mid|eq_low|trim|fader|color>`,
+master section and centre buttons by name, top-panel keys `rekordbox midi usb1 usb2 deck_select
+time_mode`. Localhost only, no authentication (the panel routes have none either). The port follows
+`XDJ_PANEL_PORT`.
 
 ---
 

@@ -53,6 +53,7 @@ pub struct PanelConfig {
     pub key_sock: PathBuf,
     pub qmp_sock: PathBuf,
     pub console: PathBuf,
+    pub fw: std::sync::Arc<std::sync::RwLock<crate::FwPaths>>,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -94,7 +95,7 @@ struct Logs {
 }
 
 pub struct Panel {
-    cfg: PanelConfig,
+    pub(crate) cfg: PanelConfig,
     st: Mutex<State>,
     ctrl_tx: mpsc::UnboundedSender<ConnMsg>,
     key_tx: mpsc::UnboundedSender<ConnMsg>,
@@ -349,7 +350,11 @@ impl Panel {
         self.leds_w.send_replace(seq);
     }
 
-    async fn power_cmd(&self, c: PowerCmd) -> String {
+    pub(crate) fn fw_dir(&self) -> PathBuf {
+        self.cfg.fw.read().unwrap().fw_dir.clone()
+    }
+
+    pub(crate) async fn power_cmd(&self, c: PowerCmd) -> String {
         let (tx, rx) = oneshot::channel();
         if self.power.send((c, tx)).await.is_err() {
             return "off".into();
@@ -612,7 +617,7 @@ async fn mount_usb(p: &Panel, slot: &str, img: &str) -> Result<String, String> {
     }
     eject_usb(p, slot).await;
     // HMP drive_add doesn't quote paths: symlink to a space-free path.
-    let link = PathBuf::from(format!("/tmp/xdjpanel_{slot}.img"));
+    let link = PathBuf::from(format!("/tmp/xdjpanel{}_{slot}.img", std::process::id())); // per instance
     let _ = std::fs::remove_file(&link);
     #[cfg(unix)]
     std::os::unix::fs::symlink(&real, &link).map_err(|e| format!("cannot stage {}: {e}", link.display()))?;
@@ -723,6 +728,9 @@ pub async fn serve(p: Arc<Panel>) -> std::io::Result<()> {
 async fn handle(p: Arc<Panel>, method: Method, uri: Uri, body: Bytes) -> Response<Body> {
     let path = uri.path().to_string();
     let query = uri.query().unwrap_or("").to_string();
+    if path == "/mcp" {
+        return crate::mcp::handle(p, method, body).await;
+    }
     if method == Method::GET || method == Method::HEAD {
         get(p, &path, &query).await
     } else if method == Method::POST {
@@ -732,7 +740,7 @@ async fn handle(p: Arc<Panel>, method: Method, uri: Uri, body: Bytes) -> Respons
     }
 }
 
-async fn get(p: Arc<Panel>, path: &str, query: &str) -> Response<Body> {
+pub(crate) async fn get(p: Arc<Panel>, path: &str, query: &str) -> Response<Body> {
     let pd = p.cfg.panel_dir.clone();
     let assets = pd.join("assets");
     match path {
@@ -819,7 +827,7 @@ async fn get(p: Arc<Panel>, path: &str, query: &str) -> Response<Body> {
     }
 }
 
-async fn post(p: Arc<Panel>, path: &str, body: String) -> Response<Body> {
+pub(crate) async fn post(p: Arc<Panel>, path: &str, body: String) -> Response<Body> {
     let lines = |b: &str| -> Vec<String> {
         b.trim().split('\n').map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
     };

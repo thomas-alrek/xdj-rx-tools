@@ -16,6 +16,9 @@ tokio-tungstenite = "0.24.0"
 futures-util = "0.3.31"
 sha2 = "0.10.8"
 axum = { version = "0.7", default-features = false, features = ["http1", "tokio"] }
+serde_json = "1"
+flate2 = "1"
+crc32fast = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
