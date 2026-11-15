@@ -3,6 +3,13 @@
 > **Architecture & developer handover:** [standalone-app.md](standalone-app.md). This file is the
 > plan/status; that one is how the app actually works and how to build/run/debug/package it.
 
+> **2026-11-15 update:** the packaged app is now **Python-free and NAND-based**. Firmware prep
+> (`app/host/src/firmware.rs`), the emulated NAND (`nand.rs`) and the panel server (`panel.rs`) run
+> inside `xdj-host`; no SD image and no e2fsprogs in the app (a blank unit is provisioned with the
+> firmware's own ALL update, so §5.2's ext4 problem no longer applies to the app). The SD image builder
+> and the Python scripts remain dev tools. Current architecture: [standalone-app.md](standalone-app.md)
+> §4/§4a/§7. Still open: Windows/Linux, notarization, a shared Rust CLI to retire the dev scripts.
+
 **Status: IN PROGRESS — Phases 1 (control socket) + 2 (Tauri shell + orchestrator) done 2026-11-12, Phase 3 (firmware drag-drop + app-data) done 2026-11-13; Phase 3b (USB media) plumbing done with a deferred enumeration issue, Phase 4 (audio backend pick) done, Phase 5 macOS .app done (ad-hoc signed; notarization pending). The key prompt, a rebuilt copyright-free panel, native file dialogs, and panel-driven USB LOAD all landed 2026-11-13. Phase 5 Windows/Linux + the Python→Rust port remain.**
 
 ### Landed since the Phase 1–5 core (2026-11-13)
@@ -17,7 +24,7 @@
   `pick_file` on the local setup window; the dialog plugin JS API + a `remote` capability +
   `dialog:allow-open` on the external panel (app commands are ACL-blocked for remote origins).
 - **Panel-driven USB LOAD** — `/usb` endpoint mounts a disk image/device on a slot over QMP
-  (`drive_add`/`device_add` + detect file), **eject-first** so re-loading works. See skill [build-xdj-app].
+  (`drive_add`/`device_add` only — no patch-06 file, see usb-mount-howto), **eject-first** so re-loading works. See skill [build-xdj-app].
 - **Bug fixes:** first-run firmware load failed with "panel didn't come up" — prep's build scripts
   polluted the stdout the shell reads as `XDJ_FW_DIR` (clean now; scripts → stderr + last-line read);
   file dialog froze the app (`blocking_pick_file` on the main thread → non-blocking callback); orphaned
@@ -231,7 +238,8 @@ way, after boot. **Orchestrator plumbing done** in [app/host](../app/host) (`may
 - Boot **hub-only** (USB-2.0 hub on `usb-bus.1` port 1), then after rbp is up (console
   marker `Resolve xrun` + `XDJ_USB_DELAY`s settle) run the proven insert choreography over
   QMP: `drive_add` + `device_add usb-storage,bus=usb-bus.1,port=1.1` (USB2) / `1.2` (USB1),
-  then assert the slot's detect GPIO (`/tmp/usb2_insert` / `/tmp/usb_insert`, patch 06).
+  and nothing else. (Originally it also asserted `/tmp/usb2_insert` / `/tmp/usb_insert` — that
+  was the "USB Error" bug: those pins are rbp's active-low USB *fault* flags. Fixed 2026-11-15.)
 - Driven by env: `XDJ_USB=<image.img|/dev/diskN>`, `XDJ_USB_SLOT=usb1|usb2` (default usb2),
   `XDJ_USB_WRITE=1` (default: `snapshot=on`, writes discarded — protects a real stick).
   A physical device is `diskutil unmountDisk`'d (mac) / `umount`'d (linux) first.

@@ -23,7 +23,22 @@ can be tested.
 - Indirect-only (vtable) call targets aren't in the call graph — `procedure_callers` returns
   empty for a virtual method; note "vtable-dispatched" and switch to live tracing.
 
+**Without REA** (fast, scriptable): `pip install capstone pyelftools` in a venv; ARM mode, non-PIE;
+resolve `ldr rX,[pc,#imm]` literals to find string/vtable users; scan all of `.text` for `bl #addr`
+to get callers (finds vtable-less direct callers REA misses). Name scripts anything but `dis.py`
+(shadows the stdlib module). C++ class names come from typeinfo strings `N2ui8TestModeE`: typeinfo
+= ref-4, vtable = (ref to typeinfo)+4, ctor = the function storing the vtable literal.
+
 ## Subsystem map (anchor addresses — stable for this binary)
+- **Service modes** (`docs/service-modes.md`): frame parser `Base::setBinaryData` `0x284d48`;
+  first frame (no previous, `0xffff`) → boot-key handler `0x282630` (TEMPO RANGE+MEMORY →
+  `ui::TestMode` ctor `FUN_0023b5e8` mode 0; +DELETE → factory reset; +RELOOP → mode 2; stores the
+  sub-ucom version word = frame bytes 2–3). Test views: `VersionTestMode` (SUB `"%x.%02x"`
+  @`0x242a14`), `SwitchTestMode` page `FUN_002404ac`.
+- **Auth chip (E-7206)**: MFi coprocessor on `/dev/i2c-3` (I2C4 `0x021F8000`) slave `0x10`; open +
+  `I2C_SLAVE` `0x34ae5c`, reset via `/dev/gpiodrv` `0x34b02c`, write-ptr `0x34aeb4` / read
+  `0x34af70` (5 retries, 1 ms), self-check `FUN_00349294` (reg0==0x05, reg1==0x01), register
+  accessors `0x349294…0x34a640`. `xdj-mfi.c` (was patch 18).
 
 **Sub-ucom panel protocol** (100-byte SPI frame; see the map-subucom-* skills)
 - `PanelComController` ctor `FUN_0021a4ac` (vtable `DAT_00420700`); frame decoders `~0x282000-0x28b000`.

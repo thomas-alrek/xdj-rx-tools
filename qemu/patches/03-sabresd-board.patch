@@ -1,5 +1,11 @@
---- a/hw/arm/sabrelite.c	2026-08-11 18:40:25
-+++ b/hw/arm/sabrelite.c	2026-11-04 17:58:50
+XDJ-RX: SABRE-SD board wiring on the sabrelite machine.
+
+The XDJ-RX is a SABRE-SD board (MACH_TYPE 3980): rootfs SD card ("xdjsd") on
+uSDHC3, console on ttymxc0, and the front-panel MCU ("xdj-subucom" SSI slave) on
+ECSPI2. (Was patch 03.)
+
+--- a/hw/arm/sabrelite.c
++++ b/hw/arm/sabrelite.c
 @@ -17,6 +17,8 @@
  #include "hw/arm/machines-qom.h"
  #include "hw/core/boards.h"

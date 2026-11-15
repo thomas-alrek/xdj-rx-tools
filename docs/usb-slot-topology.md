@@ -1,5 +1,13 @@
 # XDJ-RX USB slot topology — why a mounted rekordbox USB still says "USB Error"
 
+> **2026-11-15 update — the remaining "USB Error" on a correct post-boot insert is SOLVED.**
+> It was caused by our own insert recipe: `/tmp/usb2_insert` / `/tmp/usb_insert` (patch 06)
+> drive GPIO7_IO12 / GPIO4_IO30, which are rbp's **active-low USB fault flags**, not
+> insert-detect lines (gpiodrv `0xcc`/`0x7e`; `UsbStorageManager` GPIO listener `0x250020`,
+> dispatch `0x2500cc`, hide-timer `CautionTimer` @ `mgr+0x3e4`, fire `0x251e4c`). Insert with
+> `device_add` alone. Details: `docs/usb-mount-howto.md` banner. Below is historical.
+
+
 ## The trap
 A rekordbox USB drive attached to the emulator mounts cleanly (vfat, read+write,
 export.pdb readable) yet rbp shows the modal **"USB Error. Remove the device."**
@@ -37,7 +45,7 @@ Place the drive behind it at `2-1.1`:
 -device usb-storage,bus=usb-bus.1,port=1.1,drive=usbstick,id=xdjusb,removable=on
 ```
 
-The detect GPIOs still gate the firmware's controller resume: `touch /tmp/usb_insert`
+*(Superseded — see banner: these are fault flags, not detect lines.)* ~~The detect GPIOs still gate the firmware's controller resume:~~ `touch /tmp/usb_insert`
 drives USB1 (GPIO4_IO30), `/tmp/usb2_insert` drives USB2 (GPIO7_IO12) (patch 06).
 The device's hub port must match the GPIO's slot. Observed: hub port 1 (`2-1.1`)
 mounts at `/media/usb2` (→ drive `/tmp/usb2_insert`).

@@ -1,6 +1,6 @@
 ---
 name: run-xdj-emulator
-description: Launch and drive the XDJ-RX firmware emulator - boot the patched QEMU to the live rekordbox UI, capture the screen, mount a rekordbox USB, inject sub-ucom panel controls, read audio routing over the gdbstub, and hear deck audio on the host. Use when you need to run/boot the emulator, reproduce a UI/audio/control behavior, or set up a live test bed.
+description: Launch and drive the XDJ-RX firmware emulator - boot the patched QEMU to the live rekordbox UI, capture the screen, mount a rekordbox USB, inject sub-ucom panel controls, read audio routing over the gdbstub, hear deck audio on the host, measure audio stutter, and boot the service modes (test mode, firmware-update mode). Use when you need to run/boot the emulator, reproduce a UI/audio/control behavior, or set up a live test bed.
 ---
 
 # Running the XDJ-RX emulator
@@ -23,10 +23,22 @@ XDJ_AUDIO_DEBUG=1 nohup ./tools/xdj-panel/debug/relaunch.sh > /tmp/xdj_qemu.log 
 ```
 **Always launch as the user, never sudo.** (A failed `sudo`/ptrace attach once *killed* qemu.)
 
+Launcher options (debug launcher): `XDJ_BOOT_DIR` (boot blobs dir), `XDJ_SD=none`, `XDJ_SMP`,
+`XDJ_BOOT_MEDIA=nand`, `XDJ_NAND_IMG`, `XDJ_PANELCOM_IMG`, `XDJ_UPDATE_TYPE`. **Install + boot
+from NAND** (the real unit's layout): `docs/update-path-plan.md` "Provisioning + NAND boot".
+When waiting on firmware progress, never block on one guessed log line: bound the wait and
+check the screen (the installer's end is `umount /mnt/usb` after the D007 screen).
+
 ## Control sockets (debug launcher)
 - Monitor (HMP): `tools/xdj-panel/debug/mon.py "<cmd>"` → `/tmp/d_mon4.sock`
   (`screendump`, `device_add`, `xp/1wx <addr>`, `info usb`, `cont`).
 - Serial console: `tools/xdj-panel/debug/ser.py "<shell cmd>"` → `/tmp/d_con4.sock` (login root).
+  **Root shell works only on SD boot** (the SD build clears root's password; [build-xdj-sd-image]).
+  A NAND boot keeps the stock rootfs whose root password is unknown, so `ser.py` can't get a shell
+  there — boot SD (the launcher default) when you need to poke the running system; it runs the same
+  `rbp`/kernel as NAND.
+  Everything the console prints is also logged to **`/tmp/xdj_console.log`** (chardev `logfile=`;
+  the panel's View > System Log tails it) — read it instead of competing for the socket.
 - gdbstub: `tools/xdj-panel/debug/rsp.py` (raw RSP); `tables.py` dumps the audio routing tables.
 
 ## See the screen
@@ -41,17 +53,18 @@ Boot **hub-only** (no `-device usb-storage` at boot — the debug launcher alrea
 wait for the home screen, then:
 ```
 monitor:  device_add usb-storage,bus=usb-bus.1,port=1.1,drive=usbstick,id=xdjusb,removable=on
-host:     touch /tmp/usb2_insert
 ```
-Mounts `/media/usb2/sda1`. Cold-plugging at boot → "USB Error" modal; always insert post-boot.
+Mounts `/media/usb2/sda1`; USB2 browser shows the library, no modal. Cold-plugging at boot →
+"USB Error"; always insert post-boot. **That `device_add` is the whole insert** (`xdj-usbnc.c` (was patch 10) wakes
+HOST1 from the attach).
 
-**Caveat — the "USB Error" modal also appears on a *correct* post-boot insert** (a
-`USB Error. Remove the device.` popup, even though the drive enumerated and
-mounted fine). It is **mostly misleading**: clear it by **"pressing" USB2**
-(`python3 tools/xdj-panel/debug/inj.py mainkey 158`) and the USB2 browser then
-shows the library (ARTIST/ALBUM/TRACK/… categories). Verified live 2026-11-12.
-**→ TODO bugfix:** track down why a valid mount still raises the modal (spurious
-USB-error path in rbp's mount/accept handling). **Do NOT retry by `device_del`** —
+**Never `touch /tmp/usb2_insert` (or `/tmp/usb_insert`) to insert.** `xdj-panel.c` (was patch 06)'s files drive
+GPIO7_IO12 / GPIO4_IO30, which rbp reads as **active-low USB fault flags** (gpiodrv ids
+`0xcc`/`0x7e`, `UsbStorageManager` listener `0x250020`): LOW on a mounted slot →
+`USB Error. Remove the device.` ~20 s (guest) later; `rm` the file → cleared in ~0.5 s.
+That was the long-standing "USB Error on a correct insert" (fixed 2026-11-15; the panel
+server and xdj-host no longer create the file). Use the files only to inject a USB fault.
+**Do NOT retry by `device_del`** —
 that tears down the `-drive if=none,id=usbstick` backend (later `device_add`s then
 fail `can't find value 'usbstick'`); if a mount won't take, **reboot and insert
 once** instead.
@@ -65,20 +78,53 @@ source/DECK keys are GPIO → `/tmp/mainkey` (number=press, remove=release).
 Examples: source switch DECK = `B 33 80` + `B 43 80`; gains = `A 2c 3ff`(fader) `A 4a 3ff`(master)
 `A 4e 200`(xfader) `A 24/2a/28 200`(EQ) `A 26 3ff`(trim).
 
+**One-shot gotcha:** a `b`/`a` line left in the file *together with holds* re-fires every ~30
+frames (only a holds-free file is removed after firing) — rewrite the holds alone ~0.5 s later
+(`inj.py pulse` does), else a toggle button flips on/off repeatedly.
+
+## Read panel LEDs / meters
+`xdj-panel.c` (was patch 15) mirrors rbp's LED frame (`SubTxData`): file mode → `cat /tmp/subucom_tx`
+(`T <40 hex>`, updated on change); socket mode → the panel server's `GET /leds?once=1`.
+`XDJ_TX_LOG=1` logs every changed burst (`SUBUCOM-TX …`) to the qemu stderr. Bit map:
+`docs/subucom-led-map.md`; probe new ones with `tools/xdj-panel/debug/ledprobe.py`.
+
 ## Hear deck audio
-Audio is modelled (SDMA+SSI+AUDMUX, patch 11); the sonifier is pinned to **SDMA ch1 =
+Audio is modelled (SDMA+SSI+AUDMUX, `xdj-audio.c` (was patch 11)); the sonifier is pinned to **SDMA ch1 =
 MasterOut** (`XDJ_AUDIO_OUT_CH` overrides, `XDJ_AUDIO_DEBUG=1` prints per-channel peaks). For a
 loaded deck to be audible you need **routing = DECK** (source switch `B 33 80`/`B 43 80`) **and**
 gains up (on-air gate `FUN_00065028`). Load a track via the USB2 browser (track-load works).
-**Auto-level (patch 13) now sets routing=DECK + gains automatically ~4 s after rbp starts** — so
+**Auto-level (`xdj-panel.c` (was patch 13)) now sets routing=DECK + gains automatically ~4 s after rbp starts** — so
 a loaded deck just plays. Idle routing is therefore **DECK by default** now (not LINE); disable
 with `XDJ_AUTOLEVEL=0` (e.g. to test LINE/PHONO), tune the settle with `XDJ_AUTOLEVEL_DELAY_MS`.
+
+### Audio STUTTERS? (measure, don't guess)
+Dropouts are almost always **guest ALSA xruns**, not host underruns: rbp runs a 2×64-frame ring
+(2.9 ms), so the guest must see one period complete every 1.45 ms, evenly. `xdj-audio.c` (was patch 16)'s pacer
+thread does that. To measure: count `ALSA: Resolve xrun` on the guest console (read
+`/tmp/d_con4.sock` for 30 s; ~0 is healthy, the old (pre-patch-16) burst model gave ~12/s), and boot
+with `XDJ_AUDIO_STATS=1` for a 5 s line: `underruns`/`gap` (host ran dry), `minfifo`, `guest_late`
+(rbp didn't re-arm a period in time = guest CPU too slow), `pace=689/s` (must equal 44100/64),
+`resync` (pacer woke >1 period late). More headroom: `XDJ_AUDIO_LATENCY_MS=40` (adds latency).
+
+### Track loads slow? (measure — 2026-11-15 findings)
+- The pad LEDs A→D are the load progress bar: time it from `/tmp/subucom_tx` byte `0x02` bits 7..4
+  (deck 2: byte `0x06`) after `B 5d 40`. 60 MB WAV: 10.6 s before `04-usb-chipidea-hub` + `05-macos-submillisecond-poll` (was patches 20–21), 7.4 s after.
+- Raw read speed: `sync; echo 3 > /proc/sys/vm/drop_caches; dd if=<wav> of=/dev/null bs=256k count=80`
+  on the guest (`ser.py`; long output → read `/tmp/xdj_console.log`). 1.3 → 5.6 MB/s with 20/21.
+- Link speed: `cat /sys/bus/usb/devices/2-1*/speed` must be **480**. The firmware itself sets
+  `max_sectors_kb=8` (`/etc/udev/rules.d/usb-iosched.sh`), so per-request latency rules throughput —
+  don't change that (firmware), fix latency QEMU-side.
+- Threads: rbp pins everything to **CPU 0** except the audio path (`JuceALSA`, `FGPR:1/2` on CPU 1)
+  — same as the real **dual-core** unit (firmware `thread_smp_affinity` folds mask 3 → 1). `top -H -p
+  $(pidof rbp)` in the guest; the loader threads are `PcmReader:N`, `Tot_LoadTASK`, `PageBufferedInput`.
+- Guest kernel busy-loop? `cat /proc/<pid>/stat` state R + high stime, then sample PCs with HMP
+  `info registers -a` and resolve kernel addresses against the guest's `/proc/kallsyms`.
 
 ### Deck loaded but SILENT? (debug recipe)
 1. **Stray `/tmp/subucom_ctrl`** is the #1 cause — any hold there (even an unrelated leftover
    like the web panel's browse `A 54 0`) overrides auto-level per-control; if it sets routing or a
    gain it can mute the deck. `rm /tmp/subucom_ctrl` and auto-level resumes. (Merge model means an
-   *unrelated* hold no longer silences it — but a stale build predating patch 13's merge can.)
+   *unrelated* hold no longer silences it — but a stale build predating `xdj-panel.c` (was patch 13)'s merge can.)
 2. **`XDJ_AUDIO_DEBUG=1` peaks** (in the qemu log): master `[sdma-au] peak=0` = genuine internal
    silence (routing/gain/gate), while `peak`≫0 = audio IS produced → the gap is host output.
    All `[sdma-ch] bufpeak=0` incl. deck channels = no PCM reaching the engine (not playing, or the
@@ -91,7 +137,28 @@ with `XDJ_AUTOLEVEL=0` (e.g. to test LINE/PHONO), tune the settle with `XDJ_AUTO
 (`ch_n.routed_src`: deck=n, line=n+3). Idle default = LINE (ch0→3, ch1→4) until the source
 switch is held to DECK.
 
+## Service modes (test mode / update mode) — `docs/service-modes.md`
+- **Test mode** (8 sub-modes: versions, LED/LCD all off/on, LCD patterns, KEY/LED, SW, VR/fader
+  values in hex, rotary counters): hold DECK 1 MEMORY + TEMPO RANGE *from power-on* —
+  `printf 'B 13 04\nB 12 08\n' > /tmp/subucom_ctrl` before `relaunch.sh` (file mode), remove the
+  file once Mode 1 shows, then turn/push the browse encoder to change mode. rbp only checks the
+  **first** frame it parses, so the holds must already be there at boot. Modes 5/6/7 are oracles
+  for mapping LEDs, switches and pots. In the desktop app: **File > Power On in Test Mode** (panel
+  `POST /power on test`; holds, cold-boots, releases after `Resolve xrun`). It used to come up in
+  the normal UI about half the time — the harness bound its `xdjctrl` chardev lazily on the first
+  SPI frame, so a boot-time snapshot missed rbp's first frame; now bound at realize.
+  `XDJ_FRAME_LOG=1` prints the first 12 frames' `[12]/[13]` bytes to check what rbp saw.
+- **Firmware-update mode**: `XDJ_BOOT_UPDATE=1 ./tools/xdj-panel/debug/relaunch.sh` (QEMU patch
+  19) → the initramfs "Connect USB storage device into top USB1 port." screen. Going further needs a
+  USB image with `XDJRX.UPD` (`qemu/xdj_update_stick.py` builds one); with `XDJ_NAND_IMG` +
+  `XDJ_PANELCOM_IMG` the full update completes (`docs/update-path-plan.md`). The desktop app
+  provisions and boots its NAND unit this way by itself (`docs/standalone-app.md` §4a).
+- **Factory reset**: DELETE + TEMPO RANGE (`B 13 08` + `B 12 08`) — untested.
+
 ## Gotchas
+- **gdbstub halts the VM on connect** — send `?` first (rsp.py `cmd('?')`); a bare `interrupt()`
+  right after connecting gets no reply. Hardware breakpoints (`set_bp(addr, kind=1)`) work from
+  power-on (rbp is non-PIE); clear one after it hits or `c` re-triggers it.
 - **Host load:** single-core TCG boot starves under load — **close REA/Ghidra before booting**
   (Ghidra + rekordbox-on-host hang the boot at high load). `iPodMgr` has a load-sensitive
   startup SIGSEGV; keep load low (don't leave thousands of `.ppm` files around → Spotlight).
@@ -102,6 +169,7 @@ switch is held to DECK.
 - Boot occasionally hangs on the splash — if no home screen after ~120 s, kill + relaunch.
 
 ## References
-`QEMU.md`, `docs/usb-mount-howto.md`, `docs/emulator-status.md`, `docs/subucom-frame-map.md`.
+`QEMU.md`, `docs/usb-mount-howto.md`, `docs/emulator-status.md`, `docs/subucom-frame-map.md`,
+`docs/service-modes.md`, `docs/subucom-led-map.md`.
 Tools: `tools/xdj-panel/debug/`. Skills: [qemu-imx6-patches], [map-subucom-button],
 [map-subucom-fader], [map-subucom-knob], [map-subucom-rotary], [map-gpio-control], [rbp-binary-internals].

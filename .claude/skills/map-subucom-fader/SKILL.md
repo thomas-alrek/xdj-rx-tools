@@ -11,7 +11,7 @@ decoded into a `0x50xx`/`0x44xx`/`0x600f` control code, then applied by a C++ se
 ## Sub-ucom fundamentals (shared)
 - ONE 100-byte frame over `/dev/subucom_spi1.0`; parsed by `PanelComController` (`FUN_0021a4ac`),
   decoders at **~0x282000-0x28b000**.
-- **Inject harness** (QEMU patch 02/07) reads `/tmp/subucom_ctrl` each frame, rewrites the field,
+- **Inject harness** (`xdj-panel.c`, was patches 02/07) reads `/tmp/subucom_ctrl` each frame, rewrites the field,
   recomputes CRC. `A <off> <val16>` = hold a 16-bit analog (`0x3ff`≈full, `0x200`≈center, `0`=min);
   `a` = one-shot. Offsets are rbp frame offsets.
 - Tools: `tools/xdj-panel/debug/{inj.py,mon.py,rsp.py,tables.py,relaunch.sh}`. `inj.py pulse`
@@ -34,6 +34,9 @@ decoded into a `0x50xx`/`0x44xx`/`0x600f` control code, then applied by a C++ se
   reads both. The TEMPO fader is a known complementary pair.
 
 ## Method
+0. **Test-mode oracle (no gdb):** boot into test mode (skill `run-xdj-emulator`, "Service modes"),
+   go to **Mode 7**: rbp prints every pot/fader's raw value as `000–3FF` hex. Hold your candidate
+   `A <off> <val>` and read which label changes — confirms offset + raw value in one look.
 1. **Inject + setter breakpoint (most precise):** `A <off> 3ff` hold, then gdb-RSP breakpoint on
    the setter leaf (`FUN_00083fcc` fader, `FUN_00066bb8` master, …). Read the args: an index + a
    **float** (soft-float ABI: the float is an IEEE-754 bit pattern in a core reg; `1.0f`=`0x3f800000`,

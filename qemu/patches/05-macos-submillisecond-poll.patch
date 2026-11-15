@@ -1,0 +1,34 @@
+XDJ-RX: sub-millisecond main-loop timers on macOS (no ppoll).
+
+qemu_poll_ns() rounded every timeout UP to whole milliseconds when ppoll is
+unavailable, so on macOS every sub-ms QEMU timer fired ~1 ms late (EHCI microframe
+polling, any other fine-grained device timer). Poll for the whole milliseconds,
+then nanosleep the remainder and poll once more without blocking. Linux hosts
+(ppoll) are unaffected. (Was patch 21.)
+
+--- a/util/qemu-timer.c
++++ b/util/qemu-timer.c
+@@ -343,6 +343,23 @@
+         return ppoll((struct pollfd *)fds, nfds, &ts, NULL);
+     }
+ #else
++    /*
++     * No ppoll (macOS): poll() only takes whole milliseconds, and rounding the
++     * timeout up to the next ms made every sub-ms timer fire ~1 ms late (e.g. the
++     * EHCI controller's microframe polling: each USB transfer stage cost ~1.5 ms,
++     * so mass-storage reads crawled at ~1.7 MB/s). Poll for the whole ms, then
++     * sleep the sub-ms remainder and poll once more without blocking. An fd event
++     * during that remainder is noticed < 1 ms late -- no worse than the rounding.
++     */
++    if (timeout > 0 && (timeout % SCALE_MS) != 0) {
++        int ret = g_poll(fds, nfds, (gint)MIN(timeout / SCALE_MS, INT32_MAX));
++        if (ret != 0) {
++            return ret;
++        }
++        struct timespec ts = { 0, timeout % SCALE_MS };
++        nanosleep(&ts, NULL);
++        return g_poll(fds, nfds, 0);
++    }
+     return g_poll(fds, nfds, qemu_timeout_ns_to_ms(timeout));
+ #endif
+ }

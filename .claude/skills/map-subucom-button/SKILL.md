@@ -12,7 +12,7 @@ inject it.
 ## Sub-ucom fundamentals (shared)
 - ONE 100-byte frame over `/dev/subucom_spi1.0`; parsed by `PanelComController`
   (`FUN_0021a4ac`) and decoders at **~0x282000-0x28b000**.
-- **Inject harness** (QEMU patch 02/07) reads `/tmp/subucom_ctrl` each frame and rewrites
+- **Inject harness** (`xdj-panel.c`, was patches 02/07) reads `/tmp/subucom_ctrl` each frame and rewrites
   the named field + recomputes CRC. Spec lines (hex): `A <off> <val16>` = hold a 16-bit
   analog; `a` = one-shot; `B <off> <mask>` = hold a button bitmask; `b` = one-shot.
   Offsets are **rbp frame offsets** (same as the frame-map table).
@@ -51,6 +51,18 @@ inject it.
    routing table found the source switch at **`rbp[0x33]` bit 7 = CH0 deck/line**, **`rbp[0x43]`
    bit 7 = CH1** (`1`=DECK, `0`=LINE; live-toggles). Space the RSP reads (don't hammer).
 5. Record `(off, bit, code, control, confidence)` in `docs/subucom-frame-map.md`.
+
+## Test-mode oracle
+Test **Mode 5 (KEY/LED TEST)** lights the LED belonging to each pressed key, and the service
+manual's key→LED table (p. 38) names LEDs we haven't mapped yet (USB1/2 STOP, MASTER REC, BROWSE,
+TAGLIST, INFO, MENU, TAP, LOAD1/2). Mode 6 (SW TEST) shows switch positions. Entry: skill
+`run-xdj-emulator`, "Service modes"; details `docs/service-modes.md`.
+
+## The button's LED (other direction)
+Button LEDs are NOT in the RX frame: rbp drives them through the MOSI `SubTxData` payload (QEMU
+`xdj-panel.c` (was patch 15)). After mapping the press, find its LED with `tools/xdj-panel/debug/ledprobe.py b_<off>_<mask>`
+(press twice: on + off), add `led:[byte,bit,low]` to the panel entry, and record it in
+`docs/subucom-led-map.md`.
 
 ## Gotchas
 - A bit may need a **loaded track** to show any effect (deck transport). Load first.

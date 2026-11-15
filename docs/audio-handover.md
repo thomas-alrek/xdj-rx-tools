@@ -1,5 +1,16 @@
 # Audio handover — making decks actually play
 
+> **Update 2026-11-15 — period clock changed (patch 16).** The "Option B" design below completed
+> SDMA periods from inside the host audio callback. That callback only runs every few ms (~345/s on
+> macOS, vs the 689 periods/s rbp's 2×64-frame ALSA ring needs), so it completed ~2 periods — the
+> whole ring — per call and rbp logged `ALSA: Resolve xrun` continuously (audible stutter; 378 xruns
+> in 30 s with two decks + FX). [patch 16](../qemu/patches/16-imx6-audio-paced-sdma.patch) moves
+> period completion to a **pacer thread** (one period per channel per 1.45 ms, absolute deadlines,
+> BQL only for the step) feeding a master PCM FIFO that the callback drains; the tick is trimmed
+> ±8% by FIFO level so the playhead stays locked to the host clock. Result: 2 xruns / 30 s, no host
+> underruns, +~20 ms latency (`XDJ_AUDIO_LATENCY_MS`). Diagnose with `XDJ_AUDIO_STATS=1` and the
+> guest console (skill `run-xdj-emulator`, "Audio STUTTERS?").
+
 **Status: IMPLEMENTED (Options A + B) and verified — 2026-11-11.**
 The i.MX6 SDMA engine + SSI/AUDMUX are now modelled in QEMU
 ([qemu/patches/11-imx6-audio-sdma-ssi.patch](../qemu/patches/11-imx6-audio-sdma-ssi.patch)).

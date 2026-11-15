@@ -102,7 +102,8 @@ DEV_NODES = [
     ("mmcblk0p2",  "b", 179,  2),
 ]
 
-# u-boot env (identical to the old mkenvimage input)
+# u-boot env: the SD-boot selectors.  The version variables are appended from the
+# firmware itself (rev_env_entries) -- see there.
 ENV_ENTRIES = [
     "rootfs=sd",
     "mmcdev=/dev/mmcblk0p1",
@@ -110,6 +111,9 @@ ENV_ENTRIES = [
     "ubifs_formatted=true",
     "bootdelay=0",
 ]
+
+# Revision files the updater reads (images/ in the ISO).
+REV_FILES = ("release.txt", "system.rev", "rbp.rev", "subucom.rev")
 
 
 def log(msg):
@@ -144,11 +148,12 @@ def find_tool(name):
 
 # --- firmware payload extraction --------------------------------------------
 def extract_iso(iso_path, dest):
-    """Pull the three rootfs payloads out of the firmware ISO (no mounting)."""
+    """Pull the rootfs payloads and the revision files out of the firmware ISO
+    (no mounting)."""
     iso = pycdlib.PyCdlib()
     iso.open(str(iso_path))
     try:
-        for n in ("rootfs.cramfs", "pioneer.tar.gz", "gui.tar.gz"):
+        for n in ("rootfs.cramfs", "pioneer.tar.gz", "gui.tar.gz") + REV_FILES:
             with open(dest / n, "wb") as f:
                 iso.get_file_from_iso_fp(f, rr_path=f"/images/{n}")
     finally:
@@ -298,6 +303,41 @@ def build_ext4(tree, out_img, blocks, mke2fs, debugfs, add_dev_nodes):
         die(f"e2fsck reported errors in {out_img.name}:\n{chk.stdout}")
 
 
+# --- version variables, as the firmware updater writes them ------------------
+def _last_changed_rev(path):
+    """`cat <f> | grep "Last Changed Rev" | sed -e "s/^Last Changed Rev:[ \t]*//g"`."""
+    for line in path.read_text(encoding="latin1").splitlines():
+        if line.startswith("Last Changed Rev:"):
+            return line[len("Last Changed Rev:"):].strip(" \t")
+    return "????"                                  # getRevision()'s default
+
+
+def rev_env_entries(d):
+    """The version variables an ALL update leaves in the u-boot env.
+
+    On a real unit nothing in the rootfs knows the release number: apl_start does
+    `release=$(fw_printenv -n release)` (empty -> "--.--") and writes it to
+    /tmp/smdj.rev + /tmp/smdj2.rev, which rbp's UTILITY -> VERSION No. screen shows.
+    The env value is written by the updater (`update`, finEnv(); ALL update =
+    `fw_initenv /tmp/fw_env.txt NAND` after appending these `echo k=v` lines):
+      release      = head -n 1 images/release.txt
+      rev_boot/kernel/rootfs/data/user = system.rev "Last Changed Rev"
+      rev_pioneer  = rbp.rev "Last Changed Rev"
+      rev_panelcom = subucom.rev (newlines stripped)
+    (getRevision() returns system/rbp/subucom in that order.)  A later *user* update
+    writes the same set with fw_setenv, but names the sub version `rev_subucom`; an
+    ALL-provisioned unit has only rev_panelcom, so that is what we seed.
+    The SD test bed never runs the updater, so without this the screen reads
+    "Ver --.--".  qemu/xdj_nand.py provisioning gets these from the real updater."""
+    release = (d / "release.txt").read_text(encoding="latin1").splitlines()[0].strip()
+    system = _last_changed_rev(d / "system.rev")
+    apl = _last_changed_rev(d / "rbp.rev")
+    sub = "".join((d / "subucom.rev").read_text(encoding="latin1").split())
+    return ([f"release={release}"]
+            + [f"rev_{k}={system}" for k in ("boot", "kernel", "rootfs", "data", "user")]
+            + [f"rev_pioneer={apl}", f"rev_panelcom={sub}"])
+
+
 # --- pure-Python u-boot env (replaces mkenvimage) ---------------------------
 def make_env_blob(entries, size):
     """Reproduce `mkenvimage -s <size>` byte-for-byte: a little-endian CRC32 over
@@ -386,7 +426,9 @@ def main():
 
     # ---- env + partition table + assemble ----
     log("Writing env blob, partition table and assembling the image…")
-    env_blob = make_env_blob(ENV_ENTRIES, ENV_SIZE)
+    env = ENV_ENTRIES + rev_env_entries(BUILD)
+    log("  env: " + " ".join(env))
+    env_blob = make_env_blob(env, ENV_SIZE)
     mbr = make_mbr([
         (P1_START, P1_SECTORS, 0x83),       # Linux
         (P2_START, P2_SECTORS, 0x83),

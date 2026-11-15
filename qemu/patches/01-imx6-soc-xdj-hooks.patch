@@ -1,0 +1,53 @@
+XDJ-RX: hook the Pioneer XDJ-RX device models into the i.MX6 SoC.
+
+The models themselves are real source files maintained in the xdj-rx-tools repo
+(qemu/xdj/) and copied to hw/arm/xdj/ by qemu/build-qemu.sh: display stubs and
+scanout, audio (SDMA/SSI/AUDMUX + paced clock), the front-panel MCU harness, the
+MFi auth chip on I2C4, USBNC wakeup, GPIO straps. This patch only adds the hooks:
+  - fsl_imx6_realize(): xdj_imx6_gpio_pre/post_realize() around each GPIO bank's
+    realize (reset levels, captures, LED outputs) and one xdj_imx6_realize() after
+    the stock devices;
+  - hw/arm/meson.build: subdir('xdj').
+(Replaces the fsl-imx6.c parts of the old patches 02, 04, 06, 07, 09-11, 13-19.)
+
+--- a/hw/arm/fsl-imx6.c
++++ b/hw/arm/fsl-imx6.c
+@@ -22,6 +22,7 @@
+ #include "qemu/osdep.h"
+ #include "qapi/error.h"
+ #include "hw/arm/fsl-imx6.h"
++#include "xdj/xdj.h"   /* Pioneer XDJ-RX device models (hw/arm/xdj/) */
+ #include "hw/misc/unimp.h"
+ #include "hw/usb/imx-usb-phy.h"
+ #include "hw/core/boards.h"
+@@ -303,9 +304,11 @@
+                                  &error_abort);
+         object_property_set_bool(OBJECT(&s->gpio[i]), "has-upper-pin-irq",
+                                  true, &error_abort);
++        xdj_imx6_gpio_pre_realize(s, i);
+         if (!sysbus_realize(SYS_BUS_DEVICE(&s->gpio[i]), errp)) {
+             return;
+         }
++        xdj_imx6_gpio_post_realize(s, i);
+ 
+         sysbus_mmio_map(SYS_BUS_DEVICE(&s->gpio[i]), 0, gpio_table[i].addr);
+         sysbus_connect_irq(SYS_BUS_DEVICE(&s->gpio[i]), 0,
+@@ -473,6 +476,9 @@
+     create_unimplemented_device("pcie-phy", FSL_IMX6_PCIe_ADDR,
+                                 FSL_IMX6_PCIe_SIZE);
+ 
++    /* Pioneer XDJ-RX: GPU/IPU stubs, audio, auth chip, USBNC, scanout (hw/arm/xdj/) */
++    xdj_imx6_realize(s, dev, gic);
++
+     /* ROM memory */
+     if (!memory_region_init_rom(&s->rom, OBJECT(dev), "imx6.rom",
+                                 FSL_IMX6_ROM_SIZE, errp)) {
+--- a/hw/arm/meson.build
++++ b/hw/arm/meson.build
+@@ -113,3 +113,6 @@
+ arm_common_ss.add(files('boot.c'))
+ 
+ hw_common_arch += {'arm': arm_common_ss}
++
++# Pioneer XDJ-RX device models (copied from xdj-rx-tools qemu/xdj/)
++subdir('xdj')

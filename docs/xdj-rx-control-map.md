@@ -588,8 +588,8 @@ sub-ucom frame at all. All the panel-injection work above applies only to EUP ke
   (the GPIO number IS the file offset), `read(fd,1)` → 0/1 level, `ioctl(…,0x4004f101,…)`.
   So each rbp gpiodrv fd's `fdinfo` **`pos`** = the Linux GPIO number it watches.
 - Live, rbp watches 18 GPIOs: `117 118 119 120 126* 134 135 146 149 158 159 160 161
-  162 163 164 165 204*` (*=USB1/USB2 **detect** = GPIO4_IO30/ GPIO7_IO12, driven by
-  patch 06).
+  162 163 164 165 204*` (*=USB1/USB2 active-low **fault** flags = GPIO4_IO30/ GPIO7_IO12 — not detect, see
+  docs/usb-mount-howto.md; injectable via patch 06).
 - **`FUN_00274a38`** builds the **8 MAIN-UCOM direct keys** via `FUN_0002be28` with GPIO
   numbers `0x77,0x78,0x9f,0xa1,0xa0,0x9e,0x95,0x92` = **119,120,159,161,160,158,149,146**
   (GPIO4_IO23/24, GPIO5_IO31/30/21/18, GPIO6_IO00/01). The 8 keys are {rekordbox, MIDI,

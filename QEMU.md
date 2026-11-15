@@ -3,7 +3,8 @@
 > 🔄 **Status update (2026-11-12): this document describes an earlier bring-up milestone.**
 > The emulator now boots to the **live interactive rekordbox UI**, the **sub-ucom panel is
 > fully decoded** (frame→control map + inject harness), and **real deck audio reaches the
-> host**. The patch set is now **11 patches** (not "two"); see the `qemu-imx6-patches` skill /
+> host**. Since 2026-11-16 the QEMU side is device models in `qemu/xdj/*.c` plus **5 small patches** to stock
+> QEMU files (not "two"); see the `qemu-imx6-patches` skill /
 > `docs/emulator-status.md` for the current state. Two corrections to the narrative below:
 > the "front-panel MCU handshake / interactive main screen is the next step" and "GUI does not
 > yet render under SABRE-SD" statements are **obsolete**; and the sub-ucom frame check is a
@@ -102,13 +103,13 @@ GPU driver (`galcore`)**, because QEMU models neither the GPU nor its SRC reset.
 I traced the two distinct hang points (QEMU monitor `info registers`, a GPU
 access trace, and the galcore source) and fixed them in the emulator:
 
-1. **SRC GPU reset never clears** (`patches/01-imx6_src-gpu-reset.patch`).
+1. **SRC GPU reset never clears** (`qemu/patches/02-imx6-peripherals.patch`; was patch 01).
    `gckOS_ResetGPU()` sets SW_GPU3D_RST (bit 1) / SW_GPU2D_RST (bit 4) in
    `SRC_SCR` and polls until they self-clear. QEMU's `imx6_src` cleared the CPU
    and IPU reset bits but not the GPU ones → infinite spin. The patch makes them
    self-clearing (QEMU models no GPU, so "reset done" immediately is correct).
 
-2. **GPU registers unmapped** (`patches/02-fsl-imx6-gpu-stub.patch`). After the
+2. **GPU registers unmapped** (`qemu/xdj/xdj-display.c`; was patch 02). After the
    SRC reset, galcore's `_ResetGPU()` polls the GPU: it waits for the idle
    register (`0x004`) and for **bits 16 & 17 of the clock-control register
    (`0x000`)** to read back set. QEMU maps nothing there (reads returned 0) → it
@@ -180,7 +181,7 @@ Notes / limits:
 QEMU models no i.MX6 IPU, but the `mxc_sdc_fb` driver still allocates and
 configures the framebuffer (**480×800 ARGB8888 at physical `0x18000000`**) and
 userspace draws into it. A small **scanout device** added to the i.MX6 machine
-(`qemu/patches/02-…`) registers a graphic console that mirrors that memory, so
+(`qemu/xdj/xdj-display.c`) registers a graphic console that mirrors that memory, so
 the display is capturable and showable:
 
 ```bash
@@ -198,7 +199,7 @@ the wrong geometry just renders the UI rotated.)
 
 ## The IPU vsync-interrupt stub (fast boot, smooth UI)
 
-The real win for the display is in `patches/02`: a small **IPU1 interrupt stub**
+The real win for the display is in `qemu/xdj/xdj-display.c` (was patch 02): a small **IPU1 interrupt stub**
 that makes the `mxc_sdc_fb` display path behave as if a real 60 Hz panel were
 attached.
 
@@ -255,7 +256,7 @@ things on the QEMU side, all now in place (`qemu/watch.sh`):
   rev field (bits 8-11) is `0x400`/`0x500`. `system_rev` is set from
   `ATAG_REVISION`, which `qemu_prepare.py` now supplies.
 - **SD on uSDHC3.** SABRE-SD's rootfs controller is uSDHC3 (Linux `mmc0` =
-  `sdhci-esdhc-imx.2`), not uSDHC4. `patches/03` teaches the machine to attach
+  `sdhci-esdhc-imx.2`), not uSDHC4. `qemu/patches/03-sabresd-board.patch` teaches the machine to attach
   `-drive if=none,id=xdjsd` there.
 - **Console on `ttymxc0`.** SABRE-SD's early console is a different UART.
 

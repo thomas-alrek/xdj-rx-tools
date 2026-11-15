@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XDJ-RX Log</title>
+<style>
+  :root{ --bg:#0a0b0d; --ink:#d6dde6; --dim:#8a96a3; --edge:#2b2f36; --accent:#39b3ff; --in:#39d98a; --out:#ffb02e; }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--ink);display:flex;flex-direction:column;
+    font:12px/1.45 ui-monospace,Menlo,monospace}
+  .bar{display:flex;gap:8px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--edge);
+    background:#121418;font:12px -apple-system,BlinkMacSystemFont,sans-serif;-webkit-user-select:none;user-select:none}
+  .bar b{color:var(--accent);letter-spacing:1px}
+  .bar .sp{flex:1}
+  .bar input{background:#0d0f12;border:1px solid var(--edge);color:var(--ink);border-radius:6px;padding:3px 8px;width:180px}
+  .bar button{background:#1b1f26;border:1px solid #3a414b;color:var(--ink);border-radius:6px;padding:3px 10px;cursor:pointer}
+  .bar button.on{background:#13303f;border-color:#2a6b8f;color:#bfe3ff}
+  #out{flex:1;overflow:auto;padding:6px 10px;white-space:pre-wrap;word-break:break-all}
+  .l.tx{color:var(--out)} .l.rx{color:var(--in)} .l.note{color:var(--dim)}
+  .st{color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="bar">
+  <b id="ttl">LOG</b><span class="st" id="st">connecting…</span><span class="sp"></span>
+  <input id="flt" placeholder="filter" spellcheck="false">
+  <button id="pause">Pause</button><button id="follow" class="on">Follow</button>
+  <button id="copy">Copy</button><button id="clr">Clear</button>
+</div>
+<div id="out"></div>
+<script>
+// Log window for the virtual panel: ?src=subucom (control traffic + LED changes) or
+// ?src=console (the guest Linux console). Streams GET /log/<src> (SSE, backlog first).
+const src=(new URLSearchParams(location.search).get('src')||'subucom').replace(/[^a-z]/g,'');
+const NAME={subucom:'SUB uCOM LOG',console:'SYSTEM LOG (Linux console)'}[src]||src;
+document.title='XDJ-RX — '+NAME; document.getElementById('ttl').textContent=NAME;
+const out=document.getElementById('out'), st=document.getElementById('st');
+const flt=document.getElementById('flt');
+let lines=[], paused=false, follow=true; const MAX=8000;
+// Tail mode = "scrolled to the bottom": new lines keep it pinned there; scroll up to stop,
+// scroll back to the bottom (or click Follow) to resume. The Follow button just shows it.
+const atBottom=()=>out.scrollTop+out.clientHeight>=out.scrollHeight-8;
+const followBtn=()=>document.getElementById('follow');
+function setFollow(v){ follow=v; followBtn().classList.toggle('on',v); }
+const cls=t=>src!=='subucom'?'':(t.includes('-> ')?'tx':t.includes('<- ')?'rx':t.includes('·')?'note':'');
+function render(){ const f=flt.value.toLowerCase(); const frag=document.createDocumentFragment();
+  for(const t of lines){ if(f && !t.toLowerCase().includes(f)) continue;
+    const e=document.createElement('div'); e.className='l '+cls(t); e.textContent=t; frag.appendChild(e); }
+  out.replaceChildren(frag); if(follow) out.scrollTop=out.scrollHeight; }
+function add(t){ lines.push(t); if(lines.length>MAX) lines.splice(0,lines.length-MAX);
+  if(paused) return; const f=flt.value.toLowerCase(); if(f && !t.toLowerCase().includes(f)) return;
+  const stick=follow||atBottom();                 // decide before the new line changes the height
+  const e=document.createElement('div'); e.className='l '+cls(t); e.textContent=t; out.appendChild(e);
+  while(out.childNodes.length>MAX) out.removeChild(out.firstChild);
+  if(stick){ out.scrollTop=out.scrollHeight; if(!follow) setFollow(true); } }
+const es=new EventSource('/log/'+src);
+es.onopen=()=>{ st.textContent='live'; };
+es.onerror=()=>{ st.textContent='reconnecting…'; };
+es.onmessage=e=>add(e.data);
+document.getElementById('pause').onclick=e=>{ paused=!paused; e.target.classList.toggle('on',paused);
+  e.target.textContent=paused?'Resume':'Pause'; if(!paused) render(); };
+document.getElementById('follow').onclick=()=>{ setFollow(true); out.scrollTop=out.scrollHeight; };
+document.getElementById('clr').onclick=()=>{ lines=[]; out.replaceChildren(); };
+document.getElementById('copy').onclick=()=>{ const t=lines.join('\n');
+  (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).catch(()=>{
+    const r=document.createRange(); r.selectNodeContents(out); const s=getSelection(); s.removeAllRanges(); s.addRange(r); document.execCommand('copy'); }); };
+flt.oninput=render;
+out.addEventListener('scroll',()=>{ const b=atBottom(); if(b!==follow) setFollow(b); });
+</script>
+</body>
+</html>

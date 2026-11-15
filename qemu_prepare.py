@@ -57,6 +57,32 @@ CMDLINE = ("console=ttymxc0,115200 earlyprintk keep_bootcon "
            "video=mxcfb0:dev=ldb,800x480M@60,if=RGB24,bpp=32 "
            "video=mxcfb1:off video=mxcfb2:off video=mxcfb3:off")
 
+# NAND partition table. Real u-boot passes mtdparts=${mtdids}:${partition} from its env
+# (images/fw_env.txt); the emulated GPMI NAND (qemu/xdj/xdj-nand.c) gets the same
+# table so /dev/mtd0..16 match the device (mtd4 = kernel_b, mtd6 = data, ...).
+MTDPARTS_FALLBACK = ("gpmi-nand:3M(boot),1M(bb1),1M(env),10M(kernel_a),10M(kernel_b),"
+                     "30M(rootfs),10M(data),8M(pioneer),5M(bb2),10M(core),40M(gui),"
+                     "122M(quickboot),5M(bb2),1M(bbt),0x500000@0x0(block_boot),"
+                     "0x4400000@0x500000(block_linux),-@0x0(block_all)")
+
+
+def read_mtdparts(iso_path):
+    """mtdparts=<mtdids>:<partition> from the firmware's u-boot env, else the 2.21 table."""
+    try:
+        import pycdlib, io
+        iso = pycdlib.PyCdlib(); iso.open(iso_path)
+        pathkw = "rr_path" if iso.has_rock_ridge() else "iso_path"
+        buf = io.BytesIO()
+        iso.get_file_from_iso_fp(buf, **{pathkw: "/images/fw_env.txt"})
+        iso.close()
+        env = dict(l.split("=", 1) for l in buf.getvalue().decode("latin1").splitlines()
+                   if "=" in l)
+        if env.get("mtdids") and env.get("partition"):
+            return env["mtdids"].strip() + ":" + env["partition"].strip()
+    except Exception as e:  # noqa: BLE001 -- any ISO problem: use the known table
+        print(f"  (fw_env.txt not readable: {e}; using the 2.21 partition table)")
+    return MTDPARTS_FALLBACK
+
 
 def extract_uimage(iso_path):
     import pycdlib
@@ -69,7 +95,7 @@ def extract_uimage(iso_path):
     return dst
 
 
-def decompress_kernel(uimage_path):
+def decompress_kernel(uimage_path, out=None):
     img = open(uimage_path, "rb").read()[64:]   # strip 64-byte U-Boot header
     i = img.find(b"\x1f\x8b\x08")               # gzip magic (zImage payload)
     if i < 0:
@@ -79,7 +105,7 @@ def decompress_kernel(uimage_path):
     except Exception:
         d = zlib.decompressobj(16 + zlib.MAX_WBITS)
         raw = d.decompress(img[i:])
-    open(os.path.join(OUT, "vmlinux.bin"), "wb").write(raw)
+    open(os.path.join(out or OUT, "vmlinux.bin"), "wb").write(raw)
     return len(raw)
 
 
@@ -103,15 +129,16 @@ def _atags(cmdline, revision=None):
     return atags
 
 
-def build_boot_blobs():
+def build_boot_blobs(mtdparts=MTDPARTS_FALLBACK, out=None, cmdline=None):
     # SABRE-SD boot blobs: the XDJ-RX firmware's real board. MACH_TYPE 3980 +
     # ATAG_REVISION=0x500 make the board register ECSPI2 (bus 1) ->
     # /dev/subucom_spi1.0 (front-panel MCU) and the AK4387 codecs. The machine
     # attaches the nand image on uSDHC3 (-drive if=none,id=xdjsd). See qemu/watch.sh.
-    open(os.path.join(OUT, "tramp.bin"), "wb").write(
+    out = out or OUT
+    open(os.path.join(out, "tramp.bin"), "wb").write(
         _trampoline(MACH_TYPE_SABRESD))
-    open(os.path.join(OUT, "atags.bin"), "wb").write(
-        _atags(CMDLINE, revision=BOARD_REV_SABRESD))
+    open(os.path.join(out, "atags.bin"), "wb").write(
+        _atags(cmdline or (CMDLINE + " mtdparts=" + mtdparts), revision=BOARD_REV_SABRESD))
 
 
 def main():
@@ -123,7 +150,7 @@ def main():
     uimg = extract_uimage(iso)
     n = decompress_kernel(uimg)
     print(f"  decompressed kernel: {n} bytes -> build/qemu/vmlinux.bin")
-    build_boot_blobs()
+    build_boot_blobs(read_mtdparts(iso))
     print(f"  SABRE-SD trampoline (mach {MACH_TYPE_SABRESD}) + ATAGs (rev 0x500, 256MB) -> tramp.bin, atags.bin")
     print("ready -> qemu/watch.sh")
 

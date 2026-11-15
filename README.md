@@ -241,12 +241,14 @@ What it took (all **emulator-side, firmware untouched** except one removed file)
   supplies the real board's machine id **3980 (SABRE-SD)** + hand-built ATAGs
   (incl. `ATAG_REVISION=0x500`, which binds the `sub-ucom` panel MCU) via
   `-device loader`.
-- **Eleven i.MX6 QEMU patches** (`qemu/patches/01..11`) — self-clearing SRC GPU-reset
+- **Nineteen i.MX6 QEMU patches** (`qemu/patches/01..05` + `qemu/xdj/`) — self-clearing SRC GPU-reset
   bits; a Vivante GPU register stub + a live framebuffer scanout (reads the IPU
   display stride, decodes 32bpp splash / 16bpp RGB565 UI) + IPU vsync IRQ; the
   SABRE-SD board wiring (uSDHC3 nand, ECSPI2 sub-ucom slave); the sub-ucom inject
-  harness; USB detect/insert/hub/wakeup; main-ucom GPIO keys; and the audio
-  SDMA/SSI/AUDMUX path. See the `qemu-imx6-patches` skill for the full list.
+  harness and its LED back-channel; USB fault flags/hub/wakeup; main-ucom GPIO keys and
+  source-key LEDs; the audio SDMA/SSI/AUDMUX path with an evenly paced period clock; the
+  I2C4 MFi auth-chip responder; and an update-mode boot strap. See the
+  `qemu-imx6-patches` skill for the full list.
 - **nand image** (`qemu/build-nand.sh`) — assembled from the firmware's own
   payloads (`rootfs.cramfs` + `pioneer.tar.gz` + `gui.tar.gz`) as a 256 MB ext4
   image. The **one** change vs. a byte-for-byte rootfs: the Vivante GAL DirectFB
@@ -323,13 +325,23 @@ build/qemu-src/          the patched QEMU source + build
   **DECK/LINE source switch** (`rbp[0x33].7`/`[0x43].7`) mapped and live-verified.
   Full control map in [docs/subucom-frame-map.md](docs/subucom-frame-map.md); remaining
   deck transport/jogs need a loaded track — see [docs/rx3-panel-crossref.md](docs/rx3-panel-crossref.md).
-- [x] **Audio**: i.MX6 SDMA/SSI/AUDMUX modelled (patch 11); **real deck audio to the host**,
-  both decks — see [docs/audio-handover.md](docs/audio-handover.md).
+- [x] **Audio**: i.MX6 SDMA/SSI/AUDMUX modelled (`xdj-audio.c` (was patch 11)); **real deck audio to the host**,
+  both decks, stutter fixed by an evenly paced period clock (`xdj-audio.c` (was patch 16)) — see
+  [docs/audio-handover.md](docs/audio-handover.md).
+- [x] **Panel LEDs, meters, jog rings** (rbp's `SubTxData`, `xdj-panel.c` (was patch 15); source-key LEDs, `xdj-board.c` (was patch 17))
+  — [docs/subucom-led-map.md](docs/subucom-led-map.md).
+- [x] **Service modes**: test mode (hold MEMORY + TEMPO RANGE from boot) and firmware-update mode
+  (`XDJ_BOOT_UPDATE=1`) reachable; E-7206 auth-chip error fixed (`xdj-mfi.c` (was patch 18)) —
+  [docs/service-modes.md](docs/service-modes.md).
+- [x] **Desktop app** (`app/`): window = the virtual deck only; native menu bar for all controls,
+  pop-out screen (double-click), Sub uCom / System log windows — skills `build-xdj-app`,
+  `xdj-virtual-panel`.
 - [ ] exFAT mod: patch `12-usb-memory-auto-mount.rules`; cross-compile `fuse-exfat`
 
 > For AI sessions: see **[CLAUDE.md](CLAUDE.md)** and the task skills in `.claude/skills/`
 > (`run-xdj-emulator`, `map-{gpio,subucom-*}-control`, `rbp-binary-internals`,
-> `upd-firmware-format`, `qemu-imx6-patches`).
+> `upd-firmware-format`, `qemu-imx6-patches`, `xdj-virtual-panel`, `build-xdj-app`,
+> `build-xdj-sd-image`).
 
 ## Acknowledgements / references
 

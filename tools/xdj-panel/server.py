@@ -6,10 +6,19 @@ Serves index.html and turns panel actions into the emulator's control-injection
 protocol, and streams the QEMU framebuffer to the browser as raw RGB (drawn on a
 <canvas>) — no per-frame image encoding, over a persistent monitor connection:
 
-  POST /ctrl     body="B 12 08"  -> write that spec line to /tmp/subucom_ctrl
-  POST /release                  -> remove /tmp/subucom_ctrl (release held control)
+  POST /ctrl     body="A 2c 3ff" / "B 12 08" / "b 5e 01" / "S 5a e0 20"
+                 -> set analog / hold button / one-shot / set switch field
+  POST /release  body="B 12 08" (or empty = all)          -> let go of held button(s)
+  POST /jog      body="1 move <deg> <sec>" | "1 touch 1"  -> jog wheel (counter/period/flags)
   GET  /raw                      -> latest framebuffer as raw RGB
                                     (headers X-Width / X-Height; body w*h*3 bytes)
+  GET  /logs.html?src=subucom|console -> log window page; GET /log/<src> = its SSE stream
+  POST /power  on|off|toggle [update|test] -> power the emulator (xdj-host); GET /power = state
+                 (test = boot into the service manual's test mode, see _test_mode_boot)
+  POST /log/note                 -> append a panel note to the sub-ucom log
+  GET  /leds                     -> Server-Sent Events: one "data: <40|42 hex>" per change of
+                                    rbp's 20-byte LED/meter payload (SubTxData, xdj-panel.c (was patch 15);
+                                    layout docs/subucom-led-map.md). /leds?once=1 = current JSON.
 
 A QEMU `screendump` of the 800x480 surface takes ~18 ms, so /raw back-to-back gives
 20-40 fps on localhost. The QEMU xdj-subucom harness reads /tmp/subucom_ctrl each
@@ -65,6 +74,274 @@ _CTYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
            ".js": "application/javascript", ".svg": "image/svg+xml"}
 
 _grab_lock = threading.Lock()
+
+# LED back-channel (xdj-panel.c (was patch 15)). rbp streams its LED / level-meter state to the
+# panel MCU as a SubTxData frame; the harness forwards each change as "T <40 hex>\n" --
+# back up the xdjctrl socket in socket mode, or into TX_PATH in file mode. We keep the
+# latest payload here and fan it out to every /leds SSE client.
+TX_PATH = os.environ.get("XDJ_TX_PATH") or "/tmp/subucom_tx"
+_leds = {"hex": "", "seq": 0, "t": 0.0}
+_leds_cv = threading.Condition()
+
+
+# ---- log windows (View > Sub uCom log / System log) -------------------------------------
+# Two line rings served as SSE at GET /log/<src>:
+#   subucom -- panel -> emulator control traffic (what each POST asked for) and rbp's LED
+#              changes (non-meter / non-jog bytes), plus panel notes (POST /log/note);
+#   console -- the guest Linux console, tailed from --console (the app's runtime-dir
+#              console.log; the debug launcher's /tmp/xdj_console.log).
+LOG_MAX = 5000
+_logs = {"subucom": [], "console": []}       # [(index, line)]
+_log_next = {"subucom": 0, "console": 0}
+_log_cv = threading.Condition()
+CONSOLE = None
+
+
+def _logline(src, text):
+    with _log_cv:
+        buf = _logs[src]
+        for ln in str(text).splitlines() or [""]:
+            if src != "console":
+                ln = time.strftime("%H:%M:%S") + "  " + ln
+            buf.append((_log_next[src], ln))
+            _log_next[src] += 1
+        if len(buf) > LOG_MAX:
+            del buf[: len(buf) - LOG_MAX]
+        _log_cv.notify_all()
+
+
+_LED_SKIP = {0x00, 0x04, 0x08, 0x09, 0x0C, 0x0D, 0x0E, 0x0F}   # jog rings + level meters
+
+
+_led_prev = {}      # byte -> (value before its last change, time of that change)
+
+
+def _log_led_diff(old, new):
+    # rbp blinks LEDs by toggling bits ~3x/s; a byte flipping straight back to its previous
+    # value within 1 s is a blink, not a state change, so it isn't logged.
+    try:
+        a, b = bytes.fromhex(old), bytes.fromhex(new)
+    except ValueError:
+        return
+    now, ch = time.time(), []
+    for i in range(min(len(a), len(b))):
+        if a[i] == b[i] or i in _LED_SKIP:
+            continue
+        pv, t = _led_prev.get(i, (None, 0.0))
+        _led_prev[i] = (a[i], now)
+        if pv == b[i] and now - t < 1.0:
+            continue
+        ch.append("%02x:%02x>%02x" % (i, a[i], b[i]))
+    if len(b) > len(a):
+        ch.append("%02x:->%02x" % (len(a), b[len(a)]))
+    if ch:
+        _logline("subucom", "<- LED  " + "  ".join(ch))
+
+
+def _console_loop():
+    # Tail CONSOLE (it may appear later, or be truncated by a reboot).
+    pos, ino, part = 0, None, b""
+    while True:
+        try:
+            st = os.stat(CONSOLE)
+            if ino != st.st_ino or st.st_size < pos:
+                ino, pos, part = st.st_ino, max(0, st.st_size - 200_000), b""
+            if st.st_size > pos:
+                with open(CONSOLE, "rb") as f:
+                    f.seek(pos)
+                    data = f.read(1_000_000)
+                pos += len(data)
+                data = part + data
+                lines = data.split(b"\n")
+                part = lines.pop()
+                if lines:
+                    _logline("console", b"\n".join(l.rstrip(b"\r") for l in lines)
+                             .decode("utf-8", "replace"))
+        except FileNotFoundError:
+            pass
+        time.sleep(0.25)
+
+
+# ---- power (desktop app: xdj-host owns QEMU; we forward the panel's power button) ----
+# xdj-host listens on <runtime>/power.sock: "on" | "on update" | "off" | "status" -> one
+# line "on" / "on update" / "off". Without it (dev/debug launcher) power is unavailable.
+POWER_SOCK = None
+_pending_usb = {}             # slot -> image path, inserted once the guest is ready
+_power_lock = threading.Lock()
+
+
+def _power_cmd(cmd):
+    if not POWER_SOCK or not os.path.exists(POWER_SOCK):
+        return None
+    try:
+        with socket.socket(socket.AF_UNIX) as c:
+            c.settimeout(5.0)
+            c.connect(POWER_SOCK)
+            c.sendall((cmd + "\n").encode())
+            return c.makefile().readline().strip() or None
+    except Exception:
+        return None
+
+
+def _leds_off():
+    # Powered off: tell the panel to darken every LED / meter / jog ring.
+    with _leds_cv:
+        _leds["hex"] = "off"
+        _leds["seq"] += 1
+        _leds_cv.notify_all()
+
+
+# Test mode (service manual 6.1; docs/service-modes.md): rbp's boot-key handler looks at
+# the FIRST sub-ucom frame only -- DECK 1 MEMORY [0x13]&04 + TEMPO RANGE [0x12]&08 held
+# then = TestMode. The holds go into _held before power on, so the ctrl-socket connect to
+# the fresh QEMU (_repush) delivers them before rbp's first read.
+TEST_MODE_KEYS = ("B 12 08", "B 13 04")
+
+
+def _test_mode_boot(t0):
+    """Let go of the test-mode keys once rbp is certainly past its first-frame check.
+    Started AFTER the power on. Neither rbp's startup line nor its first LED frame is
+    late enough: rbp starts streaming SubTxData before its panel thread parses the
+    first input frame, and releasing on those raced (boots came up normal about half
+    the time). "ALSA: Resolve xrun" only prints once rbp is fully up (in test mode
+    and normal boot alike), long after the boot-key check; holding the keys until
+    then is harmless (test mode 1 ignores them). Fallback: release after 3 min, or
+    once powered off."""
+    while time.time() - t0 < 180:
+        if time.time() - t0 > 5 and _power_cmd("status") in (None, "off"):
+            break
+        if _console_has("Resolve xrun"):
+            time.sleep(2)
+            break
+        time.sleep(0.5)
+    with _browse_lock:
+        for ln in TEST_MODE_KEYS:
+            _, off, mask = ln.split()
+            _held.pop((int(off, 16), int(mask, 16)), None)
+        _push()
+    _logline("subucom", "·  test mode: released MEMORY + TEMPO RANGE")
+
+
+def _console_has(marker):
+    try:
+        with open(CONSOLE, "rb") as f:
+            return marker.encode() in f.read()
+    except Exception:
+        return False
+
+
+def _insert_pending(update):
+    # Mirror xdj-host's maybe_insert_usb choreography: insert only once the guest is
+    # ready for it -- rbp polling its USB manager (normal boot: "Resolve xrun" + settle),
+    # or the initramfs waiting for the update stick ("USB update mount").
+    marker, settle = ("USB update mount", 2) if update else ("Resolve xrun", 6)
+    t0 = time.time()
+    while time.time() - t0 < 300:
+        if _power_cmd("status") in (None, "off"):
+            return
+        if _console_has(marker):
+            break
+        time.sleep(1.0)
+    else:
+        _logline("subucom", "·  USB insert: gave up waiting for the guest")
+        return
+    time.sleep(settle)
+    with _power_lock:
+        items = list(_pending_usb.items())
+        _pending_usb.clear()
+    for slot, img in items:
+        try:
+            _logline("subucom", "·  inserting queued %s: %s" % (slot, mount_usb(slot, img)))
+        except Exception as e:
+            _logline("subucom", "·  queued %s insert failed: %s" % (slot, e))
+
+
+def _leds_update(hexstr):
+    # "<40 hex>" = SubTxData; QEMU (xdj-board.c (was patch 17)) appends " <2 hex>" = source-key LEDs
+    # (GPIO 162..165: bit0 rekordbox, bit1 MIDI, bit2 USB1, bit3 USB2). Served as one
+    # string: byte 0x14 of the panel's LED array.
+    hexstr = hexstr.strip().lower().replace(" ", "")
+    if len(hexstr) not in (40, 42) or any(c not in "0123456789abcdef" for c in hexstr):
+        return
+    with _leds_cv:
+        if hexstr != _leds["hex"]:
+            if _leds["hex"]:
+                _log_led_diff(_leds["hex"], hexstr)
+            _leds["hex"] = hexstr
+            _leds["seq"] += 1
+            _leds["t"] = time.time()
+            _leds_cv.notify_all()
+
+
+def _leds_file_loop():
+    """File mode: poll the harness's TX file (atomically replaced on each change)."""
+    last = None
+    while True:
+        try:
+            st = os.stat(TX_PATH)
+            key = (st.st_mtime_ns, st.st_size, st.st_ino)
+            if key != last:
+                last = key
+                with open(TX_PATH) as f:
+                    ln = f.read().strip()
+                if ln.startswith("T "):
+                    _leds_update(ln[2:])
+        except Exception:
+            pass
+        time.sleep(0.03)
+
+
+def _repush():
+    time.sleep(0.3)
+    try:
+        with _browse_lock:
+            _push()
+    except Exception:
+        pass
+
+
+def _leds_sock_loop():
+    """Socket mode: read "T <hex>" lines QEMU writes back on the xdjctrl connection.
+    Shares the persistent connection _sock_send uses (one client per chardev)."""
+    buf = b""
+    while True:
+        with _sock_lock:
+            conn = _conn["ctrl"]
+            if conn is None:
+                try:
+                    conn = socket.socket(socket.AF_UNIX)
+                    conn.settimeout(2.0)
+                    conn.connect(CTRL_SOCK)
+                    _conn["ctrl"] = conn
+                    buf = b""
+                    # A (re)started QEMU has no panel state yet: send the full snapshot.
+                    threading.Thread(target=_repush, daemon=True).start()
+                except Exception:
+                    conn = None
+        if conn is None:
+            time.sleep(0.5)
+            continue
+        try:
+            data = conn.recv(4096)
+        except socket.timeout:
+            continue
+        except Exception:
+            data = b""
+        if not data:                      # peer closed / error: drop and reconnect
+            with _sock_lock:
+                if _conn["ctrl"] is conn:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    _conn["ctrl"] = None
+            time.sleep(0.5)
+            continue
+        buf += data
+        while b"\n" in buf:
+            ln, buf = buf.split(b"\n", 1)
+            if ln.startswith(b"T "):
+                _leds_update(ln[2:].decode("ascii", "replace"))
 
 # Browse ROTATE state: the encoder is a free-running 16-bit counter at the
 # subucom frame bytes rbp[0x54]/[0x55] (LE). The firmware reads delta=new-old,
@@ -173,23 +450,117 @@ def _write_key(data):
             pass
 
 
-def _compose_ctrl(lines):
-    """Build the ctrl-file body. Once the browse encoder has moved, the 16-bit
-    counter at 0x54/0x55 MUST be present in EVERY frame: if a later frame drops
-    it, the firmware reads 0x54 jumping back to 0 as a big rotate delta (so e.g.
-    a push scrolls instead of drilling in). The QEMU harness (patch 07, updated)
-    applies one-shot 'b'/'a' presses ON TOP of holds, so we no longer promote
-    them to holds -- they stay one-shots (a sustained hold on the encoder push
-    would trigger the wrong mode) and just ride alongside the held counter."""
-    out = [ln.strip() for ln in lines if ln.strip()]
-    if _browse_active and not any(l.lower().startswith("a 54") for l in out):
+# ---- full panel state -------------------------------------------------------
+# The QEMU harness takes the WHOLE desired frame state per snapshot (a missing line
+# = that field falls back to the auto-level default / 0). So the server keeps the
+# panel's complete state and every write re-sends all of it:
+#   _analog  {off: val16}        every fader/knob the operator has moved (persistent)
+#   _held    {(off, mask): n}    buttons currently held down (any number at once,
+#                                e.g. SHIFT + a pad), OR-merged per byte on output
+#   _switch  {(off, mask): bits} multi-position switches packed into a byte field
+#                                (FX SELECT, CH SELECT, XF CURVE, MIC) -- persistent
+#   _jog     per-deck jog counter / period / direction / touch (see /jog)
+# plus the browse counter and INPUT-SELECT holds kept by the routes below.
+_analog = {}
+_held = {}
+_switch = {}                            # {(off, mask): bits}  multi-position switches
+_JOG_BASE = {1: 0x00, 2: 0x10}          # deck2 = deck1 + 0x10
+# deck-relative: period @0x0c, counter @0x0e, flags @0x10 (bit0 touch, bit1 reverse)
+_jog = {d: {"cnt": 0, "per": 0, "rev": 0, "touch": 0, "active": False, "t": 0.0}
+        for d in _JOG_BASE}
+JOG_TICKS_PER_REV = 1024                # counter ticks per platter turn (model)
+JOG_SPEED_K = 416.67                    # rbp: speed = 416.67 / period  (FUN_00283dc4)
+JOG_NORMAL_RPS = 100.0 / 3 / 60         # 33 1/3 rpm -> firmware speed 1.0
+JOG_IDLE_S = 0.12                       # no motion for this long -> period 0 (stopped)
+
+
+def _jog_lines():
+    out = []
+    for d, j in _jog.items():
+        if not j["active"]:
+            continue
+        b = _JOG_BASE[d]
+        out.append("A %02x %x" % (b + 0x0c, j["per"] & 0xffff))
+        out.append("A %02x %x" % (b + 0x0e, j["cnt"] & 0xffff))
+        flags = (0x01 if j["touch"] else 0) | (0x02 if j["rev"] else 0)
+        if flags:
+            out.append("B %02x %02x" % (b + 0x10, flags))
+    return out
+
+
+def _compose_ctrl(lines=()):
+    """Full snapshot = persistent state + any one-shot lines passed in.
+
+    Persistent state (analog values, held buttons, jog, browse counter, input
+    select) is re-sent on EVERY write: the harness treats the snapshot as the whole
+    truth, so anything omitted would snap back. Once the browse encoder has moved,
+    its 16-bit counter at 0x54/0x55 MUST be in every frame (a drop reads as a huge
+    rotate delta). One-shot 'b'/'a' lines ride on top (the harness fires them once)."""
+    out = ["A %02x %x" % (off, val & 0xffff) for off, val in sorted(_analog.items())]
+    merged = {}
+    for (off, mask) in _held:
+        merged[off] = merged.get(off, 0) | mask
+    for (off, mask), bits in _switch.items():
+        if bits & mask:
+            merged[off] = merged.get(off, 0) | (bits & mask)
+    out += ["B %02x %02x" % (off, m) for off, m in sorted(merged.items())]
+    out += _jog_lines()
+    if _browse_active:
         out.append("A 54 %x" % _browse_counter)
-    # Persistent INPUT-SELECT holds (DECK channels) ride alongside, deduped.
-    have = {l.lower() for l in out}
-    for hl in _input_hold_lines():
-        if hl.lower() not in have:
-            out.append(hl)
+    out += _input_hold_lines()
+    out += [ln.strip() for ln in lines if ln.strip() and ln.strip()[0] in "ab"]
     return "\n".join(out) + "\n"
+
+
+def _apply_lines(lines):
+    """Fold A/B spec lines into the persistent state; return the one-shot lines."""
+    shots = []
+    for ln in lines:
+        parts = ln.split()
+        if len(parts) == 4 and parts[0] == "S":      # S <off> <mask> <bits>
+            try:
+                _switch[(int(parts[1], 16), int(parts[2], 16))] = int(parts[3], 16)
+            except ValueError:
+                pass
+            continue
+        if len(parts) != 3 or parts[0] not in "ABab":
+            continue
+        try:
+            off, val = int(parts[1], 16), int(parts[2], 16)
+        except ValueError:
+            continue
+        if parts[0] == "A":
+            if off == 0x54:
+                continue                    # the browse counter is owned by /browse
+            _analog[off] = val
+        elif parts[0] == "B":
+            _held[(off, val)] = 1
+        else:
+            shots.append(ln)
+    return shots
+
+
+def _push():
+    _write_ctrl(_compose_ctrl())
+
+
+def _jog_idle_loop():
+    """A real jog reports period 0 once the platter stops; model that by zeroing the
+    period JOG_IDLE_S after the last move (the counter keeps its position)."""
+    while True:
+        time.sleep(0.04)
+        now = time.time()
+        with _browse_lock:
+            dirty = False
+            for j in _jog.values():
+                if j["per"] and now - j["t"] > JOG_IDLE_S:
+                    j["per"] = 0
+                    dirty = True
+            if dirty:
+                try:
+                    _push()
+                except Exception:
+                    pass
 
 
 def _parse_ppm(data):
@@ -273,7 +644,7 @@ def grab_raw():
             return None
 
 
-# ---- USB mount (drive_add/device_add on the hub + assert the detect GPIO file) ----
+# ---- USB mount (drive_add/device_add on the hub; the attach itself wakes HOST1) ----
 # Mirrors the app/host `maybe_insert_usb` choreography so a panel LOAD button can mount
 # a disk image (or physical device) on the fly. Over QMP in the .app (--qmp), or the raw
 # HMP monitor in dev (--mon). docs/usb-mount-howto.md / usb-slot-topology.md.
@@ -339,7 +710,7 @@ _usb_cur = {"usb1": None, "usb2": None}
 
 def eject_usb(slot):
     """Detach whatever the panel (or the boot auto-insert) put on this slot."""
-    detect = "/tmp/usb_insert" if slot == "usb1" else "/tmp/usb2_insert"
+    fault = "/tmp/usb_insert" if slot == "usb1" else "/tmp/usb2_insert"
     cur = _usb_cur.get(slot)
     # Candidates: our previous panel insertion + the host's boot auto-insert id.
     pairs = []
@@ -352,7 +723,7 @@ def eject_usb(slot):
     for drive, _dev in pairs:
         _mon_quiet(["drive_del %s" % drive])
     try:
-        os.remove(detect)                        # removal edge for the detect GPIO
+        os.remove(fault)                         # never leave the USB fault flag asserted
     except FileNotFoundError:
         pass
     _usb_cur[slot] = None
@@ -362,7 +733,7 @@ def eject_usb(slot):
 def mount_usb(slot, imgpath, write=False):
     """Insert `imgpath` (file or /dev device) on the given front slot (usb1|usb2),
     ejecting any previous insertion first so re-LOAD works without a duplicate-ID."""
-    port, detect = ("1.2", "/tmp/usb_insert") if slot == "usb1" else ("1.1", "/tmp/usb2_insert")
+    port, fault = ("1.2", "/tmp/usb_insert") if slot == "usb1" else ("1.1", "/tmp/usb2_insert")
     real = os.path.realpath(imgpath)
     # A physical disk must be released by the host OS first (macOS/Linux, best-effort).
     if imgpath.startswith("/dev/"):
@@ -393,8 +764,14 @@ def mount_usb(slot, imgpath, write=False):
     if '"error"' in blob or "failed" in blob or "duplicate" in blob or "in use" in blob:
         raise RuntimeError("monitor rejected insert: %s" % outs)
     _usb_cur[slot] = (did, dev)
-    # Assert the slot's detect GPIO so the firmware resumes HOST1 and mounts it.
-    with open(detect, "wb"):
+    # Do NOT create the xdj-panel.c (was patch 06) file (/tmp/usb*_insert) here. Those GPIOs
+    # (GPIO4_IO30 / GPIO7_IO12) are rbp's active-low USB *fault* flags, not
+    # insert-detect lines; holding one low raises "USB Error. Remove the device."
+    # once the slot mounts. Host1 resume on attach comes from xdj-usbnc.c (was patch 10) (USBNC OWIR).
+    # Clear a stale fault file left by an older build/tool so the flag stays OK.
+    try:
+        os.remove(fault)
+    except FileNotFoundError:
         pass
     return "mounted %s on %s%s" % (os.path.basename(real), slot.upper(),
                                    "" if write else " (read-only)")
@@ -457,6 +834,68 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send_file("calibration.json", base=ASSETS)
             else:
                 self._send(404, "application/json", b"{}")
+        elif path == "/power":
+            st = _power_cmd("status")
+            with _power_lock:
+                pend = dict(_pending_usb)
+            body = {"available": st is not None, "state": (st or "off").split()[0],
+                    "update": bool(st and st.endswith("update")), "pending": pend}
+            self._send(200, "application/json", json.dumps(body).encode())
+        elif path == "/logs.html":
+            self._send_file("logs.html")
+        elif path in ("/log/subucom", "/log/console"):
+            src = path.rsplit("/", 1)[1]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            if src == "console" and not CONSOLE:
+                self.wfile.write(b"data: (no console log: start the panel server with --console)\n\n")
+            nxt = 0
+            try:
+                while True:
+                    with _log_cv:
+                        if _log_next[src] == nxt:
+                            _log_cv.wait(15.0)
+                        out = [ln for i, ln in _logs[src] if i >= nxt]
+                        nxt = _log_next[src]
+                    if out:
+                        self.wfile.write("".join("data: %s\n\n" % ln.replace("\r", "")
+                                                 for ln in out[-LOG_MAX:]).encode())
+                    else:
+                        self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+            except Exception:
+                pass
+        elif path == "/leds":
+            if "once=1" in self.path:
+                with _leds_cv:
+                    body = json.dumps(_leds).encode()
+                self._send(200, "application/json", body)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            seen = -1
+            try:
+                while True:
+                    with _leds_cv:
+                        if _leds["seq"] == seen:
+                            _leds_cv.wait(15.0)
+                        seq, hx = _leds["seq"], _leds["hex"]
+                    if seq != seen and hx:
+                        self.wfile.write(("data: %s\n\n" % hx).encode())
+                    else:
+                        self.wfile.write(b": ping\n\n")      # keep-alive
+                    self.wfile.flush()
+                    seen = seq
+            except Exception:
+                pass                       # client went away
         elif path == "/raw":
             fb = grab_raw()
             if fb:
@@ -472,30 +911,131 @@ class Handler(http.server.BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", 0) or 0)
         body = self.rfile.read(n).decode("utf-8", "replace") if n else ""
         path = self.path.split("?", 1)[0]
+        if path == "/log/note":
+            _logline("subucom", "·  " + body.strip()[:500])
+            self._send(200, "text/plain", b"ok"); return
+        if path in ("/ctrl", "/release", "/input", "/mainkey", "/mainkey_release", "/browse", "/usb"):
+            _logline("subucom", "-> %-16s %s" % (path[1:], " | ".join(
+                ln.strip() for ln in body.strip().split("\n") if ln.strip()) or "(all)"))
+        elif path == "/jog" and "touch" in body:
+            _logline("subucom", "-> jog              " + body.strip())
+        if path == "/power":
+            # Body: "on" | "on update" | "on test" | "off" | "toggle" | "toggle update".
+            w = body.split()
+            cur = _power_cmd("status")
+            if cur is None:
+                self._send(503, "text/plain", b"power control unavailable (not run by xdj-host)"); return
+            want = w[0] if w else "toggle"
+            upd = "update" in w[1:]
+            test = "test" in w[1:] and not upd
+            if want == "toggle":
+                want = "off" if cur.startswith("on") else "on"
+            if want == "on":
+                if test:
+                    # The keys must be down at rbp's first frame: cold boot with them held.
+                    if cur.startswith("on"):
+                        _power_cmd("off")
+                        _leds_off()
+                    with _browse_lock:
+                        _apply_lines(list(TEST_MODE_KEYS))
+                        _push()
+                st = _power_cmd("on update" if upd else "on")
+                if test:
+                    threading.Thread(target=_test_mode_boot, args=(time.time(),), daemon=True).start()
+                mode = " (firmware update mode)" if upd else " (test mode)" if test else ""
+                _logline("subucom", "·  POWER ON" + mode)
+                _logline("console", "──────── power on%s ────────" % mode)
+                with _power_lock:
+                    has_pending = bool(_pending_usb)
+                if has_pending:
+                    threading.Thread(target=_insert_pending, args=(upd,), daemon=True).start()
+            else:
+                st = _power_cmd("off")
+                _leds_off()
+                with _sock_lock:
+                    for k in ("ctrl", "key"):
+                        try:
+                            if _conn[k]:
+                                _conn[k].close()
+                        except Exception:
+                            pass
+                        _conn[k] = None
+                _logline("subucom", "·  POWER OFF")
+                _logline("console", "──────── power off ────────")
+            self._send(200, "text/plain", (st or "?").encode()); return
+        if path == "/usb":
+            parts = body.strip().split(" ", 1)
+            if (len(parts) == 2 and parts[0] in ("usb1", "usb2") and os.path.exists(parts[1].strip())
+                    and _power_cmd("status") == "off"):
+                with _power_lock:
+                    _pending_usb[parts[0]] = parts[1].strip()
+                self._send(200, "text/plain", ("%s queued: %s (inserted after power on)"
+                                               % (parts[0], parts[1].strip())).encode()); return
         if path == "/ctrl":
-            # one spec per line; multiple lines = simultaneous holds (e.g. a tempo
-            # fader driving both its complementary frame fields at once).
+            # One spec per line. A = set an analog value (persists), B = press and
+            # HOLD a button bit (until /release names it), a/b = one-shot,
+            # S <off> <mask> <bits> = set a multi-position switch field (persists). Several
+            # lines = simultaneous (e.g. the tempo fader's two complementary fields).
             lines = [ln.strip() for ln in body.strip().split("\n") if ln.strip()]
             if lines:
                 try:
                     with _browse_lock:
-                        _write_ctrl(_compose_ctrl(lines))
+                        shots = _apply_lines(lines)
+                        _write_ctrl(_compose_ctrl(shots))
                     self._send(200, "text/plain", b"ok")
                 except Exception as e:
                     self._send(500, "text/plain", str(e).encode())
             else:
                 self._send(400, "text/plain", b"empty")
         elif path == "/release":
+            # Body = the B lines to let go of (one button's bits). Empty body =
+            # release EVERY held button (the panel's "Release all"). Analog values,
+            # jog, browse counter and input select are kept.
             try:
                 with _browse_lock:
-                    # Keep persistent state (browse counter + INPUT-SELECT holds);
-                    # only the momentary control is dropped. _write_ctrl handles the
-                    # empty-snapshot release for both transports.
-                    _write_ctrl(_compose_ctrl([]))
+                    names = [ln.split() for ln in body.strip().split("\n") if ln.strip()]
+                    if not names:
+                        _held.clear()
+                        for j in _jog.values():
+                            j["touch"] = 0
+                    for parts in names:
+                        if len(parts) == 3 and parts[0] in "Bb":
+                            try:
+                                _held.pop((int(parts[1], 16), int(parts[2], 16)), None)
+                            except ValueError:
+                                pass
+                    _push()
             except Exception as e:
                 self._send(500, "text/plain", str(e).encode())
                 return
             self._send(200, "text/plain", b"ok")
+        elif path == "/jog":
+            # Jog wheel. Body: "<deck> move <degrees> <seconds>"  (platter turned by
+            # <degrees> over <seconds>; +cw) or "<deck> touch <0|1>". rbp reads a
+            # 16-bit position counter (deck +0x0e; it diffs successive values), a
+            # pulse period (+0x0c; speed = 416.67/period, 0 = stopped) and flags
+            # (+0x10: bit0 touch, bit1 reverse) -- FUN_00283dc4, code 0x4306.
+            parts = body.strip().split()
+            try:
+                d = int(parts[0]); j = _jog[d]
+                with _browse_lock:
+                    if parts[1] == "touch":
+                        j["touch"] = 1 if parts[2] == "1" else 0
+                        j["active"] = True
+                    elif parts[1] == "move":
+                        deg, dt = float(parts[2]), max(1e-3, float(parts[3]))
+                        ticks = int(round(deg / 360.0 * JOG_TICKS_PER_REV))
+                        if ticks:
+                            rps = abs(deg) / 360.0 / dt
+                            speed = rps / JOG_NORMAL_RPS
+                            j["cnt"] = (j["cnt"] + ticks) & 0xffff
+                            j["per"] = max(1, min(0xfffe, int(round(JOG_SPEED_K / max(speed, 1e-3)))))
+                            j["rev"] = 1 if ticks < 0 else 0
+                            j["t"] = time.time(); j["active"] = True
+                    _push()
+                self._send(200, "text/plain", b"ok")
+            except (IndexError, KeyError, ValueError):
+                self._send(400, "text/plain", b"use '<1|2> move <deg> <sec>' or '<1|2> touch <0|1>'")
         elif path == "/input":
             # INPUT SELECT (per-channel source switch): body "<ch> DECK|LINE".
             # ch 0 = deck1/CH1, 1 = deck2/CH2. Persistent hold; default DECK.
@@ -505,10 +1045,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     _input_src[int(parts[0])] = 1 if parts[1] == "DECK" else 0
                 try:
                     with _browse_lock:
-                        # preserve any currently-held lines; swap only the source holds
-                        cur = [l for l in _read_ctrl().splitlines() if l.strip()]
-                        kept = [l for l in cur if l.lower()[:4] not in ("b 33", "b 43")]
-                        _write_ctrl(_compose_ctrl(kept))
+                        _push()
                     self._send(200, "text/plain", b"ok")
                 except Exception as e:
                     self._send(500, "text/plain", str(e).encode())
@@ -553,9 +1090,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 # 0 too -- reset to match, else the first write is one huge delta that
                 # jumps to the list end.
                 with _browse_lock:
-                    held = _read_ctrl().lower()
-                    if "a 54" not in held:
-                        _browse_counter = 0
                     _browse_active = True
                 # Step one detent at a time, re-acquiring the lock each step so a push
                 # (/ctrl) can interleave and still see the current counter.
@@ -563,8 +1097,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     with _browse_lock:
                         _browse_counter = (_browse_counter + step) & 0xffff
                         try:
-                            _write_ctrl("\n".join(
-                                ["A 54 %x" % _browse_counter] + _input_hold_lines()) + "\n")
+                            _push()
                         except Exception:
                             break
                     time.sleep(0.045)
@@ -615,7 +1148,21 @@ def main():
     ap.add_argument("--key-sock", default=None,
                     help="QEMU xdjkey chardev socket (push mainkey GPIO int here "
                          "instead of /tmp/mainkey)")
+    ap.add_argument("--console", default=None,
+                    help="guest console log file to show in View > System log (default: "
+                         "console.log next to --ctrl-sock, else /tmp/xdj_console.log)")
+    ap.add_argument("--power-sock", default=None,
+                    help="xdj-host power control socket (default: power.sock beside --ctrl-sock)")
     args = ap.parse_args()
+    global CONSOLE, POWER_SOCK
+    POWER_SOCK = args.power_sock or (os.path.join(os.path.dirname(args.ctrl_sock), "power.sock")
+                                     if args.ctrl_sock else None)
+    CONSOLE = args.console or (os.path.join(os.path.dirname(args.ctrl_sock), "console.log")
+                               if args.ctrl_sock and (os.path.exists(os.path.join(
+                                   os.path.dirname(args.ctrl_sock), "console.log"))
+                                   or os.path.exists(POWER_SOCK or "/nonexistent")
+                                   or os.environ.get("XDJ_FW_DIR"))
+                               else "/tmp/xdj_console.log")
     MON = args.mon
     QMP = args.qmp
     CTRL_SOCK = args.ctrl_sock
@@ -635,6 +1182,11 @@ def main():
             print("input-select default: CH1=DECK CH2=DECK")
         except Exception:
             pass
+        threading.Thread(target=_jog_idle_loop, daemon=True).start()
+        threading.Thread(target=_console_loop, daemon=True).start()
+        print("console log: %s" % CONSOLE)
+        threading.Thread(target=_leds_sock_loop if CTRL_SOCK else _leds_file_loop,
+                         daemon=True).start()
         print("Ctrl-C to stop.")
         try:
             httpd.serve_forever()

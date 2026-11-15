@@ -49,6 +49,15 @@ The ISO holds the device rootfs/update payload — the Linux kernel, the initram
 main application **`rbp`** (ARM32 ELF, the thing the emulator boots and this project reverse-
 engineers). Extract it to get a fresh `rbp`/kernel; `build/extract/rbp` is the analyzed copy.
 
+### Update flow on the device (initramfs) — `docs/service-modes.md`
+ISO top level: `update` (the ARM updater, not stripped), `mot2bin`, `images/` (`uImage`,
+`rootfs.cramfs`, `pioneer.tar.gz`, `gui.tar.gz`, `data.tar.gz`, `u-boot.bin.nand`, `fw_env.txt`,
+`PANELCOM.mot` = sub-ucom firmware, `subucom.rev` = **0.35**, `release.txt` = 2.21), `gui/`, `lib/`.
+Update mode = initramfs `/init` (embedded cpio in the kernel, `070701` at vmlinux+0x25b64) sees
+GPIO3_IO30 HIGH (sub-ucom update request, USB STOP + RELOOP at power-on) or `boot_type=update` →
+D001 screen → `mount_nandupdate` (USB1, `XDJRX.UPD`) → `check_sig` → `decrypt_update` → `update`
+(writes NAND MTDs, reflashes the sub-ucom over `/dev/subucom_spi1.0`). Emulator: `XDJ_BOOT_UPDATE=1`.
+
 ## Building a custom firmware
 `decrypt`/`extract` → modify the ISO tree → rebuild an ISO9660 (preserve Rock Ridge
 names/symlinks) → `pack` with the correct `--model`. The device verifies the footer CRC32

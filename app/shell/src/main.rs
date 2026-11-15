@@ -6,7 +6,8 @@
 //!   recorded in app-data, or the dev build/qemu layout) it boots straight into it.
 //!   Otherwise it shows a drop target.
 //! * Drag-drop a `.UPD`/`.zip` onto the window -> the host prepares it (decrypt ->
-//!   boot blobs -> nand.img, cached in app-data by firmware hash; `xdj-host prep`)
+//!   boot blobs + update stick, cached in app-data by firmware hash; `xdj-host prep`;
+//!   xdj-host then provisions the emulated NAND with the firmware's own ALL update)
 //!   with progress, remembers it as last-used, then boots it.
 //! * On exit it SIGTERMs `xdj-host` so QEMU + the sidecar + sockets tear down.
 //!
@@ -53,9 +54,13 @@ fn last_fw_file() -> PathBuf {
     app_data_root().join("last-firmware.txt")
 }
 
-/// A firmware dir is usable if it has the boot blobs + nand.img.
+/// A firmware dir is usable if it holds what `xdj-host prep` writes (boot blobs, the
+/// decrypted ISO, the update stick) and comes from the current prep pipeline
+/// (`prep-vN.stamp` = xdj-host's PREP_STAMP). An older cache fails this, so the drop
+/// screen comes back and re-dropping the firmware rebuilds it. Whether the unit's NAND
+/// is installed yet is xdj-host's business (it provisions a blank unit on its own).
 fn fw_complete(dir: &Path) -> bool {
-    ["vmlinux.bin", "tramp.bin", "atags.bin", "nand.img"]
+    ["vmlinux.bin", "tramp.bin", "atags.bin", "fw.iso", "update-stick.img", "prep-v3.stamp"]
         .iter()
         .all(|f| dir.join(f).exists())
 }
@@ -157,6 +162,9 @@ fn start_host(state: &AppState, fw_dir: &Path) -> Result<(), String> {
     // when launched from Finder (where stderr would otherwise go to the system log).
     let mut cmd = host_command(&state.repo);
     cmd.env("XDJ_FW_DIR", fw_dir);
+    // Start powered off: the panel's power button (or File > Power, or the
+    // "Power On at Launch" preference) turns the emulator on via the sidecar.
+    cmd.env("XDJ_AUTOSTART", "0");
     let _ = std::fs::create_dir_all(app_data_root());
     if let Ok(f) = std::fs::File::create(app_data_root().join("host.log")) {
         if let Ok(f2) = f.try_clone() {
@@ -211,8 +219,8 @@ fn show_emulator(app: &tauri::AppHandle) {
     } else if let Err(e) =
         WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
             .title("Pioneer XDJ-RX")
-            .inner_size(1480.0, 900.0)
-            .min_inner_size(1000.0, 680.0)
+            .inner_size(1480.0, 1480.0 * DECK_AR.1 / DECK_AR.0)
+            .min_inner_size(1000.0, 1000.0 * DECK_AR.1 / DECK_AR.0)
             .build()
     {
         eprintln!("[shell] could not open emulator window: {e}");
@@ -220,6 +228,73 @@ fn show_emulator(app: &tauri::AppHandle) {
     }
     if let Some(s) = app.get_webview_window("setup") {
         let _ = s.close();
+    }
+}
+
+/// The XDJ-RX LCD framebuffer (rbp draws 800x480; QEMU's display is the same size).
+const SCREEN_FB: (f64, f64) = (800.0, 480.0);
+
+/// Lock the pop-out screen window (label `screen`, opened by the panel's ⧉ Screen button
+/// through the JS API) to the framebuffer's aspect ratio, so resizing never letterboxes.
+/// Tauri has no aspect-ratio option; on macOS this is NSWindow.contentAspectRatio, which
+/// constrains the content area (not the title bar) during live resize.
+fn lock_screen_aspect(window: &tauri::Window) {
+    lock_aspect(window, SCREEN_FB.0, SCREEN_FB.1);
+}
+
+/// The virtual deck's visible canvas (panel.html VW x VH = design W x H minus CROP on each
+/// side); the main window is locked to it so the deck fills the window with no letterbox.
+const DECK_AR: (f64, f64) = (2110.0, 1152.0);
+
+/// Lock a window's content area to w:h during live resize (macOS NSWindow.contentAspectRatio).
+fn lock_aspect(window: &tauri::Window, ar_w: f64, ar_h: f64) {
+    #[cfg(target_os = "macos")]
+    {
+        let w = window.clone();
+        let _ = window.run_on_main_thread(move || {
+            if let Ok(ptr) = w.ns_window() {
+                // SAFETY: ns_window() is this window's live NSWindow; we're on the main thread.
+                let ns: &objc2_app_kit::NSWindow = unsafe { &*(ptr as *const objc2_app_kit::NSWindow) };
+                ns.setContentAspectRatio(objc2_foundation::NSSize::new(ar_w, ar_h));
+            }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, ar_w, ar_h);
+}
+
+/// Keep a window's content at its aspect ratio after ANY resize. `contentAspectRatio`
+/// (lock_aspect) only constrains live edge-drags; window tiling, the green button's
+/// fill/zoom and programmatic sizes bypass it and left the deck letterboxed with empty
+/// side bands. Shrink to the largest w:h rect inside the size the user chose (never
+/// grow past a tile or the screen). Zoomed ("Fill") windows are corrected too; only
+/// full screen is left alone (macOS owns the size; the page fills the bands).
+fn snap_aspect(window: &tauri::Window, ar_w: f64, ar_h: f64) {
+    if window.is_fullscreen().unwrap_or(false) {
+        return;
+    }
+    let Ok(sz) = window.inner_size() else { return };
+    let (w, h) = (sz.width as f64, sz.height as f64);
+    if w < 1.0 || h < 1.0 {
+        return;
+    }
+    // The page only gets the webview's area; on macOS the reported inner size can include
+    // the title bar (~30 px), so target the ratio for the webview and carry the difference.
+    let (ew, eh) = window
+        .webviews()
+        .first()
+        .and_then(|v| v.size().ok())
+        .map(|v| ((w - v.width as f64).max(0.0), (h - v.height as f64).max(0.0)))
+        .unwrap_or((0.0, 0.0));
+    let (cw, ch) = (w - ew, h - eh);
+    let (mut nw, mut nh) = (cw, (cw * ar_h / ar_w).round());
+    if nh > ch {
+        nh = ch;
+        nw = (ch * ar_w / ar_h).round();
+    }
+    let (nw, nh) = (nw + ew, nh + eh);
+    if (nw - w).abs() > 2.0 || (nh - h).abs() > 2.0 {
+        let _ = window.set_size(tauri::PhysicalSize::new(nw as u32, nh as u32));
     }
 }
 
@@ -400,6 +475,13 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState { repo: repo.clone(), host: Mutex::new(None), busy: Mutex::new(false) })
         .invoke_handler(tauri::generate_handler![set_key_hex, key_present, browse_firmware, browse_key])
+        .on_page_load(|webview, _| {
+            match webview.label() {
+                "screen" => lock_screen_aspect(&webview.window()),
+                "main" => lock_aspect(&webview.window(), DECK_AR.0, DECK_AR.1),
+                _ => {}
+            }
+        })
         .setup(move |app| {
             match &startup_fw {
                 Some(dir) => {
@@ -429,10 +511,21 @@ fn main() {
                         }
                     }
                 }
+                WindowEvent::Resized(_) => match window.label() {
+                    "main" => snap_aspect(window, DECK_AR.0, DECK_AR.1),
+                    "screen" => snap_aspect(window, SCREEN_FB.0, SCREEN_FB.1),
+                    _ => {}
+                },
                 // Closing the emulator window stops the whole emulator stack now
                 // (don't leave a headless QEMU running).
                 WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed => {
                     if window.label() == "main" {
+                        // the pop-out screen and log windows (opened from the panel) go with it
+                        for (label, w) in window.app_handle().webview_windows() {
+                            if label == "screen" || label.starts_with("log-") {
+                                let _ = w.close();
+                            }
+                        }
                         stop_host(&window.app_handle().state::<AppState>());
                     }
                 }
