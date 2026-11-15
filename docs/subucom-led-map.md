@@ -59,6 +59,7 @@ rekordbox USB.
 | `0x0a.4` | CUE CH2 (headphone cue) | ✅ |
 | `0x0a.5` | CUE CH1 | ✅ |
 | `0x0a.6` | ? | constant 1 so far |
+| `0x0a.7` | MASTER REC | ✅ blinks while recording to USB2: ~0.5 s on / 0.5 s off (sampled at 50 ms); off when stopped. Panel: red dot on the button, mirrors the blink |
 | `0x0c–0x0d` | **CH2 level meter** | ✅ pre-fader |
 | `0x0e–0x0f` | **CH1 level meter** | ✅ pre-fader: follows TRIM, ignores the channel fader |
 | `0x10–0x11` | ? | always 0 so far |
@@ -87,9 +88,10 @@ rekordbox … bit3 USB2); `server.py` passes 42 hex through and the panel reads 
 DECK 1/2 and TIME MODE showed no GPIO-output change (not checked further).
 
 ## Open items
+- **`0x0a.7` = MASTER REC** (on/blinking while recording to USB2; verified 2026-11-15).
 - Identify `0x01.0`, `0x03.7`, `0x0a.6`, `0x12`, and `0x13.4/.5/.7`.
 - Test **Mode 5** (KEY/LED TEST) is the oracle for the rest: the service manual names LEDs not
-  mapped yet — USB1/2 STOP, MASTER REC, BROWSE, TAGLIST, INFO, MENU, TAP, LOAD1/2 — candidates for
+  mapped yet — USB1/2 STOP, BROWSE, TAGLIST, INFO, MENU, TAP, LOAD1/2 — candidates for
   the unknown bits (`docs/service-modes.md`).
 - `0x0b.7` went on after the first USB1 press with a stick inserted (2026-11-15) — candidate USB
   indicator; not yet characterised.
