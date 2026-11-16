@@ -53,6 +53,28 @@ A NAND boot **needs ≥ 2 CPUs** (single-core makes `apl_start` run `rbp_solo`, 
 install). A USER update (type `0x10`) on a blank unit leaves no `data` volume → rbp hangs on the
 splash; provision with ALL (`20`).
 
+## Network (eth0 on the LAN)
+The FEC (`eth0`) is backed by user-mode NAT unless the optional **socket_vmnet bridge** is installed
+(`tools/net/install-vmnet-bridge.sh`, one-time, sudo; README "Networking"). Then the app and
+`qemu/watch.sh` attach eth0 to `/var/run/socket_vmnet.bridged.<ifname>` with
+`-netdev stream,…,addr.type=unix -net nic,netdev=xdjnet`, and the unit gets a lease from the LAN's
+router. QEMU still runs as the user (socket group `staff`); never use QEMU's own `vmnet-*`
+backends — they need root. Select: app `XDJ_NET`, `watch.sh` `XDJNIC` = `auto` (default: bridge if
+its socket exists, else the Mac-only `/var/run/socket_vmnet`, else NAT) | `user` | `/path/to/socket`.
+- **rekordbox on the same Mac (LINK): use `install-vmnet-bridge.sh mac`** — vmnet shared mode, Mac =
+  `192.168.105.1` (bridge100), unit leased `192.168.105.x` by macOS bootpd, broadcasts pass, no
+  LAN needed (works on Wi-Fi). A LAN bridge never lets the host itself see its guest anyway.
+  rekordbox does not link yet (the unit announces on :50000; docs/emulator-status.md "Network").
+  The debug launcher stays on NAT.
+- Verify: the unit's IP is in the console (`udhcpc … Lease of … obtained`) / the router's lease list.
+  MAC is `fec_mac=` from the NAND env's bootargs (stock `00:04:9f:02:68:5e`), so two units bridged
+  onto one LAN collide.
+- **Wi-Fi bridge: no DHCP lease** (observed): inbound LAN multicast reaches eth0, the DISCOVERs
+  leave QEMU, no OFFER returns — with the stock MAC and with vmnet's assigned MAC alike. Bridge a
+  wired interface. Capture eth0 without root: QMP `object-add filter-dump,id=d,netdev=xdjnet,file=…`.
+- Test without the daemon: any unix stream server speaking 4-byte big-endian length-prefixed
+  Ethernet frames stands in for socket_vmnet (point `XDJ_NET` at it; keep the path ≤ 104 chars).
+
 ## Control sockets (debug launcher)
 - Monitor (HMP): `tools/xdj-panel/debug/mon.py "<cmd>"` → `/tmp/d_mon4.sock`
   (`screendump`, `device_add`, `xp/1wx <addr>`, `info usb`, `cont`).

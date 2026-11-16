@@ -58,7 +58,9 @@ window. Architecture: **`docs/standalone-app.md`**. **Never patches `rbp`/kernel
 - Env: `XDJ_RESOURCES` (packaged root) / `XDJ_REPO` (dev root); `XDJ_FW_DIR` (prepared dir),
   `XDJ_NAND`, `XDJ_QEMU`, `XDJ_PANEL_PORT`; `XDJ_PARENT_PID` (shell PID, for orphan cleanup);
   `XDJ_USB`/`XDJ_USB_SLOT`/`XDJ_USB_DELAY`/`XDJ_USB_WRITE` (boot auto-insert); `XDJ_RUNTIME_DIR`,
-  `XDJ_VNC_WS_PORT`, `XDJ_AUTOSTART`, `XDJ_FORCE_SETUP`. The panel finds its bundled assets itself.
+  `XDJ_VNC_WS_PORT`, `XDJ_AUTOSTART`, `XDJ_FORCE_SETUP`, `XDJ_NET` (eth0 backend, chosen per
+  power-on by `net_backend()`: `auto` = the optional socket_vmnet LAN bridge if its socket exists,
+  else user NAT; `user`; or a socket path — skill run-xdj-emulator "Network"). The panel finds its bundled assets itself.
   Firmware key: `app-data/key/aes256.key`, content-sniffed
   (64-hex → `XDJRX_AES_KEY`, else `--key-file`); **never bundled**, falls back to repo `.env` in dev.
 

@@ -111,14 +111,25 @@ loads the rekordbox library. Recipe and troubleshooting: [usb.md](usb.md).
   panel's eject handles this, otherwise reboot.
 
 ## Network
-🔶 The i.MX6 FEC is modelled and `eth0` works; rekordbox LINK over the LAN is untested.
-- Backend: user-mode NAT by default; `XDJNIC=bridged` (or a literal QEMU nic spec) puts the device
-  on the LAN (`qemu/watch.sh`; macOS vmnet needs root, `run.sh` elevates only that launch).
+🔶 The i.MX6 FEC is modelled and `eth0` works; rekordbox LINK does not connect yet.
+- Backend: user-mode NAT, or the host's LAN / a Mac-only network (`mac`, for rekordbox on the
+  same Mac) through the optional socket_vmnet daemon
+  (`tools/net/install-vmnet-bridge.sh`); the app and `qemu/watch.sh` pick the bridge when its
+  socket exists (`XDJ_NET` / `XDJNIC`: `auto` | `user` | socket path). QEMU runs as the user in
+  both. README "Networking".
 - `eth0` gets a DHCP lease on both boots: on a NAND unit rbp starts `udhcpc` itself once it is
   up (console: `udhcpc … Lease of 10.0.2.15 obtained`); the SD test bed (`qemu/build-nand.py`) also
   adds a backgrounded `udhcpc` to apl_start.
-- Open: enable rekordbox LINK from rbp's menu and check the library link with a rekordbox PC on the
-  LAN (rbp's link handler: `LnkHand`). The target is the rekordbox library link, not Pro DJ Link.
+- Mac-only network (`mac`): the unit leases `192.168.105.2` from macOS (Mac = `192.168.105.1` on
+  `bridge100`), answers ping, and broadcasts its device announcements to `192.168.105.255:50000`
+  from boot. rekordbox on the same Mac does not link to it; the cause is not yet investigated.
+- LAN bridge over Wi-Fi: inbound LAN traffic reaches `eth0` and the DHCP DISCOVERs leave QEMU, but
+  no OFFER comes back (stock MAC and vmnet's assigned MAC alike). Use a wired interface.
+- Capture `eth0` without root: QMP `object-add filter-dump,id=d,netdev=xdjnet,file=<pcap>`.
+- Open: get rekordbox LINK to connect — compare the unit's port-50000 announcements and what
+  rekordbox expects (a capture of a real unit or rekordbox's own traffic on `bridge100`), and rbp's
+  link handler (`LnkHand`). The target is the rekordbox library link, not Pro DJ Link between
+  players.
 
 ## Firmware update, NAND unit, desktop app
 ✅ The full firmware update (SUB + MAIN) runs Pioneer's own updater to completion, and a unit boots

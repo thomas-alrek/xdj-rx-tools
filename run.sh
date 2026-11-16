@@ -9,17 +9,11 @@
 # just relaunches. Needs: python3, curl, e2fsprogs (for the nand image), and a C
 # toolchain + Homebrew (build-qemu.sh pulls meson/ninja). macOS or Linux.
 #
-# Networking: by default eth0 is on user-mode NAT, so `./run.sh` just opens the
-# live UI window as you with no password — the fast path to see the device run.
-# To put the device on your real LAN (so a rekordbox PC can reach it for library
-# LINK) set XDJNIC=bridged; on macOS vmnet needs root for an unsigned qemu, so
-# run.sh keeps the *build* steps unprivileged and elevates only that launch.
-# (LINK is a menu action in the app and needs the panel buttons, so bridged is
-# not useful yet — hence it's opt-in, not the default.)
+# Networking: the unit joins your LAN when the optional socket_vmnet bridge is
+# installed (tools/net/install-vmnet-bridge.sh, one-time); otherwise it is on QEMU's
+# private user-mode NAT. Either way the emulator runs as you (XDJNIC, qemu/watch.sh).
 #
 #   ./run.sh                 # build + launch the UI window as you (no sudo)
-#   XDJNIC=bridged ./run.sh  # device on your LAN for rekordbox (sudo at launch)
-#   sudo ./run.sh            # also fine: builds drop back to your user, launch is root
 #
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -75,23 +69,7 @@ ls "$Q"/../qemu-src/*/build/qemu-system-arm >/dev/null 2>&1 || { echo "==> build
 # 6. Build the nand image from the firmware's own rootfs payloads (pure Python + e2fsprogs)
 [ -f "$Q/nand.img" ] || { echo "==> building nand.img"; asuser bash qemu/build-nand.sh; }
 
-# 7. Launch. Default: open the live UI window as *you* — user-mode NAT, no
-#    password. That's the fast path to just see the device running. Opt into
-#    bridged LAN (so a rekordbox PC on your LAN can reach the device for LINK)
-#    with XDJNIC=bridged; on macOS vmnet needs root, so we elevate only the
-#    launch (one password prompt) while the builds above stayed yours.
-case "${XDJNIC:-}" in
-  ""|user)
-    echo "==> launching emulator — a window opens; boot to the UI takes ~60–90s"
-    echo "    (a black window is normal at first). Close the window or Ctrl-A X to quit."
-    exec qemu/watch.sh "$@" ;;
-  *)
-    if [ "$(id -u)" = 0 ]; then
-      exec qemu/watch.sh "$@"
-    elif [ "$(uname)" = "Darwin" ]; then
-      echo "==> launching emulator (sudo for bridged LAN networking; unset XDJNIC to skip)"
-      exec sudo -E XDJNIC="$XDJNIC" qemu/watch.sh "$@"
-    else
-      exec qemu/watch.sh "$@"
-    fi ;;
-esac
+# 7. Launch, as you.
+echo "==> launching emulator — a window opens; boot to the UI takes ~60–90s"
+echo "    (a black window is normal at first). Close the window or Ctrl-A X to quit."
+exec qemu/watch.sh "$@"
