@@ -85,20 +85,30 @@ and eject, so a stale file can't leave a slot faulted.
 - **USB1 / USB2 LOAD** (panel buttons / the native menu) → `POST /usb <usb1|usb2> <path>` →
   `app/host/src/panel.rs` stages a space-free symlink (`/tmp/xdjpanel_<slot>.img`; HMP
   `drive_add` doesn't quote paths), then over QMP runs
-  `drive_add 0 if=none,…,format=raw,snapshot=on` + `device_add usb-storage,bus=usb-bus.1,
-  port=<1.2|1.1>,…,removable=on`. A disk image or a host `/dev/diskN` (unmounted on the host
-  first) both work.
+  `drive_add 0 if=none,…,format=raw` + `device_add usb-storage,bus=usb-bus.1,
+  port=<1.2|1.1>,…,removable=on`. A disk image or a host `/dev/diskN` both work.
 - **Re-load ejects first**: USB STOP on the unit only unmounts in the firmware; the QEMU device
-  stays plugged, so a new LOAD `device_del`s the previous one.
-- **Read-only**: panel loads are always `snapshot=on` — the guest can write (e.g. MASTER REC),
-  but the writes are discarded when QEMU exits.
+  stays plugged, so a new LOAD `device_del`s the previous one. Loading the image/stick that is in
+  the *other* slot moves it (ejects it there first): its drive holds the image's write lock.
+  The new backing is checked before anything is ejected, so a failed load keeps the slot's stick,
+  and a load whose `device_add` fails removes its drive again (no orphan holding the lock).
+  Loads run one at a time. A failed load shows a native error dialog in the app (queued loads:
+  via the `alerts` list in `GET /power`).
+- **Opened in macOS**: an image attached in macOS (opened in Finder) is ejected there first
+  (`hdiutil info` → `diskutil eject`); if a volume on it is busy, the load fails and says so.
+- **Read/write**: every insert (panel, MCP, boot-time, update stick) writes straight to the image or
+  device — MASTER REC recordings, rekordbox data and the updater's writes stay on it. Before the
+  attach the host (`prepare_usb_backing`) unmounts a `/dev/diskN` on the host (the guest must be
+  its only writer; a busy volume fails the load) and checks the image or device opens read/write
+  (macOS makes a removable disk's node the console user's — no root needed). Right after the
+  unmount, disk arbitration holds the device briefly, so `attach_usb_drive` retries a
+  `drive_add` that fails with "Resource busy". Eject the slot (or power off) before using the stick on the host again.
 - **Loaded while powered off**: the load is **queued** (`GET /power` shows it under `pending`)
   and inserted once the guest is ready — `Resolve xrun` on the console + 6 s for a normal boot, or
   the update initramfs' `USB update mount` + 2 s in firmware update mode.
 - **Boot-time insert (CLI use)**: `xdj-host` reads `XDJ_USB=<image|/dev/diskN>`,
   `XDJ_USB_SLOT=usb1|usb2` (default `usb2`), `XDJ_USB_DELAY=<s>` (settle after the
-  `Resolve xrun` marker, default 6) and `XDJ_USB_WRITE=1` (persist writes instead of
-  `snapshot=on`).
+  `Resolve xrun` marker, default 6).
 - Firmware provisioning and *Install Firmware Update* put their update stick on **USB1** — the
   slot the update screen asks for ([firmware-update-and-nand.md](firmware-update-and-nand.md)).
 
@@ -114,7 +124,7 @@ What the firmware does with the slots:
 attach it —
 
 ```
--drive if=none,id=usbstick,file=test/usb/<image>.img,format=raw,snapshot=on   # XDJUSB overrides; default: the first test/usb/*.img
+-drive if=none,id=usbstick,file=test/usb/<image>.img,format=raw   # read/write; XDJUSB overrides; default: the first test/usb/*.img
 -device usb-hub,bus=usb-bus.1,port=1,id=xdjhub
 ```
 
@@ -132,7 +142,7 @@ line** — that is a cold-plug.
    # USB2 — the launch-time backend
    device_add usb-storage,bus=usb-bus.1,port=1.1,drive=usbstick,id=xdjusb,removable=on
    # USB1 — add a second backend first (absolute path)
-   drive_add 0 if=none,id=usbstick2,file=/abs/path/test/usb/<image>.img,format=raw,snapshot=on
+   drive_add 0 if=none,id=usbstick2,file=/abs/path/test/usb/<image>.img,format=raw
    device_add usb-storage,bus=usb-bus.1,port=1.2,drive=usbstick2,id=xdjusb1,removable=on
    ```
    Over QMP the same lines go through `human-monitor-command` (what the app does). Note that HMP

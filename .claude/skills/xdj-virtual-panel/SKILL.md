@@ -161,7 +161,13 @@ a typed-path prompt), then POSTs `<slot> <path>` to `/usb`. `mount_usb()`:
    auto-insert id) and removes any stale `xdj-panel.c` fault file — USB STOP is only a firmware unmount, the QEMU
    device stays plugged, so a second LOAD would hit "Duplicate ID" / port-in-use.
 2. Symlinks the image to a space-free path, `drive_add`+`device_add` on the hub (port **1.2** = usb1,
-   **1.1** = usb2) with a **fresh unique id**, read-only (`snapshot=on`) by default.
+   **1.1** = usb2) with a **fresh unique id**, **read/write** (no `snapshot`; `prepare_usb_backing` first
+   unmounts a `/dev/diskN` on the host, ejects an image macOS has attached, and checks it opens
+   read/write — all *before* ejecting the slot, so a failed load keeps its stick; the drive_add
+   is retried on "Resource busy" (disk arbitration right after an unmount), a failed device_add
+   drive_dels its drive, and the same backing in the other slot is moved (write lock). Loads are
+   serialized (`usb_op`). Failures → native error dialog (`alertError`; queued loads via
+   `GET /power` `alerts`).
 3. Does **not** write `/tmp/usb_insert` / `/tmp/usb2_insert` (it removes any stale one). Those
    `xdj-panel.c` files drive rbp's active-low USB **fault** flags — asserting one causes "USB Error.
    Remove the device." The attach alone wakes HOST1 (`xdj-usbnc.c`). Mirrors the host's `maybe_insert_usb`

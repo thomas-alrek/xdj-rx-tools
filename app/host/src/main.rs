@@ -904,13 +904,68 @@ async fn wait_console_marker(path: &Path, marker: &str, timeout: Duration) -> bo
     false
 }
 
-/// Unmount a host disk so the guest is the only writer (snapshot=on already keeps
-/// the backing read-only, but a mounted host volume is a second writer).
-fn unmount_host_disk(dev: &str) {
-    #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("diskutil").arg("unmountDisk").arg(dev).status();
-    #[cfg(target_os = "linux")]
-    let _ = std::process::Command::new("umount").arg(dev).status();
+/// Make a USB backing ready for a read/write attach (every slot is read/write, like a
+/// real stick: MASTER REC, rekordbox exports and the updater write to it).
+/// - A host device (`/dev/…`) is unmounted on the host, so the guest is its only writer.
+///   macOS makes a removable disk's node the console user's, so no root is needed.
+/// - An image that macOS has attached (opened in Finder) is ejected there first: its
+///   disk-image service holds the file, and QEMU needs it exclusively to write.
+/// - Either must open read/write.
+pub(crate) fn prepare_usb_backing(src: &str) -> Result<(), String> {
+    let path = Path::new(src);
+    std::fs::metadata(path).map_err(|e| format!("{src}: {e}"))?;
+    if src.starts_with("/dev/") {
+        #[cfg(target_os = "macos")]
+        let st = std::process::Command::new("diskutil").arg("unmountDisk").arg(src).status();
+        #[cfg(not(target_os = "macos"))]
+        let st = std::process::Command::new("umount").arg(src).status();
+        // Linux umount fails on an unmounted device; diskutil succeeds then. Only a
+        // failed diskutil means a volume is still in use on the host.
+        if cfg!(target_os = "macos") && !st.map(|s| s.success()).unwrap_or(false) {
+            return Err(format!("could not unmount {src} on the host (a volume on it is in use?)"));
+        }
+    } else if let Some(disk) = attached_image_disk(path) {
+        let ok = std::process::Command::new("diskutil")
+            .args(["eject", &disk])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok {
+            return Err(format!(
+                "{src} is open in macOS ({disk}) and could not be ejected; eject it in Finder and load it again"
+            ));
+        }
+    }
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map(drop)
+        .map_err(|e| format!("{src} is not writable: {e}"))
+}
+
+/// The whole-disk node (`/dev/diskN`) of a macOS-attached disk image backed by `img`.
+fn attached_image_disk(img: &Path) -> Option<String> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let want = std::fs::canonicalize(img).ok()?;
+    let out = std::process::Command::new("hdiutil").arg("info").output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.split("\n====").find_map(|block| {
+        let path = block.lines().find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            (k.trim() == "image-path").then(|| v.trim().to_string())
+        })?;
+        if std::fs::canonicalize(&path).ok()? != want {
+            return None;
+        }
+        block.lines().find_map(|l| {
+            let d = l.split_whitespace().next()?;
+            let n = d.strip_prefix("/dev/disk")?;
+            n.chars().all(|c| c.is_ascii_digit()).then(|| d.to_string())
+        })
+    })
 }
 
 /// If XDJ_USB is set, mount it into the guest AFTER rbp is polling, reproducing the
@@ -918,16 +973,13 @@ fn unmount_host_disk(dev: &str) {
 /// the xdj-panel.c lines are USB fault flags, see the note at the insert below).
 ///   XDJ_USB=<image.img|/dev/diskN>   the backing: a disk image, or a host block device
 ///   XDJ_USB_SLOT=usb1|usb2           front slot (default usb2 = hub port 1.1)
-///   XDJ_USB_WRITE=1                   persist writes (default: snapshot=on, discarded —
-///                                     the safe default, and what protects a real stick)
-/// A physical device is unmounted on the host first. See docs/usb.md.
+/// Attached read/write; a physical device is unmounted on the host first. See docs/usb.md.
 async fn maybe_insert_usb(runtime_dir: PathBuf) {
     let Some(src) = std::env::var_os("XDJ_USB") else {
         return;
     };
     let src = src.to_string_lossy().into_owned();
     let slot = std::env::var("XDJ_USB_SLOT").unwrap_or_else(|_| "usb2".into());
-    let write = std::env::var_os("XDJ_USB_WRITE").is_some();
     let rt = |n: &str| runtime_dir.join(n);
 
     // Insert only once rbp's UsbMountManager is polling, or an early insert races to
@@ -944,7 +996,7 @@ async fn maybe_insert_usb(runtime_dir: PathBuf) {
     let settle = std::env::var("XDJ_USB_DELAY").ok().and_then(|v| v.parse().ok()).unwrap_or(6);
     tokio::time::sleep(Duration::from_secs(settle)).await;
 
-    if let Err(e) = insert_usb(&runtime_dir, &src, &slot, write).await {
+    if let Err(e) = insert_usb(&runtime_dir, &src, &slot).await {
         eprintln!("[usb] insert failed: {e}");
     }
 }
@@ -954,15 +1006,38 @@ fn usb_link(slot: &str) -> PathBuf {
     PathBuf::from(format!("/tmp/xdjhost{}_{slot}.img", std::process::id()))
 }
 
-/// Hot-plug a disk image / host device into a front USB slot via QMP (snapshot unless
-/// `write`). See maybe_insert_usb for the timing rules.
-async fn insert_usb(runtime_dir: &Path, src: &str, slot: &str, write: bool) -> Result<(), String> {
-    let rt = |n: &str| runtime_dir.join(n);
-    let is_dev = src.starts_with("/dev/");
-    if is_dev {
-        eprintln!("[usb] unmounting host disk {src} (snapshot keeps it read-only)");
-        unmount_host_disk(src);
+/// Run a USB slot's `drive_add` + `device_add` over QMP. Right after a host unmount,
+/// macOS's disk arbitration holds the device for a moment and the open fails with
+/// "Resource busy": retry the drive_add for a few seconds. If the device_add fails,
+/// the drive `did` is removed again: an orphan drive would keep the image's write lock
+/// and make every later load of it fail.
+pub(crate) async fn attach_usb_drive(qmp: &Path, did: &str, drive_add: String, device_add: String) -> Result<Vec<String>, String> {
+    let mut outs = Vec::new();
+    for _ in 0..20 {
+        outs = qmp_hmp(qmp, std::slice::from_ref(&drive_add)).await?;
+        if !outs.iter().any(|o| o.to_ascii_lowercase().contains("resource busy")) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
+    // QEMU locks its images: a write lock it can't get means another process has the
+    // file (another emulator, Disk Utility, …). Say so instead of QEMU's lock error.
+    if outs.iter().any(|o| o.to_ascii_lowercase().contains("failed to lock")) {
+        return Err("the image is in use by another program (another emulator, or opened in macOS); close it there and load it again".into());
+    }
+    let dev = qmp_hmp(qmp, &[device_add]).await?;
+    if dev.iter().any(|o| o.to_ascii_lowercase().contains("error")) {
+        let _ = qmp_hmp(qmp, &[format!("drive_del {did}")]).await;
+    }
+    outs.extend(dev);
+    Ok(outs)
+}
+
+/// Hot-plug a disk image / host device into a front USB slot via QMP, read/write.
+/// See maybe_insert_usb for the timing rules.
+async fn insert_usb(runtime_dir: &Path, src: &str, slot: &str) -> Result<(), String> {
+    let rt = |n: &str| runtime_dir.join(n);
+    prepare_usb_backing(src)?;
     // HMP drive_add doesn't quote paths, and the packaged runtime dir is under
     // "Application Support": stage a symlink at a space-free /tmp path (as the sidecar's
     // USB LOAD does, with its own name).
@@ -976,18 +1051,16 @@ async fn insert_usb(runtime_dir: &Path, src: &str, slot: &str, write: bool) -> R
     } else {
         ("1.1", "/tmp/usb2_insert")
     };
-    let snap = if write { "" } else { ",snapshot=on" };
     let did = format!("xdjusb_{slot}");
-    let cmds = vec![
-        format!("drive_add 0 if=none,id={did},file={},format=raw{snap}", link.to_string_lossy()),
-        format!("device_add usb-storage,bus=usb-bus.1,port={port},drive={did},id={did}_dev,removable=on"),
-    ];
-    eprintln!(
-        "[usb] inserting {src} at {slot} (hub port {port}, {})",
-        if write { "writable" } else { "snapshot" }
-    );
+    eprintln!("[usb] inserting {src} at {slot} (hub port {port}, read/write)");
     // HMP reports its errors as text inside a successful QMP "return": check it.
-    let outs = qmp_hmp(&rt("qmp.sock"), &cmds).await?;
+    let outs = attach_usb_drive(
+        &rt("qmp.sock"),
+        &did,
+        format!("drive_add 0 if=none,id={did},file={},format=raw", link.to_string_lossy()),
+        format!("device_add usb-storage,bus=usb-bus.1,port={port},drive={did},id={did}_dev,removable=on"),
+    )
+    .await?;
     for o in &outs {
         let t = o.trim();
         if !t.is_empty() && t != "{\"return\": \"\"}" {
@@ -1022,7 +1095,7 @@ async fn provision_watch(runtime_dir: PathBuf, stick: PathBuf, nand_img: PathBuf
     }
     tokio::time::sleep(Duration::from_secs(2)).await;
     // USB1 = the top-panel slot the update screen asks for (hub port 1.2).
-    insert_usb(&runtime_dir, &stick.to_string_lossy(), "usb1", false).await?;
+    insert_usb(&runtime_dir, &stick.to_string_lossy(), "usb1").await?;
     // The ALL update writes ~150 MiB of NAND + the MCU flash under TCG: allow plenty.
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(3600) {

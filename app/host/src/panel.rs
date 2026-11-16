@@ -106,7 +106,15 @@ pub struct Panel {
     logs_w: watch::Sender<u64>,
     power: PowerTx,
     pending_usb: Mutex<BTreeMap<String, String>>,
+    /// Failures of background actions (queued USB inserts) for the page to show as an
+    /// error dialog: handed out, and cleared, by the next GET /power.
+    alerts: Mutex<Vec<String>>,
     usb_cur: Mutex<HashMap<String, (String, String)>>,
+    /// The backing (canonical path) in each slot: one image/stick can be in one slot at a
+    /// time, so loading it into the other slot moves it (it holds a write lock).
+    usb_path: Mutex<HashMap<String, PathBuf>>,
+    /// One USB load/eject at a time: two at once race for the same hub port.
+    usb_op: tokio::sync::Mutex<()>,
     /// rbp signalled standby (TX 'S') and we're cutting power; reset at power on.
     standby: AtomicBool,
 }
@@ -247,7 +255,10 @@ impl Panel {
             logs_w: watch::channel(0).0,
             power,
             pending_usb: Mutex::new(BTreeMap::new()),
+            alerts: Mutex::new(Vec::new()),
             usb_cur: Mutex::new(HashMap::new()),
+            usb_path: Mutex::new(HashMap::new()),
+            usb_op: tokio::sync::Mutex::new(()),
             standby: AtomicBool::new(false),
         });
         tokio::spawn(ctrl_conn(p.clone(), ctrl_rx));
@@ -578,7 +589,10 @@ async fn insert_pending(p: Arc<Panel>, update: bool) {
     for (slot, img) in items {
         match mount_usb(&p, &slot, &img).await {
             Ok(m) => p.logline("subucom", &format!("·  inserting queued {slot}: {m}")),
-            Err(e) => p.logline("subucom", &format!("·  queued {slot} insert failed: {e}")),
+            Err(e) => {
+                p.logline("subucom", &format!("·  queued {slot} insert failed: {e}"));
+                p.alerts.lock().unwrap().push(format!("Could not load the USB image on {}: {e}", slot.to_uppercase()));
+            }
         }
     }
 }
@@ -605,15 +619,24 @@ async fn eject_usb(p: &Panel, slot: &str) {
     }
     let _ = std::fs::remove_file(fault); // never leave the USB fault flag asserted
     p.usb_cur.lock().unwrap().remove(slot);
+    p.usb_path.lock().unwrap().remove(slot);
     tokio::time::sleep(Duration::from_millis(150)).await;
 }
 
 /// Insert `img` (file or /dev device) on usb1|usb2, ejecting what was there first.
 async fn mount_usb(p: &Panel, slot: &str, img: &str) -> Result<String, String> {
+    let _one = p.usb_op.lock().await;
     let (port, fault) = if slot == "usb1" { ("1.2", "/tmp/usb_insert") } else { ("1.1", "/tmp/usb2_insert") };
     let real = std::fs::canonicalize(img).unwrap_or_else(|_| PathBuf::from(img));
-    if img.starts_with("/dev/") {
-        crate::unmount_host_disk(img);
+    // Check (and free on the host) the new backing first: a failed load keeps the stick
+    // that is in the slot.
+    crate::prepare_usb_backing(&real.to_string_lossy())?;
+    // The same image/stick still in the other slot (USB STOP only unmounts it in the
+    // firmware; the drive stays attached and holds the write lock): move it, like
+    // pulling a stick out of one slot and into the other.
+    let other = if slot == "usb1" { "usb2" } else { "usb1" };
+    if p.usb_path.lock().unwrap().get(other) == Some(&real) {
+        eject_usb(p, other).await;
     }
     eject_usb(p, slot).await;
     // HMP drive_add doesn't quote paths: symlink to a space-free path.
@@ -624,19 +647,22 @@ async fn mount_usb(p: &Panel, slot: &str, img: &str) -> Result<String, String> {
     let ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let did = format!("xdjpanel_{slot}_{ms}");
     let dev = format!("{did}_dev");
-    let cmds = vec![
-        format!("drive_add 0 if=none,id={did},file={},format=raw,snapshot=on", link.display()),
+    let outs = crate::attach_usb_drive(
+        &p.cfg.qmp_sock,
+        &did,
+        format!("drive_add 0 if=none,id={did},file={},format=raw", link.display()),
         format!("device_add usb-storage,bus=usb-bus.1,port={port},drive={did},id={dev},removable=on"),
-    ];
-    let outs = crate::qmp_hmp(&p.cfg.qmp_sock, &cmds).await?;
+    )
+    .await?;
     let blob = outs.join("\n").to_lowercase();
     if ["\"error\"", "error:", "failed", "duplicate", "in use", "extraneous", "can't find"].iter().any(|e| blob.contains(e)) {
         return Err(format!("monitor rejected insert: {}", outs.join(" ")));
     }
     p.usb_cur.lock().unwrap().insert(slot.into(), (did, dev));
+    p.usb_path.lock().unwrap().insert(slot.into(), real.clone());
     let _ = std::fs::remove_file(fault);
     let name = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    Ok(format!("mounted {name} on {} (read-only)", slot.to_uppercase()))
+    Ok(format!("mounted {name} on {} (read/write)", slot.to_uppercase()))
 }
 
 // ---- HTTP -------------------------------------------------------------------------------
@@ -767,11 +793,13 @@ pub(crate) async fn get(p: Arc<Panel>, path: &str, query: &str) -> Response<Body
             let st = p.power_cmd(PowerCmd::Status).await;
             let pend = p.pending_usb.lock().unwrap().clone();
             let pend_s: Vec<String> = pend.iter().map(|(k, v)| format!("{}: {}", json_str(k), json_str(v))).collect();
+            let alerts: Vec<String> = std::mem::take(&mut *p.alerts.lock().unwrap()).iter().map(|a| json_str(a)).collect();
             let body = format!(
-                "{{\"available\": true, \"state\": {}, \"update\": {}, \"pending\": {{{}}}}}",
+                "{{\"available\": true, \"state\": {}, \"update\": {}, \"pending\": {{{}}}, \"alerts\": [{}]}}",
                 json_str(st.split_whitespace().next().unwrap_or("off")),
                 st.ends_with("update"),
-                pend_s.join(", ")
+                pend_s.join(", "),
+                alerts.join(", ")
             );
             resp(200, "application/json", body)
         }

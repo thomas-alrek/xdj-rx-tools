@@ -9,6 +9,7 @@
   "permissions": [
     "core:default",
     "dialog:allow-open",
+    "dialog:allow-message",
     "core:webview:allow-create-webview-window",
     "core:window:allow-set-focus",
     "core:window:allow-start-dragging",

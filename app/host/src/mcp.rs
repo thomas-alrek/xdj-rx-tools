@@ -198,7 +198,7 @@ fn tool_list() -> Value {
         t("jog", "Turn a jog wheel by `degrees` over `seconds` (+ = clockwise), or set touch.",
           json!({"deck": {"type": "integer", "enum": [1, 2]}, "degrees": {"type": "number"}, "seconds": {"type": "number", "default": 0.5}, "touch": {"type": "boolean"}}), &["deck"]),
         t("input_select", "Channel input source.", json!({"channel": {"type": "integer", "enum": [1, 2]}, "source": {"type": "string", "enum": ["deck", "line"]}}), &["channel", "source"]),
-        t("insert_usb", "Load a disk image (or /dev/diskN) into USB1/USB2 (read-only snapshot). The browser shows USB1; MASTER REC records to USB2. Queued if the unit is off.",
+        t("insert_usb", "Load a disk image (or /dev/diskN) into USB1/USB2, read/write (writes reach the image or device). The browser shows USB1; MASTER REC records to USB2. Queued if the unit is off.",
           json!({"slot": {"type": "string", "enum": ["usb1", "usb2"]}, "path": {"type": "string"}}), &["slot", "path"]),
         t("screenshot", "The unit's 800x480 screen as a PNG image.", json!({}), &[]),
         t("leds", "rbp's current LED/meter payload (hex; layout in docs/subucom-led-map.md).", json!({}), &[]),

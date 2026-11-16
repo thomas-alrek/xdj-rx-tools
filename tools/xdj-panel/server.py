@@ -39,7 +39,7 @@ Usage:  python3 tools/xdj-panel/server.py [--port 8765] [--mon /tmp/d_mon4.sock]
                 [--ctrl-sock <dir>/ctrl.sock] [--key-sock <dir>/key.sock]
 Then open http://127.0.0.1:8765
 """
-import argparse, http.server, socketserver, socket, time, os, threading, json, subprocess, re
+import argparse, sys, http.server, socketserver, socket, time, os, threading, json, subprocess, re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(HERE, "assets")
@@ -170,6 +170,7 @@ def _console_loop():
 # line "on" / "on update" / "off". Without it (dev/debug launcher) power is unavailable.
 POWER_SOCK = None
 _pending_usb = {}             # slot -> image path, inserted once the guest is ready
+_alerts = []                  # background-action failures for the page's error dialog (GET /power)
 _power_lock = threading.Lock()
 
 
@@ -257,6 +258,8 @@ def _insert_pending(update):
             _logline("subucom", "·  inserting queued %s: %s" % (slot, mount_usb(slot, img)))
         except Exception as e:
             _logline("subucom", "·  queued %s insert failed: %s" % (slot, e))
+            with _power_lock:
+                _alerts.append("Could not load the USB image on %s: %s" % (slot.upper(), e))
 
 
 _standby = {"on": False}      # rbp signalled standby (TX 'S') and we're cutting power
@@ -736,6 +739,9 @@ def _mon_quiet(cmds):
 
 # Current panel-mounted drive/device id per slot, so a re-LOAD can eject it first.
 _usb_cur = {"usb1": None, "usb2": None}
+# The backing (real path) in each slot: one image/stick can be in one slot at a time, so
+# loading it into the other slot moves it (it holds a write lock) (= panel.rs usb_path).
+_usb_path = {"usb1": None, "usb2": None}
 
 
 def eject_usb(slot):
@@ -757,22 +763,73 @@ def eject_usb(slot):
     except FileNotFoundError:
         pass
     _usb_cur[slot] = None
+    _usb_path[slot] = None
     time.sleep(0.15)
 
 
-def mount_usb(slot, imgpath, write=False):
-    """Insert `imgpath` (file or /dev device) on the given front slot (usb1|usb2),
-    ejecting any previous insertion first so re-LOAD works without a duplicate-ID."""
+def attached_image_disk(img):
+    """The /dev/diskN of a macOS-attached disk image backed by `img` (= main.rs)."""
+    if sys.platform != "darwin":
+        return None
+    want = os.path.realpath(img)
+    try:
+        text = subprocess.run(["hdiutil", "info"], capture_output=True, text=True, timeout=30).stdout
+    except Exception:
+        return None
+    for block in text.split("\n===="):
+        path = next((l.split(":", 1)[1].strip() for l in block.splitlines()
+                     if ":" in l and l.split(":", 1)[0].strip() == "image-path"), None)
+        if path and os.path.realpath(path) == want:
+            for l in block.splitlines():
+                d = (l.split() or [""])[0]
+                if re.fullmatch(r"/dev/disk\d+", d):
+                    return d
+    return None
+
+
+def prepare_usb_backing(src):
+    """Ready a backing for a read/write attach (= main.rs prepare_usb_backing): a host
+    device is unmounted on the host (the guest must be its only writer); either must
+    open read/write."""
+    if src.startswith("/dev/"):
+        if sys.platform == "darwin":
+            if subprocess.run(["diskutil", "unmountDisk", src], capture_output=True, timeout=30).returncode:
+                raise RuntimeError("could not unmount %s on the host (a volume on it is in use?)" % src)
+        else:
+            subprocess.run(["umount", src], capture_output=True, timeout=30)
+    else:
+        disk = attached_image_disk(src)
+        if disk and subprocess.run(["diskutil", "eject", disk], capture_output=True, timeout=30).returncode:
+            raise RuntimeError("%s is open in macOS (%s) and could not be ejected; "
+                               "eject it in Finder and load it again" % (src, disk))
+    try:
+        open(src, "r+b").close()
+    except OSError as e:
+        raise RuntimeError("%s is not writable: %s" % (src, e))
+
+
+_usb_op = threading.Lock()    # one USB load at a time: two race for the same hub port
+
+
+def mount_usb(slot, imgpath):
+    """Insert `imgpath` (file or /dev device) read/write on the given front slot
+    (usb1|usb2), ejecting any previous insertion first so re-LOAD works without a
+    duplicate-ID."""
+    with _usb_op:
+        return _mount_usb(slot, imgpath)
+
+
+def _mount_usb(slot, imgpath):
     port, fault = ("1.2", "/tmp/usb_insert") if slot == "usb1" else ("1.1", "/tmp/usb2_insert")
     real = os.path.realpath(imgpath)
-    # A physical disk must be released by the host OS first (macOS/Linux, best-effort).
-    if imgpath.startswith("/dev/"):
-        for cmd in (["diskutil", "unmountDisk", imgpath], ["umount", imgpath]):
-            try:
-                subprocess.run(cmd, capture_output=True, timeout=15); break
-            except Exception:
-                continue
-    # Eject anything already on this slot (previous LOAD or the boot auto-insert).
+    # Check (and free on the host) the new backing first: a failed load keeps the
+    # stick that is in the slot. Then eject it (previous LOAD or the boot auto-insert).
+    prepare_usb_backing(real)
+    # The same image/stick still in the other slot (USB STOP only unmounts it in the
+    # firmware; the drive keeps the write lock): move it, as with a physical stick.
+    other = "usb2" if slot == "usb1" else "usb1"
+    if _usb_path.get(other) == real:
+        eject_usb(other)
     eject_usb(slot)
     # HMP drive_add doesn't quote paths; symlink to a space-free path.
     link = "/tmp/xdjpanel_%s.img" % slot
@@ -784,16 +841,26 @@ def mount_usb(slot, imgpath, write=False):
     # Unique ids per insertion so a slow async unplug can't collide with the new one.
     did = "xdjpanel_%s_%d" % (slot, int(time.time() * 1000))
     dev = did + "_dev"
-    snap = "" if write else ",snapshot=on"
-    cmds = [
-        "drive_add 0 if=none,id=%s,file=%s,format=raw%s" % (did, link, snap),
-        "device_add usb-storage,bus=usb-bus.1,port=%s,drive=%s,id=%s,removable=on" % (port, did, dev),
-    ]
-    outs = _mon(cmds)
+    # Right after a host unmount, macOS's disk arbitration holds the device briefly
+    # ("Resource busy"): retry the drive_add (= main.rs attach_usb_drive).
+    drive_add = "drive_add 0 if=none,id=%s,file=%s,format=raw" % (did, link)
+    for _ in range(20):
+        outs = _mon([drive_add])
+        if "resource busy" not in json.dumps(outs).lower():
+            break
+        time.sleep(0.25)
+    if "failed to lock" in json.dumps(outs).lower():   # = main.rs attach_usb_drive
+        raise RuntimeError("the image is in use by another program (another emulator, or opened "
+                           "in macOS); close it there and load it again")
+    dev_out = _mon(["device_add usb-storage,bus=usb-bus.1,port=%s,drive=%s,id=%s,removable=on" % (port, did, dev)])
+    if "error" in json.dumps(dev_out).lower():
+        _mon_quiet(["drive_del %s" % did])   # no orphan drive holding the image's write lock
+    outs = outs + dev_out
     blob = json.dumps(outs).lower()
     if '"error"' in blob or "failed" in blob or "duplicate" in blob or "in use" in blob:
         raise RuntimeError("monitor rejected insert: %s" % outs)
     _usb_cur[slot] = (did, dev)
+    _usb_path[slot] = real
     # Do NOT create the xdj-panel.c file (/tmp/usb*_insert) here. Those GPIOs
     # (GPIO4_IO30 / GPIO7_IO12) are rbp's active-low USB *fault* flags, not
     # insert-detect lines; holding one low raises "USB Error. Remove the device."
@@ -803,8 +870,7 @@ def mount_usb(slot, imgpath, write=False):
         os.remove(fault)
     except FileNotFoundError:
         pass
-    return "mounted %s on %s%s" % (os.path.basename(real), slot.upper(),
-                                   "" if write else " (read-only)")
+    return "mounted %s on %s (read/write)" % (os.path.basename(real), slot.upper())
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -866,8 +932,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             st = _power_cmd("status")
             with _power_lock:
                 pend = dict(_pending_usb)
+                alerts = list(_alerts); _alerts.clear()
             body = {"available": st is not None, "state": (st or "off").split()[0],
-                    "update": bool(st and st.endswith("update")), "pending": pend}
+                    "update": bool(st and st.endswith("update")), "pending": pend, "alerts": alerts}
             self._send(200, "application/json", json.dumps(body).encode())
         elif path == "/logs.html":
             self._send_file("logs.html")

@@ -408,10 +408,19 @@ const isAnalog=s=>!!s && /^a /i.test(s);
 // command; in a plain dev browser, fall back to a typed path. Either way the chosen
 // path is POSTed to /usb, which does the drive_add/device_add insert.
 const _lastUsb={usb1:'',usb2:''};
+// A failed user action gets a native error dialog (Tauri dialog `message`; alert() in a
+// browser), not just a log line.
+async function alertError(title, msg){
+  const D=window.__TAURI__ && window.__TAURI__.dialog;
+  try{ if(D && D.message){ await D.message(msg,{title,kind:'error'}); return; } }catch(e){ console.warn('dialog',e); }
+  alert(title+'\n\n'+msg); }
 async function doMount(slot, path){
   const S=slot.toUpperCase(); _lastUsb[slot]=path; log('⏏ '+S+': mounting '+path+' …');
-  try{ const r=await fetch('/usb',{method:'POST',body:slot+' '+path}); const t=(await r.text()).trim();
-    log((r.ok?'✔ ':'✖ ')+t); }catch(e){ log('✖ '+S+' mount request failed'); }
+  let ok=false, t='';
+  try{ const r=await fetch('/usb',{method:'POST',body:slot+' '+path}); t=(await r.text()).trim(); ok=r.ok; }
+  catch(e){ t='the request to the emulator failed ('+e+')'; }
+  log((ok?'✔ ':'✖ ')+t);
+  if(!ok) alertError('Could not load the USB image on '+S, t);
 }
 async function mountUsb(slot){
   const S=slot.toUpperCase();
@@ -849,7 +858,8 @@ function powerUI(){ const b=EL.power; if(!b) return;
     :'Powered off — click to power on'+(PREF.get('updateMode',false)?' in FIRMWARE UPDATE mode':'');
   const sc=document.getElementById('screen'); if(sc) sc.classList.toggle('off',POWER.available&&POWER.state!=='on'); }
 async function powerPoll(){ try{ const r=await fetch('/power',{cache:'no-store'}); const j=await r.json();
-    const was=POWER.state; POWER=j; if(was==='on'&&j.state!=='on') ledsOff(); powerUI(); }catch(_){} }
+    const was=POWER.state; POWER=j; if(was==='on'&&j.state!=='on') ledsOff(); powerUI();
+    for(const a of (j.alerts||[])) alertError('XDJ-RX', a); }catch(_){} }
 async function powerSet(on){ if(!POWER.available) return; const b=EL.power; if(b) b.classList.add('busy');
   const upd=PREF.get('updateMode',false);
   try{ await fetch('/power',{method:'POST',body:on?('on'+(upd?' update':'')):'off'}); }catch(_){}
@@ -871,7 +881,9 @@ async function installUpdate(){ if(!POWER.available){ log('install update: needs
   } else { const p=prompt('Install firmware update\nPath to an XDJ-RX .UPD (or a Pioneer .zip):',''); if(p==null) return; path=p.trim(); }
   if(!path) return;
   const b=EL.power; if(b) b.classList.add('busy'); log('install firmware update: '+path);
-  try{ const r=await fetch('/install-update',{method:'POST',body:path}); log((r.ok?'⏻ ':'✖ ')+await r.text()); }catch(e){ log('✖ '+e); }
+  try{ const r=await fetch('/install-update',{method:'POST',body:path}); const t=(await r.text()).trim();
+    log((r.ok?'⏻ ':'✖ ')+t); if(!r.ok) alertError('Could not install the firmware update', t); }
+  catch(e){ log('✖ '+e); alertError('Could not install the firmware update', String(e)); }
   setTimeout(pushInitialState,400); await powerPoll(); if(b) b.classList.remove('busy'); }
 async function powerTest(){ if(!POWER.available) return; const b=EL.power; if(b) b.classList.add('busy');
   try{ await fetch('/power',{method:'POST',body:'on test'}); }catch(_){}

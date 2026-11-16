@@ -19,7 +19,8 @@ provisioning; `--keep` keeps the work dir; on failure it is kept anyway, with `h
   screen does nothing — not a bug); rbp's LED stream is live; MCP (`POST /mcp`): handshake, tool
   list, a held `press menu`, a PNG `screenshot`.
 - **usb** — BROWSE, then a panel USB LOAD of `test/usb/*.img` on **USB1** (the browser shows USB1)
-  → the stick's rekordbox library replaces "NO USB".
+  → the stick's rekordbox library replaces "NO USB". It loads a copy in its work dir: slots are
+  read/write, so the fixture stays pristine.
 - **standby** — POWER off while rbp runs → the standby handshake (rbp answers 'S', power cut < 10 s).
 - **testmode** — File > Power On in Test Mode → VERSION INFORMATION (one retry for the known ~1-in-8
   rbp-side flake; the result notes it).

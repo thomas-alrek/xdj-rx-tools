@@ -101,7 +101,8 @@ open dist/XDJ-RX.app
 - **Controls**: click and drag the virtual panel. Hold **MENU** for UTILITY. Everything is also in
   the menu bar (Mixer, Deck 1/2, FX, Master…).
 - **USB**: *File → Load USB1/USB2 Image…* (a `.img`/`.dmg` rekordbox stick image, or a real
-  device). The browser shows USB1; MASTER REC records to USB2. Build an image from a rekordbox
+  device), attached read/write: recordings and other writes land on the image or stick (a
+  physical stick is unmounted on the Mac first). The browser shows USB1; MASTER REC records to USB2. Build an image from a rekordbox
   collection with `tools/build-rb-usb.sh`.
 - **Power**: the POWER button asks the firmware to shut down cleanly (as on the unit).
   *File → Power On in Test Mode* opens the service test mode.

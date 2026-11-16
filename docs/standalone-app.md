@@ -269,7 +269,7 @@ and asserting one causes "USB Error. Remove the device.". **At runtime:** the pa
 buttons POST `/usb <slot> <path>` and the server does the same `drive_add`/`device_add` over QMP,
 **ejecting any previous insertion first** (USB STOP only unmounts in the firmware; the QEMU device
 stays plugged). Loads made while powered off are queued and inserted once the guest is ready.
-Read-only (`snapshot=on`) unless `XDJ_USB_WRITE=1` (boot-time insert only). The browser shows
+Every slot is read/write (a host `/dev/diskN` is unmounted on the host first). The browser shows
 USB1; MASTER REC records to USB2. Full detail: [usb.md](usb.md).
 
 ---
@@ -318,7 +318,7 @@ noted; sensible defaults for both dev (repo) and packaged (`XDJ_RESOURCES`) layo
 | `XDJ_RUNTIME_DIR` | Sockets/logs dir (default: app-data `run/` packaged, `build/run` dev). Keep it short — macOS unix socket paths ≤ 104 chars. |
 | `XDJ_PARENT_PID` | Shell PID; the host exits if it dies (orphan cleanup). |
 | `XDJ_PANEL_PORT` / `XDJ_VNC_WS_PORT` | Default 8765 / 6080. |
-| `XDJ_USB` / `XDJ_USB_SLOT` / `XDJ_USB_DELAY` / `XDJ_USB_WRITE` | Boot-time USB auto-insert: image or `/dev/diskN`, `usb1`/`usb2` (default `usb2`), settle seconds (default 6), `1` = persist writes. |
+| `XDJ_USB` / `XDJ_USB_SLOT` / `XDJ_USB_DELAY` | Boot-time USB auto-insert (read/write): image or `/dev/diskN`, `usb1`/`usb2` (default `usb2`), settle seconds (default 6). |
 | `XDJAUDIO` / `XDJSMP` | Audio backend / vCPU count (default 2; a NAND boot needs ≥ 2). |
 | `XDJ_AUTOSTART` | `0` = start powered off (the shell sets this); default/other = power on at start. |
 | `XDJ_CAL_REF` | Dev-only: reference photo for the panel's `?cal` calibration overlay (served at `/cal-ref`; 404 if unset). |

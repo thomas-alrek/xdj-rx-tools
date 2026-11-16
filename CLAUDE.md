@@ -66,6 +66,9 @@ preservation on owned hardware.
   inputs: rekordbox 159, MIDI 161, USB1 160, USB2 158, DECK 1/2 149, TIME MODE 146.
 - **GPIO4_IO30 / GPIO7_IO12 are active-low USB FAULT flags**, not insert-detect. Insert USB with
   `device_add` only, after rbp is polling; never assert the fault files.
+- **USB slots are read/write** (no `snapshot`): QEMU write-locks the backing, so one image/stick is
+  in one slot at a time (a load moves it from the other slot), an image opened in macOS is
+  ejected there first, and failed loads raise a native error dialog. `docs/usb.md` §4.
 - **Browse encoder:** ROTATE = 16-bit counter `rbp[0x54]/[0x55]`; PUSH = `rbp[0x5d].4`.
   **Jog** = period `rbp[0x0c]` + counter `rbp[0x0e]` + flags `rbp[0x10]` (.0 touch, .1 reverse).
 - **Test mode** = MEMORY + TEMPO RANGE (`B 13 04` + `B 12 08`) held at rbp's first frame

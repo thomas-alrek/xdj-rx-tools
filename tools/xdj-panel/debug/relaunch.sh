@@ -35,7 +35,7 @@ fi
 USBIMG="${XDJUSB:-$(ls test/usb/*.img 2>/dev/null | head -1)}"
 USB_ARGS=()
 if [ -f "$USBIMG" ]; then
-  USB_ARGS=(-drive if=none,id=usbstick,file="$USBIMG",format=raw,snapshot=on)
+  USB_ARGS=(-drive if=none,id=usbstick,file="$USBIMG",format=raw)   # read/write, like the app
 else
   echo "relaunch: no USB image at $USBIMG -- booting without the usbstick backend" >&2
 fi

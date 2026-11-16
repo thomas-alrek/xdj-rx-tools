@@ -57,7 +57,7 @@ window. Architecture: **`docs/standalone-app.md`**. **Never patches `rbp`/kernel
   8765 is busy (clearer than a 60 s timeout).
 - Env: `XDJ_RESOURCES` (packaged root) / `XDJ_REPO` (dev root); `XDJ_FW_DIR` (prepared dir),
   `XDJ_NAND`, `XDJ_QEMU`, `XDJ_PANEL_PORT`; `XDJ_PARENT_PID` (shell PID, for orphan cleanup);
-  `XDJ_USB`/`XDJ_USB_SLOT`/`XDJ_USB_DELAY`/`XDJ_USB_WRITE` (boot auto-insert); `XDJ_RUNTIME_DIR`,
+  `XDJ_USB`/`XDJ_USB_SLOT`/`XDJ_USB_DELAY` (boot auto-insert, read/write); `XDJ_RUNTIME_DIR`,
   `XDJ_VNC_WS_PORT`, `XDJ_AUTOSTART`, `XDJ_FORCE_SETUP`, `XDJ_NET` (eth0 backend, chosen per
   power-on by `net_backend()`: `auto` = the optional socket_vmnet LAN bridge if its socket exists,
   else user NAT; `user`; or a socket path — skill run-xdj-emulator "Network"). The panel finds its bundled assets itself.
@@ -152,7 +152,9 @@ and closing `main` closes `screen` too.
 - **macOS unix socket path ≤ 104 chars** → keep the runtime dir short.
 - Packaging: `dylibbundler -p @executable_path/libs/`, strip duplicate `LC_RPATH`s, `-L` the bundled
   keymaps for the relocated qemu, ad-hoc sign inside-out (arm64 won't run a dylibbundler-broken sig).
-- USB mount is **eject-first** and read-only by default (see [xdj-virtual-panel] `/usb`).
+- USB mount is **eject-first** and **read/write** (`prepare_usb_backing`: host unmount of a
+  `/dev/diskN`; `attach_usb_drive` retries "Resource busy"; see [xdj-virtual-panel] `/usb`). `regress.py` loads a copy of its
+  `test/usb` fixture so it stays pristine.
 
 ## Testing
 `tools/test/regress.py` (dev build) / `tools/test/regress.py --app dist/XDJ-RX.app` (the bundle):

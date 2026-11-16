@@ -274,7 +274,9 @@ def main():
                     # BROWSE shows USB1 ("NO USB" until a stick mounts); the library replaces it
                     u.tap("B 5f 08"); time.sleep(3)
                     before = u.shot("browse0")
-                    msg = u.http("POST", "/usb", "usb1 " + img[0])
+                    stick = os.path.join(u.work, "usb1.img")   # slots are read/write: keep the fixture pristine
+                    shutil.copyfile(img[0], stick)
+                    msg = u.http("POST", "/usb", "usb1 " + stick)
                     t0, d = time.time(), 0.0
                     while time.time() - t0 < 40 and d < 0.03:
                         time.sleep(3)
