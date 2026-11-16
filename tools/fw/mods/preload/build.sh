@@ -20,7 +20,7 @@ done
 
 IMG=xdjmod-armel-cc
 docker image inspect "$IMG" >/dev/null 2>&1 || docker build -q -t "$IMG" - >/dev/null <<'DOCKERFILE'
-FROM debian:bookworm
+FROM debian:bookworm@sha256:268fb24c39bca92d326dd83ea3abebe4a3f7751c804ffef23bb6d857dd343ff8
 RUN apt-get update -qq && apt-get install -y -qq gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi >/dev/null \
  && rm -rf /var/lib/apt/lists/*
 DOCKERFILE

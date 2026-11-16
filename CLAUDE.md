@@ -98,8 +98,9 @@ preservation on owned hardware.
 - Run / boot / USB / inject / screenshot / audio / service modes → **`run-xdj-emulator`**.
 - Map a control: GPIO → **`map-gpio-control`**; sub-ucom → **`map-subucom-{button,fader,knob,rotary}`**.
 - Reverse-engineer `rbp` → **`rbp-binary-internals`**.
-- `.UPD` format → **`upd-firmware-format`**; build/install custom firmware → **`custom-firmware`**
-  (feature mods: `tools/fw/build-custom-upd.sh RELEASE mod,…`, `tools/fw/mods/*`, `docs/firmware-mods.md`).
+- `.UPD` format → **`upd-firmware-format`**; build/install custom firmware → **`custom-firmware`**;
+  feature mods (xdjmod framework, test loop, the reproducible 3.00 release `tools/fw/build-release.sh`)
+  → **`firmware-mods`** (`docs/firmware-mods.md`).
 - QEMU device models and patches → **`qemu-imx6-patches`**; the SD test-bed image → **`build-xdj-sd-image`**.
 - Desktop app (shell, host, packaging) → **`build-xdj-app`**; the virtual panel → **`xdj-virtual-panel`**.
 - Tests (`docs/testing.md`): `cargo test --release` (crates/xdj-fw), `tools/xdj-panel/test_panel_parity.py`

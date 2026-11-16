@@ -17,7 +17,10 @@
  * returns -1 without "RIFF"; our detour then fills the track info (length, channels,
  * rate, kbps) from the FLAC STREAMINFO block in that buffer, and the text fields from the
  * VORBIS_COMMENT block (TITLE, ARTIST, ALBUM, GENRE, COMMENT), read through the parser's
- * FILE * (ctx[1]) - the same fields the WAV parser fills from LIST/INFO.
+ * FILE * (ctx[1]) - the same fields the WAV parser fills from LIST/INFO - and the artwork
+ * from the PICTURE block (front cover preferred): its data's size and file offset go to
+ * +0x2c/+0x30 and rbp's own image probe 0x1a5f7c(ctx, info) takes it from there (JPEG/PNG/
+ * GIF dimensions + format), exactly as the ID3 parser does for an APIC frame.
  *
  * dr_flac (https://github.com/mackron/dr_libs, public domain / MIT-0) is fetched at a
  * pinned commit by fetch-dr_flac.sh.
@@ -221,16 +224,53 @@ static void set_text(uint8_t *info, unsigned off, unsigned max, const char *v, u
     info[off + o] = 0;
 }
 
-/* Copy Vorbis comments (FLAC metadata block type 4) into the track info. */
-static void read_vorbis_comments(FILE *fp, uint8_t *info)
+#define INFO_ART_SIZE 0x2c               /* u32: embedded image bytes */
+#define INFO_ART_OFF  0x30               /* u32: its file offset */
+#define IMAGE_PROBE   0x1a5f7cu          /* int (*)(int *ctx, uint8_t *info) */
+
+static uint32_t be32p(const uint8_t *p) { return (uint32_t)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
+
+/* PICTURE block at file offset `body` (len bytes): the image data's offset/size, or 0. */
+static int picture_data(FILE *fp, long body, uint32_t len, uint32_t *type, long *off, uint32_t *size)
 {
+    uint8_t b[8];
+    if (fseek(fp, body, SEEK_SET) || fread(b, 1, 8, fp) != 8)
+        return 0;
+    *type = be32p(b);
+    uint32_t mime = be32p(b + 4);
+    long p = body + 8 + mime;
+    if (mime > len || fseek(fp, p, SEEK_SET) || fread(b, 1, 4, fp) != 4)
+        return 0;
+    uint32_t desc = be32p(b);
+    p += 4 + desc + 16;                            /* width, height, depth, colours */
+    if (desc > len || fseek(fp, p, SEEK_SET) || fread(b, 1, 4, fp) != 4)
+        return 0;
+    *size = be32p(b);
+    *off = p + 4;
+    return *size > 0 && (uint64_t)(*off - body) + *size <= len;
+}
+
+/* Copy Vorbis comments (FLAC metadata block type 4) into the track info, and point it at
+ * the embedded artwork (type 6). */
+static void read_vorbis_comments(FILE *fp, uint8_t *info, int *ctx)
+{
+    long art_off = 0;
+    uint32_t art_size = 0, art_type = 0;
     long saved = ftell(fp);
     uint8_t h[4];
     long pos = 4;                                 /* after "fLaC" */
     for (int blocks = 0; blocks < 64 && fseek(fp, pos, SEEK_SET) == 0 && fread(h, 1, 4, fp) == 4;
          blocks++) {
         uint32_t len = (uint32_t)h[1] << 16 | h[2] << 8 | h[3];
-        if ((h[0] & 0x7f) == 4 && len >= 8 && len <= (1u << 20)) {
+        if ((h[0] & 0x7f) == 6 && (!art_size || art_type != 3)) {     /* 3 = front cover */
+            uint32_t t, sz;
+            long off;
+            if (picture_data(fp, pos + 4, len, &t, &off, &sz) && (!art_size || t == 3)) {
+                art_type = t;
+                art_off = off;
+                art_size = sz;
+            }
+        } else if ((h[0] & 0x7f) == 4 && len >= 8 && len <= (1u << 20)) {
             uint8_t *b = malloc(len);
             if (b && fread(b, 1, len, fp) == len) {
                 uint32_t o = 4 + le32p(b);        /* skip the vendor string */
@@ -262,11 +302,17 @@ static void read_vorbis_comments(FILE *fp, uint8_t *info)
                 }
             }
             free(b);
-            break;
         }
         if (h[0] & 0x80)                          /* last metadata block */
             break;
         pos += 4 + len;
+    }
+    if (art_size && !*(uint32_t *)(info + INFO_ART_SIZE)) {
+        *(uint32_t *)(info + INFO_ART_SIZE) = art_size;
+        *(uint32_t *)(info + INFO_ART_OFF) = (uint32_t)art_off;
+        int r = ((int (*)(int *, uint8_t *))IMAGE_PROBE)(ctx, info);
+        xm_log("flac: art %u bytes @%ld -> probe %d, %dx%d, fmt 0x%02x", art_size, art_off, r,
+               *(int16_t *)(info + 0x34), *(int16_t *)(info + 0x36), info[0x4e] & 0x70);
     }
     fseek(fp, saved, SEEK_SET);
 }
@@ -298,7 +344,7 @@ static int tag_hook(int *ctx, uint8_t *info)
     *(uint16_t *)(info + 0x46) = (uint16_t)(kbps > 0xffff ? 0xffff : kbps);
     info[0x4c] = (uint8_t)((info[0x4c] & 0xe0) | 1);             /* parsed */
     if (ctx[1])
-        read_vorbis_comments((FILE *)(uintptr_t)ctx[1], info);
+        read_vorbis_comments((FILE *)(uintptr_t)ctx[1], info, ctx);
     return 0;
 }
 

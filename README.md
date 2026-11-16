@@ -159,8 +159,10 @@ $X fw repack build/XDJ-RX_v221.zip build/unpacked --release 2.31 -o build/MY.UPD
 Then *File → Install Firmware Update…* → `build/MY.UPD`. The firmware's update check is only a CRC
 and a model prefix — there is no signature — so Pioneer's updater installs a rebuilt image like an
 official one. Best practices, the overlay workflow and the formats: [docs/custom-firmware.md](docs/custom-firmware.md).
-Feature mods are built from scripts (`tools/fw/build-custom-upd.sh 2.24 exfat,fps`):
-[docs/firmware-mods.md](docs/firmware-mods.md).
+Feature mods are built from scripts. **Custom firmware 3.00** (exFAT, 60 fps UI, WAV float/32-bit/
+≤ 192 kHz, FLAC with tags, RGB / 3-band waveforms) is `tools/fw/build-release.sh`: the official 2.21
+image in, a reproducible `XDJRX.UPD` out (MD5 `14b0a47aa78aa1a48243364e65ccdd4a`). Prerequisites,
+step-by-step from an unpacked 2.21, and every mod's research: [docs/firmware-mods.md](docs/firmware-mods.md).
 Never commit firmware contents.
 
 ## Repository layout
@@ -236,6 +238,7 @@ affiliated with or endorsed by them.
 - Pioneer DJ's published GPL/LGPL source release for the XDJ-RX (kernel, u-boot, drivers).
 - [JaNeinHub/XDJ-RX-Mod](https://github.com/JaNeinHub/XDJ-RX-Mod), the first RGB / 3-band waveform
   mod for the XDJ-RX (an LD_PRELOAD hook library for firmware 2.21): the inspiration for our own
-  waveform mod and its hook points ([docs/firmware-mods.md](docs/firmware-mods.md)).
+  waveform mod and its hook points, and of the planned WAVEFORM SCROLL (smooth) and BEAT JUMP
+  features ([docs/firmware-mods.md](docs/firmware-mods.md)).
 - [Deep Symmetry's](https://djl-analysis.deepsymmetry.org/) rekordbox export and ANLZ format
   analysis, and [relan/exfat](https://github.com/relan/exfat) (the exFAT mod's FUSE driver).

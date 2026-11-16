@@ -196,6 +196,9 @@ present, decode, apply, re-encode, replace the image file (mode kept) → `relea
 write the ISO (volume id copied from the base). `unpack` writes `iso/`, `rootfs/`, `pioneer/`,
 `gui/`, `data/`, `user/`, each with a `.xdj-metadata` listing every path's mode/uid/gid/kind
 (including the device nodes that can't be created unprivileged).
+Reproducible output: new and changed entries get the mtime `$SOURCE_DATE_EPOCH` when it is set
+(else the current time); untouched entries keep the base's. With the same base, overlay and
+`SOURCE_DATE_EPOCH`, `fw build` writes the same bytes ([firmware-mods.md](firmware-mods.md) §1).
 
 ## 5. Verification
 

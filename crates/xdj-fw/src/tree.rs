@@ -166,7 +166,12 @@ impl Tree {
     }
 }
 
+/// Timestamp for new/changed entries: `$SOURCE_DATE_EPOCH` when set (reproducible builds),
+/// else the current time.
 pub fn now() -> u64 {
+    if let Some(t) = std::env::var("SOURCE_DATE_EPOCH").ok().and_then(|v| v.trim().parse().ok()) {
+        return t;
+    }
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 

@@ -77,6 +77,15 @@ to get callers (finds vtable-less direct callers REA misses). Name scripts anyth
   `ISetting::resetValues` (`FUN_00282630`). The DECK-SELECT source is driven by the sub-ucom frame
   bit (rbp[0x33].7 / rbp[0x43].7), applied via the vtable to the channel `+0x254`.
 
+**GUI / waveforms / browser (mods; detail in docs/firmware-mods.md)**
+- gui_task `0xb3a68` (per-frame `0x12922c`; init `0x12aa24`); UTILITY table count `0x4621a4`,
+  items `0x4621a8` (0x34 B each).
+- Deck waveform block `0x28d78a0 + d*0x2ee1c` (count, grid, pointers to 150/s entry arrays);
+  detail draw `0x1cd0f8` → column `0x1caf58` (zoom in `s0`); overview `0x1f8518`.
+- Deck → file: `PlayEngine *0x1079cb0`, Players at `*(pe+0xc)`, file info `p+0x134`.
+- Reader factory `0x3dac8` (suffix helper `0x401d8`), `FileReadWav` vtable `0x35d588`; folder
+  classifier `0x1f1ce4`; WAV tag parser `0x1a7544`, ID3 `0x1a6920`, image probe `0x1a5f7c`.
+
 **Misc:** logging/trace `FUN_00042234` (printf-like); `_Znwj` = `operator new`; `__aeabi_atexit`
 for static dtors; control-name strings cluster `0x42b3a4-0x42b454`; "DECK SELECT"/"INPUT" UI strings `0x422f40`/`0x3a3620`.
 

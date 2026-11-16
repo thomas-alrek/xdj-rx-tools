@@ -1,7 +1,7 @@
 # Firmware mods (custom firmware 3.00)
 
 Feature mods for the XDJ-RX on top of the official 2.21 firmware, and the research behind them.
-Test builds count up from **2.22**; the release is **3.00**. Building and installing custom
+Test builds count up from **2.22**; the release is **3.00** (§1: how to reproduce it, MD5). Building and installing custom
 firmware in general: [custom-firmware.md](custom-firmware.md).
 
 Status: ✅ built and verified in the emulator · 🔬 researched (static analysis), not built ·
@@ -14,30 +14,117 @@ Status: ✅ built and verified in the emulator · 🔬 researched (static analys
 | UTILITY menu rows for mods (framework) | ✅ (2.24) | extended item table | done | — |
 | `fps` — UI frame rate 20 / 30 / 60 (default 60) | ✅ (2.33) emulator | 2 immediates + timer detour | done (real unit: untested) | real-unit test |
 | `wav` — WAV float / 32-bit / up to 192 kHz | ✅ (2.27) emulator | reader vtable slots + tag-parser checks | done (AIFF: open) | AIFF |
-| `flac` — FLAC 16/24-bit ≤ 192 kHz, with tags | ✅ (2.41) emulator | suffix + browser hooks, dr_flac via the wav reader | done (real unit: untested) | artwork |
+| `flac` — FLAC 16/24-bit ≤ 192 kHz, with tags + artwork | ✅ (2.43) emulator | suffix + browser hooks, dr_flac via the wav reader | done (real unit: untested) | — |
 | `waveform` — RGB / 3-band waveforms (default 3-band) | ✅ (2.33) emulator | `.EXT` interposer + detail/overview detours | done (real unit: untested) | tuning |
 | OneLibrary | 🔬 later (nice to have) | mount-time `export.pdb` synthesis | medium | 2–3 weeks |
-| Waveforms generated for folder tracks | ⬜ idea | reader computes entries into rbp's deck array | likely | — |
+| Waveforms generated for folder tracks | 🔬 researched (§9) | fill rbp's per-deck entry arrays from our own decode | likely | 1–2 weeks |
+| WAVEFORM SCROLL: ORIGINAL / SMOOTH (default SMOOTH) | ⬜ to research (§10) | — | unknown | — |
+| BEAT JUMP (opt-in) | ⬜ to research (§10) | — | unknown | — |
+
+**In release 3.00:** `exfat`, `fps`, `wav`, `waveform`, `flac` (+ the framework). The rows below
+them are not built; when they are, they ship as a release above 3.00.
 
 All addresses below are for the 2.21 `rbp` (sha256 `4f62aa71…`, [rbp-binary-internals] skill).
 
-## 1. Building: regenerated from scratch by scripts
+## 1. Release 3.00: reproduce it from the official 2.21
+
+Release **3.00** = the official 2.21 image + the mods `exfat,fps,wav,waveform,flac`, in that
+order. The build is **reproducible byte for byte**: the same inputs give the same `.UPD`.
+
+| File | MD5 |
+|---|---|
+| `XDJ-RX_v221.zip` (Pioneer's download, input) | `c1ee67884f120e4cd8d4ffd6b9ad73eb` |
+| `XDJRX.UPD` inside it (official 2.21) | `e1facfb82de17b2544e958ca544e00c4` |
+| **`XDJRX.UPD` — custom firmware 3.00 (output)** | **`14b0a47aa78aa1a48243364e65ccdd4a`** |
+
+`xdj fw info` on the output: 48310288 bytes, model `XDJAERO3.00`, footer CRC32 `e33274d3`,
+`images/release.txt = 3.00`. What the mods add (overlay, MD5):
+
+| Overlay file | MD5 |
+|---|---|
+| `rootfs/sbin/mount.exfat-fuse` | `3d8e08ccb61b480d4e021619f80b0ea1` |
+| `rootfs/lib/udev/xdj_is_exfat` | `5c79cf91a5d596af2362bce33ac0d9e0` |
+| `rootfs/etc/udev/rules.d/12-usb-memory-auto-mount.rules` (edited) | `310e73ef9f6ee510c229fe64cb41bb3f` |
+| `pioneer/pioneer/libxdjmod.so` | `a3cc3889d080f789b08e630cb33feaca` |
+| `pioneer/pioneer/apl_start` (edited) | `92bd42fa03581944d29d642e2421092e` |
+
+### 1a. Prerequisites (macOS or Linux host)
+
+- Rust (`cargo`) — builds the `xdj` CLI (`crates/xdj-fw`).
+- Docker with `linux/arm/v7` emulation (Docker Desktop has it) — compiles our ARM code.
+  Base images are pinned by digest: `debian:bookworm@sha256:268fb24c…` (armel cross-gcc
+  `12.2.0-14`, `tools/fw/mods/preload/build.sh`) and `alpine:3.20@sha256:d9e853e8…`
+  (`tools/fw/mods/exfat/build-exfat-fuse.sh`).
+- `curl` + network for the first build: fuse-exfat 1.4.0 (sha256-checked) and dr_flac (pinned
+  commit, sha256-checked) are fetched into `build/mods/`.
+- The `.UPD` AES key: `.env` from `tools/fetch_key.py`, `$XDJRX_AES_KEY` or `--key-file`
+  ([custom-firmware.md](custom-firmware.md)).
+- Pioneer's official 2.21 firmware, `build/XDJ-RX_v221.zip` (check the MD5 above).
+
+### 1b. One command
 
 ```sh
-tools/fw/build-custom-upd.sh 2.24 exfat,fps          # -> build/custom-upd/XDJRX.UPD + stick.img
+tools/fw/build-release.sh                 # -> build/release/XDJRX.UPD + stick.img
+# >> base build/XDJ-RX_v221.zip md5 c1ee67884f120e4cd8d4ffd6b9ad73eb
+# >> build/release/XDJRX.UPD (release 3.00, mods exfat,fps,wav,waveform,flac) md5 14b0a47aa78aa1a48243364e65ccdd4a
 ```
 
-- `tools/fw/build-custom-upd.sh RELEASE MODS [BASE] [OUTDIR]` unpacks the official image
-  (`build/XDJ-RX_v221.zip`), runs `tools/fw/mods/<mod>/apply.sh UNPACKED OVERLAY` for each mod in
-  order, and builds the `.UPD` and an update stick. Mods stack: one that edits a file another mod
-  already put in the overlay starts from that copy.
-- Every change is generated: Pioneer files are edited at build time from the unpacked image, our
-  own code is compiled from source (Docker), third-party sources are fetched by pinned version and
-  checksum. The repo holds no firmware content.
-- Install: the app's *File → Install Firmware Update…* → `XDJRX.UPD`. To test without touching
-  the app's unit, run a private `xdj-host` on a copy of the unit's firmware dir (`XDJ_FW_DIR`,
-  `XDJ_RUNTIME_DIR`, `XDJ_PANEL_PORT`, `XDJ_VNC_WS_PORT`) and POST the `.UPD` to
-  `/install-update`; installed = `release=` in the NAND env (`xdj nand env`).
+`build-release.sh [BASE] [OUTDIR]` fixes the release (3.00), the mod list and
+`SOURCE_DATE_EPOCH=1767225600` (2026-01-01 00:00 UTC: the mtime `xdj` gives every new or changed
+file), checks the base MD5 and prints the output MD5.
+
+### 1c. Step by step, from an unpacked 2.21
+
+What `build-release.sh` → `build-custom-upd.sh` does; run from the repo root:
+
+```sh
+export SOURCE_DATE_EPOCH=1767225600
+X=crates/xdj-fw/target/release/xdj
+(cd crates/xdj-fw && cargo build --release)
+
+# 1. unpack the official image (iso/ rootfs/ pioneer/ gui/ data/ user/)
+$X fw unpack build/XDJ-RX_v221.zip build/release/unpacked
+
+# 2. each mod reads the unpacked tree and writes only into the overlay, in this order
+mkdir -p build/release/overlay
+for m in exfat fps wav waveform flac; do
+  tools/fw/mods/$m/apply.sh build/release/unpacked build/release/overlay
+done
+
+# 3. rebuild the image from the base + overlay, as release 3.00; then an update stick
+$X fw build build/XDJ-RX_v221.zip --overlay build/release/overlay --release 3.00 \
+  -o build/release/XDJRX.UPD
+$X fw info  build/release/XDJRX.UPD
+md5 build/release/XDJRX.UPD               # Linux: md5sum
+$X fw stick build/release/XDJRX.UPD build/release/stick.img
+```
+
+- The unpacked tree must be fresh: the mods read Pioneer's files from it (`apl_start`, the udev
+  rules, `rootfs/lib` to link against) and never modify it. `fw build` also needs the original
+  image: owners, device nodes and untouched files come from it.
+- `exfat`: builds `mount.exfat-fuse` once (`build/mods/exfat/`) and adds it, `xdj_is_exfat` and
+  the udev rule. `fps`, `wav`, `waveform`, `flac`: each calls `preload/apply.sh` with its sources;
+  the feature list accumulates in `build/release/xdjmod/features.txt`, and every call rebuilds
+  `libxdjmod.so` with all features so far and adds the `LD_PRELOAD` to `apl_start`.
+- Mods stack: one that edits a file another mod already put in the overlay starts from that copy.
+- Every change is generated: Pioneer files are edited at build time, our code is compiled from
+  source, third-party sources are pinned and checksummed. The repo holds no firmware content.
+- A different MD5 means a different input: base image, `SOURCE_DATE_EPOCH`, a toolchain image
+  (the Debian image installs gcc from the archive at build time; compare `libxdjmod.so`'s MD5
+  above) or the mod sources.
+
+### 1d. Test builds and installing
+
+```sh
+tools/fw/build-custom-upd.sh 2.44 exfat,fps   # any release/mod set -> build/custom-upd/
+```
+
+- Install: the app's *File → Install Firmware Update…* → `XDJRX.UPD`. The release must be above
+  the installed one.
+- To test without touching the app's unit, run a private `xdj-host` on a copy of the unit's
+  firmware dir (`XDJ_FW_DIR`, `XDJ_RUNTIME_DIR`, `XDJ_PANEL_PORT`, `XDJ_VNC_WS_PORT`) and POST the
+  `.UPD` to `/install-update`. Installed = `release=` in the NAND env (`xdj nand env`). Booted =
+  `### xdjmod: loaded into rbp … N module(s)` on the console. Skill: `firmware-mods`.
 
 ## 2. `exfat` — exFAT USB sticks ✅
 
@@ -227,7 +314,13 @@ VERSION No.**; a **factory reset restores their defaults**.
 - Test sticks: `tools/fw/mods/flac/make-flac-test-image.sh` (tagged tones, no library) and
   `tools/fw/mods/make-feature-test-image.sh XML [PLAYLIST]` — an exFAT stick with a real rekordbox
   export of a playlist (baken), the one-stick test of every mod.
-- Open: embedded artwork (PICTURE block), FLAC decode CPU on the real unit.
+- **Artwork.** The PICTURE block (front cover preferred, else the first) is handed to rbp the way
+  the ID3 parser `0x1a6920` does for APIC: size `+0x2c`, file offset `+0x30`, then rbp's image
+  probe `0x1a5f7c(ctx, info)` fills the dimensions `+0x34`/`+0x36` (log: `flac: art 13379 bytes
+  @357 -> probe 0, 320x320`). The [FOLDER] info panel draws the generic disc for embedded art in
+  stock firmware too — an MP3 with the same cover as ID3 APIC (`m_44k_control.mp3` on the test
+  stick) shows the same disc — so FLAC matches stock there (verified 3.00, emulator).
+- Open: FLAC decode CPU on the real unit.
 
 ## 8. `waveform` — RGB / 3-band waveforms ✅ (emulator)
 
@@ -271,7 +364,54 @@ VERSION No.**; a **factory reset restores their defaults**.
   stick; 3-band confirmed by eye against a CDJ-3000, with tracks on both decks and while zooming.
 - Open: RGB saturation tuning against rekordbox (one constant), CPU on the real unit.
 
-## 9. OneLibrary 🔬 (low priority)
+## 9. Waveforms for folder tracks 🔬
+
+Tracks played from [FOLDER] (no rekordbox analysis) get an overview (rbp builds it from the audio
+as it plays) but an empty detail waveform. Static analysis of 2.21:
+
+- **Deck block** `B = 0x28d78a0 + d*0x2ee1c` (fixed BSS; the descriptor at `0x10f0208 + d*32`
+  points at it): count `+0`, beat-grid offset `+4`, has-grid `+8`, beat count `+0xc`, beats
+  `{u32 ms, u32 beat#}` from `+0x10`; pointers to static arrays of 540000 entries (60 min at
+  150/s): `+0x2ee10` cue/memory markers (12 bytes each; byte 8 bits 1/2 → colours `0xb300` /
+  `0x3186`), `+0x2ee14` beat-in-bar ticks (u8, 0 = none), `+0x2ee18` `{height 0..46, whiteness
+  0..7}` entries. The pointers are set once at gui_task start (`0x12aa24`) and never change.
+- **Draw gate:** `0x1cd0f8` draws a deck's detail waveform whenever `*(u32 *)B != 0`; no other
+  per-deck flag. Zoom is rbp's (max height per column over the same 150/s entries); the visible
+  range comes from the deck status at `0x182405c + d*0xa0` (playhead ms × 0.15).
+- **Why folder tracks are empty:** a load/eject (`0x1218e0(d, 1)`) sets the clear flag
+  `0x17da820 + 4d`; gui_task's `0x12922c` then zeroes `B+0`/`B+8`. The only fill is a dbserver
+  cache hit with the track's PWV3 (`0xe1e1c` → source struct `0x17f326c + d*0x186c4` → decode in
+  `0x12922c`); folder tracks never hit, so the count stays 0.
+- **Overview of unanalysed tracks:** the Player's render (`0x75eb0`) feeds played audio to
+  `0x5e32c` → the `BpmWaveDetectManager` thread (`0x61304`, 400 bytes); `Tot_WaveWatcherTASK`
+  (`0xc4f10`) copies changes to `0x294f5b0 + d*0x38c` (flag `0x17da800 + 4d`), gui_task to
+  `0x18a2ee4 + d*900`. It fills progressively while playing.
+- **Deck → file:** `PlayEngine *pe = *(u32 *)0x1079cb0`; `Player *p = ((Player **)*(pe + 0xc))[d]`
+  (`p + 0x14` = index); `p + 0x134` = the loaded file's info (path first; cleared on eject); deck
+  state `*(int *)(0x17ec92c + d*0x5c) == 0x12` = loaded.
+- **Plan:** a worker thread decodes the loaded file with the wav/flac readers' code and computes
+  `{height, whiteness}` per 1/150 s of track time (and 3-band data for the waveform mod); a detour
+  at `0x12922c` (gui_task, before rbp's clear/fill; its first instructions relocate) installs it:
+  entries, zeroed tick and cue arrays, `B+8 = B+0xc = 0`, count last — and drops it when the clear
+  flag is set. Re-installs if `B+0` changes under it. Low priority on the real unit's CPU.
+
+## 10. WAVEFORM SCROLL and BEAT JUMP ⬜
+
+Two features of [JaNeinHub/XDJ-RX-Mod](https://github.com/JaNeinHub/XDJ-RX-Mod) (GPL-3.0; "XDJ-RX
+Mod v1.0" on r/PioneerDJ) to add as our own implementations, **credited to JaNeinHub** like the
+waveform mod (§8: in this doc, the module source and the README's acknowledgements):
+
+- **WAVEFORM SCROLL: ORIGINAL / SMOOTH** — a UTILITY row, **SMOOTH by default** (factory reset →
+  SMOOTH). Theirs scrolls the detail waveform smoothly instead of in whole-column steps, and times
+  the frame copy to the display refresh (it starts ~4.5 ms before it) against tearing. No
+  implementation detail is published: to research from the detail renderer `0x1cd0f8` / the
+  start-column computation `0x1cb58c` (the playhead → entry index × zoom), the canvas `*0x10f0248`
+  and the frame copy in the display path.
+- **BEAT JUMP** — a UTILITY row, **OFF by default (opt-in)**. Theirs: SHIFT + AUTO BEAT LOOP
+  switches the pads to beat jump, back/forward 1–32 beats. To research: the pad/loop handlers, the
+  beat grid (`B+0xc`/`+0x10`, §9) and the player's seek.
+
+## 11. OneLibrary 🔬 (low priority)
 
 - OneLibrary (formerly Device Library Plus) is `PIONEER/rekordbox/exportLibrary.db`, an SQLCipher 4
   database with one fixed key (Pioneer-derived — never commit it). **rekordbox 7 still writes
@@ -286,7 +426,7 @@ VERSION No.**; a **factory reset restores their defaults**.
   Needs SQLite3MultipleCiphers and a pdb writer (e.g. rbxport's `rbl-pdb`) for ARM; key derivation
   takes ~1–3 s on the A9 (estimate).
 
-## 10. Third-party code in the images
+## 12. Third-party code in the images
 
 Firmware images built with mods contain binaries from third-party source; distributing an image
 means following their licences (source offer / notices):
@@ -298,7 +438,7 @@ means following their licences (source offer / notices):
 | `exfat` | musl libc (static) | MIT |
 | `flac` | [dr_flac](https://github.com/mackron/dr_libs) v0.13.5 | public domain / MIT-0 |
 
-## 11. Distribution: a delta patch, not a firmware image
+## 13. Distribution: a delta patch, not a firmware image
 
 The 3.00 release is distributed as a **patch against the stock 2.21 `.UPD`** plus a small patcher:
 the user supplies Pioneer's official image, the patcher outputs 3.00. Pioneer's firmware is never
@@ -315,25 +455,25 @@ redistributed. Design:
 - The `.UPD` is AES-encrypted with Pioneer's key, which we can't ship either: the patcher gets it
   the way the app does (the user's key file, or derived from Pioneer's published GPL source by
   `tools/fetch_key.py`).
-- Needs a deterministic build (same output bytes on every machine): fixed mtimes for new files, a
-  stable order in cramfs/tar/ISO; checked by the output hash.
+- Needs a deterministic build: done — `SOURCE_DATE_EPOCH` fixes the mtimes `xdj` gives new and
+  changed files, the containers are written in a stable order, the toolchains are pinned (§1); the
+  patcher checks the output against the 3.00 MD5/sha256.
 
-## 12. Plan
+## 14. Plan
 
 1. ✅ xdjmod framework: gate, patch helpers, `xdjmod.conf`, UTILITY rows (before VERSION No.),
    factory-reset hook.
 2. ✅ FPS mod with real-time timers + UTILITY row; emulator benchmark. Open: real-time-playback
    benchmark, on-screen timer check, factory reset live test.
-3. ✅ WAV float / 32-bit / hi-res + the 24-bit fix (emulator). Open: AIFF, a rekordbox export.
+3. ✅ WAV float / 32-bit / hi-res + the 24-bit fix (emulator). Open: AIFF.
 4. ✅ RGB / 3-band waveforms (own implementation, inspired by JaNeinHub/XDJ-RX-Mod) + UTILITY row (emulator).
-5. ✅ FLAC, with Vorbis-comment tags (emulator). Open: embedded artwork.
-6. Waveforms generated on the fly for folder tracks (no rekordbox analysis): the reader decodes the
-   audio anyway, so it could compute rbp's per-deck `{height, whiteness}` entries (and 3-band
-   colours with simple band filters) when such a track loads.
-7. OneLibrary — nice to have, for when export.pdb goes away; not now.
-8. Delta patch + patcher (§11), after the mod research.
+5. ✅ FLAC, with Vorbis-comment tags and artwork (emulator).
+6. ✅ Release 3.00, reproducible (§1).
+7. Waveforms for folder tracks (§9).
+8. WAVEFORM SCROLL (SMOOTH default) and opt-in BEAT JUMP, credited to JaNeinHub (§10).
+9. OneLibrary — nice to have, for when export.pdb goes away; not now.
+10. Delta patch + patcher (§13).
 
 Defaults (and factory-reset values) are the improvements — 60 fps and 3-band — so they show right
-after the update; the stock behaviour is one UTILITY setting away. Release as 3.00 once the set is
-complete; test builds 2.22, 2.23, …. Everything is proven in the
+after the update; the stock behaviour is one UTILITY setting away. Everything is proven in the
 emulator before anything is installed on a real unit.

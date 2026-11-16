@@ -17,6 +17,7 @@ cargo test --release                            # codec round trips (needs build
 Key: `--key-file`, else `$XDJRX_AES_KEY`, else `.env` (repo, from `tools/fetch_key.py`), else the app's key.
 
 ## Feature mods (scripted, regenerated from scratch)
+Writing/testing mods and the 3.00 release build: skill **[firmware-mods]**.
 ```
 tools/fw/build-custom-upd.sh 2.24 exfat,fps       # -> build/custom-upd/XDJRX.UPD + stick.img
 ```
@@ -37,7 +38,7 @@ the toolchain's glibc; test every build on a copy of the unit (it must reach `lo
 before anyone installs it: a library that fails to load stops rbp from starting.
 New rbp feature: `tools/fw/mods/<f>/<f>.c` with `XM_MODULE(f)` + a one-line `apply.sh`
 calling `../preload/apply.sh UNPACKED OVERLAY <f>.c`. Gate every patch on the expected words.
-Distribution goal: a delta patch vs stock 2.21 + patcher (`xdj fw mkpatch/patch`, docs §11).
+Distribution goal: a delta patch vs stock 2.21 + patcher (`xdj fw mkpatch/patch`, docs/firmware-mods.md §13).
 Research, addresses and the plan per feature: **docs/firmware-mods.md**. Test releases 2.22+,
 final 3.00. Test on a private `xdj-host` with a copy of the unit's fw dir, not the app's unit.
 Nothing goes on a real unit until proven in the emulator. The waveform mod is our own code,

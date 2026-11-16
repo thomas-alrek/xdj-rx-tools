@@ -20,7 +20,7 @@ OUT="$(cd "$OUT" && pwd)"
   "https://github.com/relan/exfat/releases/download/v$VER/$TGZ"
 echo "$SHA  $OUT/$TGZ" | shasum -a 256 -c - >/dev/null || { echo "checksum mismatch: $TGZ" >&2; exit 1; }
 
-docker run --rm --platform linux/arm/v7 -v "$OUT":/w -w /tmp alpine:3.20 sh -euc "
+docker run --rm --platform linux/arm/v7 -v "$OUT":/w -w /tmp alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc sh -euc "
   apk add --no-cache build-base fuse-dev fuse-static linux-headers >/dev/null
   tar xzf /w/$TGZ && cd fuse-exfat-$VER
   ./configure CFLAGS='-O2 -march=armv7-a -mtune=cortex-a9' LDFLAGS=-static >/dev/null
