@@ -194,6 +194,26 @@ static uint16_t rgb565(int r, int g, int b)
     return (uint16_t)((r >> 3) << 11 | (g >> 2) << 5 | (b >> 3));
 }
 
+/*
+ * PWV5's 3-bit channels are mostly high on all three (e.g. 7,6,5), so a linear map is
+ * near-white pastel; rekordbox shows saturated hues. Normalise the strongest channel to
+ * full brightness and stretch the others away from it (x2.5): 7,6,5 -> orange-salmon,
+ * 5,7,6 -> green, 6,6,7 -> lavender-blue; equal channels stay neutral.
+ */
+static uint16_t pwv5_color(unsigned r, unsigned g, unsigned b)
+{
+    unsigned m = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    if (!m)
+        return 0;
+    int c[3] = { (int)r, (int)g, (int)b };
+    for (int i = 0; i < 3; i++) {
+        int v = c[i] * 255 / (int)m;                  /* strongest channel -> 255 */
+        v = 255 - (255 - v) * 5 / 2;                  /* saturate */
+        c[i] = v < 0 ? 0 : v;
+    }
+    return rgb565(c[0], c[1], c[2]);
+}
+
 static uint8_t rows_of(float px)
 {
     int r = (int)(px * 1.5f + 0.5f);   /* beat-link half-heights -> our 45 rows */
@@ -240,8 +260,7 @@ static void load_track(const char *ext_path)
     if (p5 && s5 == 2 && n5 >= n3 && (t.rgb = malloc(n3 * 2))) {
         for (uint32_t i = 0; i < n3; i++) {
             uint16_t v = be16(p5 + 2 * i);
-            t.rgb[i] = rgb565(((v >> 13) & 7) * 255 / 7, ((v >> 10) & 7) * 255 / 7,
-                              ((v >> 7) & 7) * 255 / 7);
+            t.rgb[i] = pwv5_color((v >> 13) & 7, (v >> 10) & 7, (v >> 7) & 7);
         }
     }
     if (p7 && s7 == 3 && n7 >= n3 && (t.band = malloc(n3 * 3))) {

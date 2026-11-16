@@ -246,10 +246,13 @@ VERSION No.**; a **factory reset restores their defaults**.
     (`0x13ca98`/`0x13cb00`) and each of the 300 bars is repainted from the PWV5/PWV7 entries of
     its slice of the track (column x = PWAV entry x + x/3 of 400). The palette's "+6" variant isn't
     played/unplayed (both sides use the same entries), so no played state is shown.
-- Verified (2.33, emulator): RGB and 3-band detail and overview on the rekordbox test stick.
-- Open: colour tuning (RGB looks pastel on bright tracks: PWV5's 3-bit channels mapped linearly;
-  beat-link swaps green/blue — check against rekordbox), a second track per deck / two decks,
-  zoom levels, CPU on the real unit.
+- RGB colour: PWV5's 3-bit channels are mostly high on all three (e.g. 7,6,5), so a linear map is
+  near-white pastel, while rekordbox shows saturated hues. `pwv5_color` normalises the strongest
+  channel to 255 and stretches the others away from it ×2.5 (7,6,5 → orange-salmon, 5,7,6 → green,
+  6,6,7 → lavender); standard R/G/B order (beat-link swaps G/B).
+- Verified (emulator): RGB (2.34) and 3-band (2.33) detail and overview on the rekordbox test
+  stick; 3-band confirmed by eye against a CDJ-3000, with tracks on both decks and while zooming.
+- Open: RGB saturation tuning against rekordbox (one constant), CPU on the real unit.
 
 ## 9. OneLibrary 🔬 (low priority)
 
