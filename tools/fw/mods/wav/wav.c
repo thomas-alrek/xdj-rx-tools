@@ -93,8 +93,14 @@ static void nap_ns(long ns)
     nanosleep(&ts, 0);
 }
 
+/* ---- FLAC: the flac mod's codec (flac.c), when it is built in ---- */
+void *xm_flac_open(void *stream, uint32_t *rate, int *channels, int *bits, uint64_t *frames)
+    __attribute__((weak));
+int xm_flac_read(void *h, uint64_t frame, float *out, int n) __attribute__((weak));
+void xm_flac_close(void *h) __attribute__((weak));
+
 /* ---- per-reader format (rbp's object has no room for it) ---- */
-enum fmt { FMT_PCM, FMT_FLOAT };
+enum fmt { FMT_PCM, FMT_FLOAT, FMT_FLAC };
 struct wavinfo {
     void *obj;
     int fmt, bits, ch, decim;
@@ -103,6 +109,9 @@ struct wavinfo {
     uint8_t *raw;                      /* raw input window */
     int cap;                           /* window capacity in input frames */
     int logged_read;
+    void *flac;                        /* FMT_FLAC: the decoder */
+    long win_first;                    /* FMT_FLAC: the window last decoded into buf */
+    int win_n;
 };
 #define NINFO 16
 static struct wavinfo infos[NINFO];
@@ -121,6 +130,9 @@ static struct wavinfo *info_of(void *obj, int create)
     if (!w && create) {
         w = &infos[next_info];
         next_info = (next_info + 1) % NINFO;
+        if (w->flac && xm_flac_close)
+            xm_flac_close(w->flac);         /* a reader rbp has since destroyed */
+        w->flac = 0;
         w->obj = obj;
     }
     pthread_mutex_unlock(&info_lock);
@@ -148,6 +160,66 @@ static void design(float *h, int taps, int decim)
         h[i] = (float)(h[i] / sum);
 }
 
+/* rbp's reader fields for a parsed file */
+static void fill_object(void *obj, const struct wavinfo *w, uint32_t rate, uint32_t data_off)
+{
+    R_RATE(obj) = rate / w->decim;
+    R_CH(obj) = (uint16_t)w->ch;
+    R_BITS(obj) = (uint16_t)w->bits;
+    R_BPS(obj) = (uint16_t)((w->bits + 7) / 8);
+    R_BITRATE(obj) = (rate / w->decim) * w->ch * w->bits;
+    R_GAIN0(obj) = R_GAIN1(obj) = 1.0f / 32768;   /* stock value; our read emits +-1.0 */
+    R_FRAMES(obj) = w->in_frames / w->decim ? w->in_frames / w->decim : 1;
+    R_DATAOFF(obj) = data_off;
+    if (R_RAWBUF(obj))
+        _ZdaPv(R_RAWBUF(obj));
+    R_RAWBUF(obj) = _Znaj(16);                     /* the stock dtor delete[]s it */
+}
+
+static int decim_for(uint32_t rate)
+{
+    return rate >= 176400 ? 4 : rate > 48000 ? 2 : 1;
+}
+
+/* A FLAC file in a FileReadWav (the flac mod routes .flac here). */
+static int flac_parse(void *obj)
+{
+    if (!xm_flac_open)
+        return 0;
+    struct wavinfo *w = info_of(obj, 1);
+    if (!w)
+        return 0;
+    if (w->flac) {
+        xm_flac_close(w->flac);
+        w->flac = 0;
+    }
+    uint32_t rate = 0;
+    int ch = 0, bits = 0;
+    uint64_t frames = 0;
+    void *h = xm_flac_open(R_STREAM(obj), &rate, &ch, &bits, &frames);
+    if (!h) {
+        xm_log("flac: not a FLAC stream");
+        return 0;
+    }
+    if (ch < 1 || ch > 2 || rate < 8000 || rate > 192000 || !frames || frames > 0xffffffffu) {
+        xm_log("flac: unsupported %d ch / %u Hz / %llu frames", ch, rate, frames);
+        xm_flac_close(h);
+        return 0;
+    }
+    w->fmt = FMT_FLAC;
+    w->flac = h;
+    w->bits = bits;
+    w->ch = ch;
+    w->decim = decim_for(rate);
+    w->in_frames = (uint32_t)frames;
+    w->win_n = 0;
+    w->logged_read = 0;
+    fill_object(obj, w, rate, 0);
+    xm_log("flac: %u Hz %d-bit %d ch, decim %d -> %u Hz, %u frames", rate, bits, ch, w->decim,
+           rate / w->decim, R_FRAMES(obj));
+    return 1;
+}
+
 /* ---- header parse (vtable slot 2): 1 = ok ---- */
 static uint32_t le32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 static uint16_t le16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
@@ -160,7 +232,11 @@ static int wav_parse(void *obj)
     uint32_t rate = 0;
 
     R_DATAOFF(obj) = 0;
-    if (!s || st_read(s, h, 12) != 12 || memcmp(h, "RIFF", 4) || memcmp(h + 8, "WAVE", 4))
+    if (!s || st_read(s, h, 12) != 12)
+        return 0;
+    if (!memcmp(h, "fLaC", 4) || !memcmp(h, "ID3", 3))
+        return flac_parse(obj);
+    if (memcmp(h, "RIFF", 4) || memcmp(h + 8, "WAVE", 4))
         return 0;
     uint32_t off = 12;
     st_seek(s, off);
@@ -205,7 +281,7 @@ static int wav_parse(void *obj)
         xm_log("wav: unsupported %d ch / %u Hz", ch, rate);
         return 0;
     }
-    int decim = rate >= 176400 ? 4 : rate > 48000 ? 2 : 1;
+    int decim = decim_for(rate);
     uint32_t data_size = le32(h + 4);
     int frame_bytes = ch * (bits / 8);
     uint32_t in_frames = data_size / frame_bytes;
@@ -219,18 +295,11 @@ static int wav_parse(void *obj)
     w->decim = decim;
     w->in_frames = in_frames;
     w->logged_read = 0;
-
-    R_RATE(obj) = rate / decim;
-    R_CH(obj) = (uint16_t)ch;
-    R_BITS(obj) = (uint16_t)bits;
-    R_BPS(obj) = (uint16_t)(bits / 8);
-    R_BITRATE(obj) = (rate / decim) * ch * bits;
-    R_GAIN0(obj) = R_GAIN1(obj) = 1.0f / 32768;   /* stock value; our read emits +-1.0 */
-    R_FRAMES(obj) = in_frames / decim ? in_frames / decim : 1;
-    R_DATAOFF(obj) = off;
-    if (R_RAWBUF(obj))
-        _ZdaPv(R_RAWBUF(obj));
-    R_RAWBUF(obj) = _Znaj(16);                     /* the stock dtor delete[]s it */
+    if (w->flac && xm_flac_close) {
+        xm_flac_close(w->flac);
+        w->flac = 0;
+    }
+    fill_object(obj, w, rate, off);
     xm_log("wav: %u Hz %d-bit %s %d ch, decim %d -> %u Hz, %u frames, data @%u", rate, bits,
            fmt == FMT_FLOAT ? "float" : "pcm", ch, decim, rate / decim, R_FRAMES(obj), off);
     return 1;
@@ -280,10 +349,50 @@ static void decode(const struct wavinfo *w, const uint8_t *raw, float *out, int 
     }
 }
 
+/* FMT_FLAC: decode [first, first+n) into w->buf, keeping what overlaps the previous
+ * window (the decimator's windows overlap by its length), so decoding stays sequential. */
+static int flac_window(void *obj, struct wavinfo *w, long first, int n)
+{
+    int keep = 0;
+    if (w->win_n && first >= w->win_first && first < w->win_first + w->win_n) {
+        int shift = (int)(first - w->win_first);
+        keep = w->win_n - shift;
+        if (keep > n)
+            keep = n;
+        memmove(w->buf, w->buf + 2 * shift, (size_t)keep * 2 * sizeof(float));
+    }
+    memset(w->buf + 2 * keep, 0, (size_t)(n - keep) * 2 * sizeof(float));
+    w->win_first = first;
+    w->win_n = 0;                            /* until the decode below succeeds */
+    long lo = first + keep;
+    if (lo < 0)
+        lo = 0;
+    long hi = first + n;
+    if (hi > (long)w->in_frames)
+        hi = w->in_frames;
+    if (hi > lo) {
+        if (R_FIRST(obj)) {                  /* first read: wait for the stream, as stock */
+            while (!st_ready(R_STREAM(obj)) && !rbp_errcheck(obj))
+                nap_ns(1000000);
+            R_FIRST(obj) = 0;
+        }
+        int want = (int)(hi - lo);
+        int got = xm_flac_read(w->flac, (uint64_t)lo, w->buf + 2 * (lo - first), want);
+        if (got != want) {
+            xm_log("flac: decode failed at frame %ld: %d of %d frames", lo, got, want);
+            return 0;
+        }
+    }
+    w->win_n = n;
+    return 1;
+}
+
 /* Read input frames [first, first+n) as stereo floats into w->buf (zeros outside the
  * file). Returns 0 on a stream error (the caller reports it). */
 static int read_window(void *obj, struct wavinfo *w, long first, int n)
 {
+    if (w->fmt == FMT_FLAC)
+        return flac_window(obj, w, first, n);
     struct stream *s = R_STREAM(obj);
     int fb = (w->bits / 8) * w->ch;
     memset(w->buf, 0, (size_t)n * 2 * sizeof(float));
@@ -320,6 +429,7 @@ static int ensure_window(struct wavinfo *w, int frames)
     w->buf = malloc((size_t)frames * 2 * sizeof(float));
     w->raw = malloc((size_t)frames * 16);      /* up to 2 ch x 8 bytes */
     w->cap = (w->buf && w->raw) ? frames : 0;
+    w->win_n = 0;                              /* the FLAC window cache is gone */
     return w->cap != 0;
 }
 

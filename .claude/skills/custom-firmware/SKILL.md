@@ -28,6 +28,9 @@ stock rbp; API `tools/fw/mods/preload/src/xdjmod.h`: `XM_MODULE`, `xm_expect32/p
 No. with save/apply/factory-reset handled by the core); `fps` = UI FRAME RATE row; `wav` = WAV float/32-bit/≤192 kHz reader (vtable slots +
 the browser tag parser's format checks; test sticks: `tools/fw/mods/wav/make-wav-test-image.sh`,
 `tools/make-fat32-image.sh`; check the output by recording it: `XDJAUDIO=wav,path=…,timer-period=1451`).
+`flac` = FLAC via the wav reader (suffix hook 0x401d8, browser classifier 0x1f1ce4 -> WAV,
+tag parser 0x1a7544 -> STREAMINFO + Vorbis comments; dr_flac pinned). One-stick test of every
+mod: `tools/fw/mods/make-feature-test-image.sh <rekordbox.xml> [playlist]` (exFAT + baken export).
 `waveform` = WAVEFORM COLOR row (RGB/3-band detail + overview; `.EXT` interposer). Defaults: 60 fps,
 3-band. **libxdjmod.so is linked against the unpacked firmware's own libs** (build.sh FWLIB) - never
 the toolchain's glibc; test every build on a copy of the unit (it must reach `loaded into rbp`)

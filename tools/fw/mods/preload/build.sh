@@ -30,7 +30,7 @@ rm -rf "$OUT/features" "$OUT/obj"; mkdir -p "$OUT/features" "$OUT/obj"
 for f in "$@"; do cp "$f" "$OUT/features/"; done
 
 docker run --rm -v "$HERE/src":/src:ro -v "$OUT":/out -v "$FWLIB":/fwlib:ro "$IMG" sh -euc '
-  CC="arm-linux-gnueabi-gcc -fPIC -O2 -Wall -Wextra -Wno-unused-parameter -march=armv7-a -mtune=cortex-a9 -mfloat-abi=softfp -mfpu=vfpv3-d16 -I/src"
+  CC="arm-linux-gnueabi-gcc -fPIC -O2 -Wall -Wextra -Wno-unused-parameter -march=armv7-a -mtune=cortex-a9 -mfloat-abi=softfp -mfpu=vfpv3-d16 -I/src -I/out/features"
   for f in /src/*.c $(ls /out/features/*.c 2>/dev/null); do
     $CC -c -o /out/obj/$(basename "$f" .c).o "$f"
   done

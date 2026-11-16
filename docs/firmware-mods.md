@@ -14,9 +14,10 @@ Status: ✅ built and verified in the emulator · 🔬 researched (static analys
 | UTILITY menu rows for mods (framework) | ✅ (2.24) | extended item table | done | — |
 | `fps` — UI frame rate 20 / 30 / 60 (default 60) | ✅ (2.33) emulator | 2 immediates + timer detour | done (real unit: untested) | real-unit test |
 | `wav` — WAV float / 32-bit / up to 192 kHz | ✅ (2.27) emulator | reader vtable slots + tag-parser checks | done (AIFF: open) | AIFF |
-| FLAC | 🔬 | preload: reader factory + dr_flac | medium-high | 1–2 weeks |
+| `flac` — FLAC 16/24-bit ≤ 192 kHz, with tags | ✅ (2.41) emulator | suffix + browser hooks, dr_flac via the wav reader | done (real unit: untested) | artwork |
 | `waveform` — RGB / 3-band waveforms (default 3-band) | ✅ (2.33) emulator | `.EXT` interposer + detail/overview detours | done (real unit: untested) | tuning |
-| OneLibrary | 🔬 | mount-time `export.pdb` synthesis | medium, low value | 2–3 weeks |
+| OneLibrary | 🔬 later (nice to have) | mount-time `export.pdb` synthesis | medium | 2–3 weeks |
+| Waveforms generated for folder tracks | ⬜ idea | reader computes entries into rbp's deck array | likely | — |
 
 All addresses below are for the 2.21 `rbp` (sha256 `4f62aa71…`, [rbp-binary-internals] skill).
 
@@ -198,19 +199,35 @@ VERSION No.**; a **factory reset restores their defaults**.
   AIFC, and the stock rate bug (96 kHz AIFF read as 48 kHz); a rekordbox-exported hi-res track
   (export.pdb path, not just [FOLDER]); CPU headroom on the real unit.
 
-## 7. FLAC 🔬
+## 7. `flac` — FLAC ✅ (emulator)
 
-- Rejected only at load: `.flac` matches no suffix in `0x3dac8`. rekordbox writes `file_type = 5`
-  for FLAC in export.pdb; rbp's tag task treats 5 like other non-WAV/AIFF types (no error).
-- Reader interface (8 vtable slots): parseHeader fills frames `+0x14`, rate `+0x18`, channels
-  `+0x1c`, bits `+0x1e`; `readPcm(this, startFrame, float *outLR, n)` is random access, stereo
-  float ±1.0, zero-fill past the end. The file is read through rbp's InputStream at `+4` (length,
-  read, tell, seek, ready), so a decoder can use rbp's USB page cache.
-- Mod: hook the suffix helper `0x401d8` so `.flac` builds a `FileReadWav` shell, and
-  `FileReader::open` `0x3037c` to swap that object's vtable to FLAC slots backed by dr_flac
-  (public domain) reading via the InputStream. Same ≥ 88.2 kHz decimation as WAV.
-- Risks: decode CPU (estimated a few % of a core per deck at 44.1/16, 2–3× at 96/24), slow seeks in
-  files without a SEEKTABLE (load and hot-cue pre-cache), the browser question above.
+- **Loading.** rbp picks a reader by suffix in its factory (`0x3dac8`), asking `0x401d8(path,
+  suffix)` once per known suffix; `.flac` matches none. `flac.c` detours the helper: asked about
+  `".WAV"` (literal `0x35dd04`) for a path ending `.flac`, it says yes, so rbp builds a
+  `FileReadWav` — whose parse/read slots belong to the `wav` mod. `wav.c` sees `fLaC` (or `ID3`)
+  and decodes through `flac.c`'s codec (dr_flac v0.13.5, pinned + checksummed by
+  `fetch-dr_flac.sh`, reading via rbp's InputStream), sharing the wav reader's decimation for
+  > 48 kHz. Decoding stays sequential: the decimator's overlapping windows reuse what was decoded.
+- **Browser.** The folder view classifies names in `0x1f1ce4(dirent, utf16 name, flag)`: MP3 1, AAC 2,
+  MP4 3, M4A 4, WAV 11, AIF(F) 12, JPG 200, dir 100, else −1 (hidden). Type 5 (export.pdb's FLAC)
+  makes the whole folder come up EMPTY, so `.flac` is classified as WAV (11). The WAV tag parser
+  `0x1a7544(ctx, info)` then rejects it (no `RIFF`) after reading the first 2 KB into `ctx[7]`;
+  our detour fills the track info from STREAMINFO (length in 1/75 s at `+8`, channels/format
+  `+0x4d`, rate code `+0x4e`, kbps `+0x46`, "length valid" `+0x4a`, parsed `+0x4c`) and the text
+  fields from the VORBIS_COMMENT block, read through the parser's `FILE *` (`ctx[1]`; `0x131634` /
+  `0x131708` are fread/fseek wrappers): TITLE `+0x50`, ARTIST `+0x250`, COMMENT `+0x350`, ALBUM
+  `+0x550` (the row with the disc icon), GENRE `+0x150`. Text is converted UTF-8 → Latin-1 (rbp's
+  8-bit text; beyond U+00FF → `?`).
+- **Library.** export.pdb tracks of type 5 load through the same suffix hook; their waveforms come
+  from the rekordbox analysis (waveform mod).
+- **Verified (2.38–2.41, emulator):** 44.1/16, 48/24, 96/24, 192/24 with and without a seek table,
+  from [FOLDER] and from a rekordbox playlist on an exFAT stick; the recorded output has the exact
+  test tones (1000 Hz L / 2000 Hz R at the WAV levels) and the ultrasonic tone at −96 … −134 dBFS;
+  length, artist, album and comment shown in the folder view.
+- Test sticks: `tools/fw/mods/flac/make-flac-test-image.sh` (tagged tones, no library) and
+  `tools/fw/mods/make-feature-test-image.sh XML [PLAYLIST]` — an exFAT stick with a real rekordbox
+  export of a playlist (baken), the one-stick test of every mod.
+- Open: embedded artwork (PICTURE block), FLAC decode CPU on the real unit.
 
 ## 8. `waveform` — RGB / 3-band waveforms ✅ (emulator)
 
@@ -309,9 +326,12 @@ redistributed. Design:
    benchmark, on-screen timer check, factory reset live test.
 3. ✅ WAV float / 32-bit / hi-res + the 24-bit fix (emulator). Open: AIFF, a rekordbox export.
 4. ✅ RGB / 3-band waveforms (own implementation, inspired by JaNeinHub/XDJ-RX-Mod) + UTILITY row (emulator).
-5. FLAC.
-6. OneLibrary converter, only if OneLibrary-only sticks turn up.
-7. Delta patch + patcher (§11).
+5. ✅ FLAC, with Vorbis-comment tags (emulator). Open: embedded artwork.
+6. Waveforms generated on the fly for folder tracks (no rekordbox analysis): the reader decodes the
+   audio anyway, so it could compute rbp's per-deck `{height, whiteness}` entries (and 3-band
+   colours with simple band filters) when such a track loads.
+7. OneLibrary — nice to have, for when export.pdb goes away; not now.
+8. Delta patch + patcher (§11), after the mod research.
 
 Defaults (and factory-reset values) are the improvements — 60 fps and 3-band — so they show right
 after the update; the stock behaviour is one UTILITY setting away. Release as 3.00 once the set is

@@ -24,4 +24,9 @@ and `tools/test/regress.py` use the first `test/usb/*.img` (regress.py loads a c
 - `wav_test.img`: `rekordbox_new.img` + a folder of test tones in WAV formats stock firmware does and
   doesn't play (`tools/fw/mods/wav/make-wav-test-image.sh`; browse with [FOLDER]).
 - Any files on a blank FAT32 stick, no library: `tools/make-fat32-image.sh OUT.img FILE...`.
+- `flac_test.img`: tagged FLAC tones + a control WAV, no library (`tools/fw/mods/flac/make-flac-test-image.sh`).
+- `wav_samples.img`: hi-res / float WAV samples on a blank FAT32 stick.
+- `features_exfat.img`: every mod on one stick - exFAT with a real rekordbox export (export.pdb +
+  analysis) of a playlist mixing MP3, FLAC and hi-res WAV
+  (`tools/fw/mods/make-feature-test-image.sh <rekordbox.xml> [playlist]`, needs baken).
 - Dev: see [docs/usb.md](../../docs/usb.md) (insert after rbp is polling).
