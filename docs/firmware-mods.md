@@ -296,7 +296,7 @@ means following their licences (source offer / notices):
 | `exfat` | [relan/exfat](https://github.com/relan/exfat) 1.4.0 (`mount.exfat-fuse`) | GPL-2.0-or-later |
 | `exfat` | libfuse 2.9 (static, Alpine `fuse-static`) | LGPL-2.1 |
 | `exfat` | musl libc (static) | MIT |
-| FLAC (planned) | [dr_flac](https://github.com/mackron/dr_libs) | public domain / MIT-0 |
+| `flac` | [dr_flac](https://github.com/mackron/dr_libs) v0.13.5 | public domain / MIT-0 |
 
 ## 11. Distribution: a delta patch, not a firmware image
 
