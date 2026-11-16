@@ -159,6 +159,8 @@ $X fw repack build/XDJ-RX_v221.zip build/unpacked --release 2.31 -o build/MY.UPD
 Then *File → Install Firmware Update…* → `build/MY.UPD`. The firmware's update check is only a CRC
 and a model prefix — there is no signature — so Pioneer's updater installs a rebuilt image like an
 official one. Best practices, the overlay workflow and the formats: [docs/custom-firmware.md](docs/custom-firmware.md).
+Feature mods are built from scripts (`tools/fw/build-custom-upd.sh 2.23 exfat,preload`):
+[docs/firmware-mods.md](docs/firmware-mods.md).
 Never commit firmware contents.
 
 ## Repository layout
@@ -179,6 +181,7 @@ Never commit firmware contents.
 |---|---|
 | [docs/standalone-app.md](docs/standalone-app.md) | the desktop app: architecture, provisioning, power, packaging, debugging |
 | [docs/custom-firmware.md](docs/custom-firmware.md) | building, installing and verifying custom firmware |
+| [docs/firmware-mods.md](docs/firmware-mods.md) | feature mods (exFAT, hook library, FPS, WAV/FLAC, waveforms, OneLibrary) and their research |
 | [docs/emulator-status.md](docs/emulator-status.md) | what works, what doesn't, open items |
 | [docs/subucom-frame-map.md](docs/subucom-frame-map.md) | the front-panel control map (every button, fader, knob, encoder) |
 | [docs/subucom-led-map.md](docs/subucom-led-map.md) | LEDs, level meters, jog rings |
@@ -231,3 +234,8 @@ affiliated with or endorsed by them.
   panel write-up (the browse encoder as a 16-bit counter in the panel frame) pointed the way for the
   XDJ-RX's encoder and several other panel fields.
 - Pioneer DJ's published GPL/LGPL source release for the XDJ-RX (kernel, u-boot, drivers).
+- [JaNeinHub/XDJ-RX-Mod](https://github.com/JaNeinHub/XDJ-RX-Mod), the first RGB / 3-band waveform
+  mod for the XDJ-RX (an LD_PRELOAD hook library for firmware 2.21): the inspiration for our own
+  waveform mod and its hook points ([docs/firmware-mods.md](docs/firmware-mods.md)).
+- [Deep Symmetry's](https://djl-analysis.deepsymmetry.org/) rekordbox export and ANLZ format
+  analysis, and [relan/exfat](https://github.com/relan/exfat) (the exFAT mod's FUSE driver).

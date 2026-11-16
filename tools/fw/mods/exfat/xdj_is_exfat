@@ -1,0 +1,6 @@
+#!/bin/sh
+# udev PROGRAM for the exFAT mod: prints "exfat" when the block device $1 holds an
+# exFAT filesystem (boot-sector name "EXFAT   " at byte 3). The firmware's vol_id
+# predates exFAT, so it can't tell us.
+[ "$(dd if="$1" bs=1 skip=3 count=8 2>/dev/null)" = "EXFAT   " ] && echo exfat
+exit 0

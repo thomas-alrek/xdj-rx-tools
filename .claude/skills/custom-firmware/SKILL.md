@@ -16,6 +16,19 @@ cargo test --release                            # codec round trips (needs build
 ```
 Key: `--key-file`, else `$XDJRX_AES_KEY`, else `.env` (repo, from `tools/fetch_key.py`), else the app's key.
 
+## Feature mods (scripted, regenerated from scratch)
+```
+tools/fw/build-custom-upd.sh 2.23 exfat,preload   # -> build/custom-upd/XDJRX.UPD + stick.img
+```
+Each mod is `tools/fw/mods/<name>/apply.sh UNPACKED OVERLAY` (edits generated from the unpacked
+official image; our binaries built from source in Docker; mods stack). `exfat` = static
+fuse-exfat + udev rule; `preload` = `libxdjmod.so` LD_PRELOADed into stock rbp (hooks must gate on
+rbp's checksum - it loads into every child process too). New mod: add a dir with `apply.sh`.
+Research, addresses and the plan per feature: **docs/firmware-mods.md**. Test releases 2.22+,
+final 3.00. Test on a private `xdj-host` with a copy of the unit's fw dir, not the app's unit.
+Nothing goes on a real unit until proven in the emulator. The waveform mod is our own code,
+inspired by JaNeinHub/XDJ-RX-Mod (GPL-3, credited in docs/README) - don't copy its code.
+
 ## Quickest: unpack, edit in place, repack
 ```
 X=crates/xdj-fw/target/release/xdj

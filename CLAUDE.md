@@ -36,11 +36,11 @@ preservation on owned hardware.
   (QEMU 11.1.0, `--disable-libssh`). SD-card test bed: `build-nand.py`/`.sh`, `cramfs_extract.py`, `watch.sh`.
 - `tools/` — `xdj-panel/` (`panel.html`, `logs.html`, `server.py` = the dev panel server kept identical
   to `panel.rs`, `test_panel_parity.py`, `debug/` RE helpers: `relaunch.sh`, `rsp.py`, `tables.py`,
-  `mon.py`, `ser.py`, `inj.py`, `ledprobe.py`, `sweep_*.py`), `test/regress.py`, `fw/make-test-upd.sh`,
+  `mon.py`, `ser.py`, `inj.py`, `ledprobe.py`, `sweep_*.py`), `test/regress.py`, `fw/make-test-upd.sh`, `fw/build-custom-upd.sh` + `fw/mods/<mod>/apply.sh` (feature mods),
   `fetch_key.py` (the AES key), `net/install-vmnet-bridge.sh` (optional LAN bridge), `build-rb-usb.sh`, `requirements.txt` (dev-tool Python deps).
 - `packaging/` — `build-macos-app.sh` (→ `dist/XDJ-RX.app`), `collect-licenses.py`.
 - `docs/` — `subucom-frame-map.md` (**authoritative control map**), `subucom-led-map.md`,
-  `service-modes.md`, `firmware-update-and-nand.md`, `usb.md`, `custom-firmware.md`,
+  `service-modes.md`, `firmware-update-and-nand.md`, `usb.md`, `custom-firmware.md`, `firmware-mods.md`,
   `standalone-app.md`, `emulator-status.md` (feature board), `testing.md`, `rbp-and-panel-protocol.md`,
   `debug-console-protocol.md`, `version-display-and-override.md`.
 - `build/` (git-ignored) — `qemu-src/` (patched QEMU), `extract/rbp` (the analysed binary), `qemu/`
@@ -98,7 +98,8 @@ preservation on owned hardware.
 - Run / boot / USB / inject / screenshot / audio / service modes → **`run-xdj-emulator`**.
 - Map a control: GPIO → **`map-gpio-control`**; sub-ucom → **`map-subucom-{button,fader,knob,rotary}`**.
 - Reverse-engineer `rbp` → **`rbp-binary-internals`**.
-- `.UPD` format → **`upd-firmware-format`**; build/install custom firmware → **`custom-firmware`**.
+- `.UPD` format → **`upd-firmware-format`**; build/install custom firmware → **`custom-firmware`**
+  (feature mods: `tools/fw/build-custom-upd.sh RELEASE mod,…`, `tools/fw/mods/*`, `docs/firmware-mods.md`).
 - QEMU device models and patches → **`qemu-imx6-patches`**; the SD test-bed image → **`build-xdj-sd-image`**.
 - Desktop app (shell, host, packaging) → **`build-xdj-app`**; the virtual panel → **`xdj-virtual-panel`**.
 - Tests (`docs/testing.md`): `cargo test --release` (crates/xdj-fw), `tools/xdj-panel/test_panel_parity.py`
