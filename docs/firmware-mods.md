@@ -13,7 +13,7 @@ Status: ✅ built and verified in the emulator · 🔬 researched (static analys
 | `preload` — the xdjmod framework (`libxdjmod.so`) | ✅ (2.24) | `LD_PRELOAD` in `apl_start` | done | — |
 | UTILITY menu rows for mods (framework) | ✅ (2.24) | extended item table | done | — |
 | `fps` — UI frame rate 20 / 30 / 60 | ✅ (2.24) emulator | 2 immediates + timer detour | done (real unit: untested) | real-unit test |
-| WAV 32-bit float, ≤ 96 kHz | 🔬 | preload: WAV/AIFF reader vtable slots | high | 2–4 days |
+| `wav` — WAV float / 32-bit / up to 192 kHz | ✅ (2.27) emulator | reader vtable slots + tag-parser checks | done (AIFF: open) | AIFF |
 | FLAC | 🔬 | preload: reader factory + dr_flac | medium-high | 1–2 weeks |
 | RGB / 3-band waveforms | 🔬 | preload: ANLZ PWV5/PWV7 + renderers | high / medium-high | 1–3 weeks |
 | OneLibrary | 🔬 | mount-time `export.pdb` synthesis | medium, low value | 2–3 weeks |
@@ -147,7 +147,7 @@ VERSION No.**; a **factory reset restores their defaults**.
   unchanged at 60 but run on another clock (they don't slow down at stock's 52 ms frames either);
   CPU headroom and `ALSA: Resolve xrun` with audio; the real unit last.
 
-## 6. WAV 32-bit float and up to 96 kHz 🔬
+## 6. `wav` — WAV float, 32-bit, up to 192 kHz ✅ (emulator)
 
 - Readers are chosen by filename suffix only (`PcmReader::open` `0x3dac8`; `.WAV` → `FileReadWav`,
   vtable `0x35d588`; `.AIF/.AIFF` → `FileReadAiff`, vtable `0x35cf98`). Header parse = vtable slot
@@ -159,12 +159,36 @@ VERSION No.**; a **factory reset restores their defaults**.
 - The engine runs at 44.1 kHz; any other file rate goes through `common::SampleRateConverter`
   (`dsp::LagrangeSRC`, 4-point Lagrange, **no anti-alias filter**). Frames > 529,200,000 are
   rejected (≈ 92 min at 96 kHz).
-- Mod: replace slots 2/3 of both vtables (pointers `0x35d590`/`0x35d594`, `0x35cfa0`/`0x35cfa4`):
-  PCM 16/24/32 and float 32/64, extensible, 32–192 kHz, full 24-bit precision; for ≥ 88.2 kHz do a
-  half-band 2:1 (or 4:1) decimation in the reader and report 44.1/48 kHz, so rbp's resampler only
-  ever sees ≤ 48 kHz.
-- Open: whether the browser hides rows by export.pdb rate/depth — no such check was found; one
-  USB test with a 96 kHz/float WAV export settles it.
+- **A second check, in the browser.** The folder view and track info take a WAV's length from
+  rbp's tag parser `0x1a7544` (the DBCM task), which has the same stock limits and returns −1 for
+  anything else — the track then loads with no length. Its duration formula (data bytes × 600 /
+  (ch × rate × bits), in 1/75 s) holds for every format we accept, so the mod turns its three
+  format checks into no-ops: tag ≠ 1 (`0x1a77f8`), rate not 44.1/48 kHz (`0x1a7864`), bits not
+  16/24 (`0x1a78d8`). The channel check (≤ 2) stays.
+- `wav.c` (module `wav`) points WAV vtable slots 2/3/7 (`0x35d590`, `0x35d594`, `0x35d5a4`) at its
+  own parse / readPcm / rate check, mirroring the stock functions' use of the object and rbp's
+  InputStream (seek/read/ready, the first-read wait, the error −6 path, the 0.1 ms yield per
+  512 frames):
+  - PCM 16/24/32 and float 32/64, `WAVE_FORMAT_EXTENSIBLE`, mono/stereo, 8–192 kHz, word-aligned
+    chunk walking; full precision (fixes stock's 24-bit truncation); float clamped to ±1.
+  - ≥ 88.2 kHz: a windowed-sinc low-pass (Blackman, 63 taps for 2:1, 127 for 4:1, cutoff ≈ 0.46 ×
+    the output rate) and decimation in the reader, reporting 44.1/48 kHz — rbp's own resampler
+    only sees ≤ 48 kHz. Per-reader state lives in a small side table (rbp's object has no room).
+  - The library uses VFPv3 internally (`-mfloat-abi=softfp`), keeping rbp's soft-float calls.
+  - Each parse logs one line (`wav: 96000 Hz 24-bit pcm 2 ch, decim 2 -> 48000 Hz, …`).
+- **Verified (2.27, emulator)** with `tools/fw/mods/wav/make-wav-test-image.sh` (tones in 6 formats
+  under `XDJ WAV TEST`, browsed via [FOLDER]) and two real-world samples (96 kHz/24 and
+  48 kHz/float, extensible with `fact`/`LIST` chunks) on a library-less FAT32 stick
+  (`tools/make-fat32-image.sh`). All play with the right length. The unit's output, recorded with
+  QEMU's `wav` audio driver (`XDJAUDIO=wav,path=…,timer-period=1451`) and analysed: 1000 Hz left /
+  2000 Hz right exact in every format (pitch and channel order right through decimation + SRC),
+  levels as generated; the −12 dBFS ultrasonic tone (30 kHz / 60 kHz) shows at its alias
+  frequencies only at −92 … −110 dBFS (≈ 80–100 dB suppression).
+- "END" on a deck after loading in the emulator just means the (short) test file played out —
+  a deck that was playing keeps playing the new track.
+- Open: the AIFF reader (slots at `0x35cfa0`/`0x35cfa4`, tag parser `0x1a7fe0`) — 32-bit/float
+  AIFC, and the stock rate bug (96 kHz AIFF read as 48 kHz); a rekordbox-exported hi-res track
+  (export.pdb path, not just [FOLDER]); CPU headroom on the real unit.
 
 ## 7. FLAC 🔬
 
@@ -254,7 +278,7 @@ redistributed. Design:
    factory-reset hook.
 2. ✅ FPS mod with real-time timers + UTILITY row; emulator benchmark. Open: real-time-playback
    benchmark, on-screen timer check, factory reset live test.
-3. WAV float / hi-res (+ the 24-bit and AIFF-rate fixes).
+3. ✅ WAV float / 32-bit / hi-res + the 24-bit fix (emulator). Open: AIFF, a rekordbox export.
 4. RGB / 3-band waveforms (own implementation, inspired by JaNeinHub/XDJ-RX-Mod) + UTILITY row.
 5. FLAC.
 6. OneLibrary converter, only if OneLibrary-only sticks turn up.

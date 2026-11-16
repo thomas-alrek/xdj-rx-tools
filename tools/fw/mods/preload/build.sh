@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Build libxdjmod.so for the XDJ-RX userland (ARM EABI5 soft-float, glibc 2.13): the
 # framework core (src/) plus the feature modules' sources, with Debian's armel cross-gcc
-# in Docker (image xdjmod-armel-cc, built once). Fails if the library needs a glibc
-# symbol newer than the firmware's 2.13.
+# in Docker (image xdjmod-armel-cc, built once). Hardware floating point inside the
+# library (VFPv3; the Cortex-A9 has it) with the soft-float calling convention rbp uses.
+# Fails if the library needs a glibc symbol newer than the firmware's 2.13.
 #
 #   tools/fw/mods/preload/build.sh OUTDIR [FEATURE.c ...]
 set -euo pipefail
@@ -23,8 +24,9 @@ for f in "$@"; do cp "$f" "$OUT/features/"; done
 
 docker run --rm -v "$HERE/src":/src:ro -v "$OUT":/out "$IMG" sh -euc '
   arm-linux-gnueabi-gcc -shared -fPIC -O2 -Wall -Wextra -Wno-unused-parameter \
-      -march=armv7-a -mtune=cortex-a9 -I/src -o /out/libxdjmod.so \
-      /src/*.c $(ls /out/features/*.c 2>/dev/null) -lpthread
+      -march=armv7-a -mtune=cortex-a9 -mfloat-abi=softfp -mfpu=vfpv3-d16 \
+      -I/src -o /out/libxdjmod.so \
+      /src/*.c $(ls /out/features/*.c 2>/dev/null) -lpthread -lm
   arm-linux-gnueabi-strip /out/libxdjmod.so
   arm-linux-gnueabi-objdump -T /out/libxdjmod.so | grep -o "GLIBC_[0-9.]*" | sort -uV > /out/glibc-versions.txt'
 NEWEST="$(tail -1 "$OUT/glibc-versions.txt")"

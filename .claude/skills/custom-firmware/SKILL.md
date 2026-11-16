@@ -25,8 +25,10 @@ official image; our binaries built from source in Docker; mods stack). `exfat` =
 fuse-exfat + udev rule; `preload` = the **xdjmod framework** (`libxdjmod.so`, LD_PRELOADed into
 stock rbp; API `tools/fw/mods/preload/src/xdjmod.h`: `XM_MODULE`, `xm_expect32/patch32/detour`,
 `xm_cfg_get/set` -> /root/rbp/xdjmod.conf, `xm_menu_add` = a native UTILITY row before VERSION
-No. with save/apply/factory-reset handled by the core); `fps` = UI FRAME RATE row (an xdjmod
-module). New rbp feature: `tools/fw/mods/<f>/<f>.c` with `XM_MODULE(f)` + a one-line `apply.sh`
+No. with save/apply/factory-reset handled by the core); `fps` = UI FRAME RATE row; `wav` = WAV float/32-bit/≤192 kHz reader (vtable slots +
+the browser tag parser's format checks; test sticks: `tools/fw/mods/wav/make-wav-test-image.sh`,
+`tools/make-fat32-image.sh`; check the output by recording it: `XDJAUDIO=wav,path=…,timer-period=1451`).
+New rbp feature: `tools/fw/mods/<f>/<f>.c` with `XM_MODULE(f)` + a one-line `apply.sh`
 calling `../preload/apply.sh UNPACKED OVERLAY <f>.c`. Gate every patch on the expected words.
 Distribution goal: a delta patch vs stock 2.21 + patcher (`xdj fw mkpatch/patch`, docs §11).
 Research, addresses and the plan per feature: **docs/firmware-mods.md**. Test releases 2.22+,

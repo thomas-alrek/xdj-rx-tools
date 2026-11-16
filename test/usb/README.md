@@ -21,4 +21,7 @@ and `tools/test/regress.py` use the first `test/usb/*.img` (regress.py loads a c
   to USB2). Slots are read/write: writes, including recordings, land in the image.
 - `rekordbox_new_exfat.img`: the same content on an exFAT partition, for the exFAT mod (stock
   firmware only mounts FAT32/HFS+).
+- `wav_test.img`: `rekordbox_new.img` + a folder of test tones in WAV formats stock firmware does and
+  doesn't play (`tools/fw/mods/wav/make-wav-test-image.sh`; browse with [FOLDER]).
+- Any files on a blank FAT32 stick, no library: `tools/make-fat32-image.sh OUT.img FILE...`.
 - Dev: see [docs/usb.md](../../docs/usb.md) (insert after rbp is polling).
