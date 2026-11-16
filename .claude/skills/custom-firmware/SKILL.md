@@ -18,12 +18,17 @@ Key: `--key-file`, else `$XDJRX_AES_KEY`, else `.env` (repo, from `tools/fetch_k
 
 ## Feature mods (scripted, regenerated from scratch)
 ```
-tools/fw/build-custom-upd.sh 2.23 exfat,preload   # -> build/custom-upd/XDJRX.UPD + stick.img
+tools/fw/build-custom-upd.sh 2.24 exfat,fps       # -> build/custom-upd/XDJRX.UPD + stick.img
 ```
 Each mod is `tools/fw/mods/<name>/apply.sh UNPACKED OVERLAY` (edits generated from the unpacked
 official image; our binaries built from source in Docker; mods stack). `exfat` = static
-fuse-exfat + udev rule; `preload` = `libxdjmod.so` LD_PRELOADed into stock rbp (hooks must gate on
-rbp's checksum - it loads into every child process too). New mod: add a dir with `apply.sh`.
+fuse-exfat + udev rule; `preload` = the **xdjmod framework** (`libxdjmod.so`, LD_PRELOADed into
+stock rbp; API `tools/fw/mods/preload/src/xdjmod.h`: `XM_MODULE`, `xm_expect32/patch32/detour`,
+`xm_cfg_get/set` -> /root/rbp/xdjmod.conf, `xm_menu_add` = a native UTILITY row before VERSION
+No. with save/apply/factory-reset handled by the core); `fps` = UI FRAME RATE row (an xdjmod
+module). New rbp feature: `tools/fw/mods/<f>/<f>.c` with `XM_MODULE(f)` + a one-line `apply.sh`
+calling `../preload/apply.sh UNPACKED OVERLAY <f>.c`. Gate every patch on the expected words.
+Distribution goal: a delta patch vs stock 2.21 + patcher (`xdj fw mkpatch/patch`, docs §11).
 Research, addresses and the plan per feature: **docs/firmware-mods.md**. Test releases 2.22+,
 final 3.00. Test on a private `xdj-host` with a copy of the unit's fw dir, not the app's unit.
 Nothing goes on a real unit until proven in the emulator. The waveform mod is our own code,

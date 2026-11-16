@@ -10,9 +10,9 @@ Status: ✅ built and verified in the emulator · 🔬 researched (static analys
 | Mod | Status | Mechanism | Feasibility | Effort (est.) |
 |---|---|---|---|---|
 | `exfat` — exFAT USB sticks | ✅ (2.22) | FUSE driver + udev rule | done | — |
-| `preload` — the hook library base | ✅ (2.23) | `LD_PRELOAD` in `apl_start` | done | — |
-| UTILITY menu items for mods | 🔬 | preload: extended item table | high | ~1 day |
-| UI frame rate 20 → 60 fps | 🔬 | preload: 3 immediates + 1 detour | high (cap) / unknown (real 60) | ~2 days + device test |
+| `preload` — the xdjmod framework (`libxdjmod.so`) | ✅ (2.24) | `LD_PRELOAD` in `apl_start` | done | — |
+| UTILITY menu rows for mods (framework) | ✅ (2.24) | extended item table | done | — |
+| `fps` — UI frame rate 20 / 30 / 60 | ✅ (2.24) emulator | 2 immediates + timer detour | done (real unit: untested) | real-unit test |
 | WAV 32-bit float, ≤ 96 kHz | 🔬 | preload: WAV/AIFF reader vtable slots | high | 2–4 days |
 | FLAC | 🔬 | preload: reader factory + dr_flac | medium-high | 1–2 weeks |
 | RGB / 3-band waveforms | 🔬 | preload: ANLZ PWV5/PWV7 + renderers | high / medium-high | 1–3 weeks |
@@ -23,7 +23,7 @@ All addresses below are for the 2.21 `rbp` (sha256 `4f62aa71…`, [rbp-binary-in
 ## 1. Building: regenerated from scratch by scripts
 
 ```sh
-tools/fw/build-custom-upd.sh 2.23 exfat,preload      # -> build/custom-upd/XDJRX.UPD + stick.img
+tools/fw/build-custom-upd.sh 2.24 exfat,fps          # -> build/custom-upd/XDJRX.UPD + stick.img
 ```
 
 - `tools/fw/build-custom-upd.sh RELEASE MODS [BASE] [OUTDIR]` unpacks the official image
@@ -53,11 +53,25 @@ tools/fw/build-custom-upd.sh 2.23 exfat,preload      # -> build/custom-upd/XDJRX
 - Verified (2.22): `test/usb/rekordbox_new_exfat.img` on USB1 shows the library, and a track loads
   with its waveform, key and length. Make the image with `tools/fw/mods/exfat/make-exfat-image.sh`.
 
-## 3. `preload` — the hook library ✅
+## 3. `preload` — the xdjmod framework ✅
 
-- `libxdjmod.so` (`tools/fw/mods/preload/xdjmod.c`), cross-built with Debian's armel gcc; `build.sh`
-  fails if it needs a glibc symbol newer than 2.13. `apply.sh` installs it in `/root/pioneer/` and
-  prefixes both rbp launch lines in `apl_start` with `LD_PRELOAD=`.
+`libxdjmod.so` is a small framework every rbp feature mod is built on. API: `tools/fw/mods/preload/src/xdjmod.h`.
+
+- **Core** (`src/`): `core.c` (process gate, module registry, `xm_log`, `xm_now_ms`), `patch.c`
+  (`xm_expect32`, `xm_patch32`, `xm_detour`), `config.c` (`xm_cfg_get/set` →
+  `/root/rbp/xdjmod.conf`), `menu.c` (UTILITY rows + the factory-reset hook).
+- **A feature** is one `.c` with `XM_MODULE(name) { … }`: check its patch sites with
+  `xm_expect32`, install hooks, and add a UTILITY row with
+  `xm_menu_add(label, values, n, key, default, apply)`. The core saves the choice and calls
+  `apply(choice)` at startup, on every change and after a factory reset. Its `apply.sh` is one
+  line: `../preload/apply.sh UNPACKED OVERLAY feature.c` (see `tools/fw/mods/fps/`).
+- Startup (constructor priority 300, after every module registered at 200): gate (is this rbp? do
+  the core's patch sites hold 2.21's words?) → load settings → each module's init → install the
+  UTILITY table → hook factory reset. Any mismatch: the library stays inert.
+- `build.sh` compiles core + features with Debian's armel gcc in Docker (image `xdjmod-armel-cc`,
+  built once) and fails if the library needs a glibc symbol newer than 2.13 (e.g. `clock_gettime`
+  is 2.17 in libc — `xm_now_ms` uses the raw syscall). `apply.sh` installs it in `/root/pioneer/`
+  and prefixes both rbp launch lines in `apl_start` with `LD_PRELOAD=`.
 - rbp is non-PIE and links libdirectfb, libc, libmpg123, libasound… dynamically, so a mod can
   interpose those calls, and patch rbp's own code in memory from the constructor (`mprotect`,
   write, `__builtin___clear_cache`; entry hooks are `ldr pc,[pc,#-4]` + address — `bl` can't reach
@@ -67,7 +81,7 @@ tools/fw/build-custom-upd.sh 2.23 exfat,preload      # -> build/custom-upd/XDJRX
   install inside rbp: check `/proc/self/exe` and rbp's sha256 / the original bytes at every patch
   site, and do nothing on a mismatch (another firmware version, or `rbp_solo`).
 
-## 4. UTILITY menu items 🔬
+## 4. UTILITY menu rows ✅ (framework)
 
 Mods that can be switched on and off get native UTILITY rows (hold MENU), **placed just before
 VERSION No.**; a **factory reset restores their defaults**.
@@ -80,18 +94,24 @@ VERSION No.**; a **factory reset restores their defaults**.
   no item indexes are hard-coded.
 - Labels are UTF-16 text in rbp drawn with the bitmap font — not images — and UTILITY is
   English-only. `{OFF, ON}` already exists (`0x462040`).
-- Plan: the library copies the table, inserts its rows before VERSION No., adds a zeroed sentinel
-  row, repoints the 7 words (after checking their old values). Reuse the generic callbacks
-  (`0xe7f3c`, `0xe7f40`, `0xe7f68`, `0xe7fa0`, `0xe7fb0`); write our own `render`/`commit`.
+- `menu.c` copies the table with the mod rows inserted before VERSION No. plus a zeroed sentinel
+  row, and repoints the 7 words (each checked first). Rows use rbp's generic callbacks (`0xe7f3c`,
+  `0xe7f40`, `0xe7f68`, `0xe7fa0`, `0xe7fb0`) and our own `render`/`commit`, which follow rbp's
+  contract: `render(item, cells[2])` fills the label/value cells (u16 length at `+0x20`, text at
+  `+0x22`) with the edit choice while editing, else the saved one; `commit` returns 1 on change.
+- Verified (2.24): the row shows in rbp's style before VERSION No., edits with the browse encoder
+  (push, rotate, push), saves, applies live, and comes back after a restart.
 - Persistence: `/root/rbp/xdjmod.conf` on the data volume, read in the constructor; `commit`
   rewrites it (temp + rename). Not `XdjSettings.dat` (header `0x2a7b9e8f`, version `0x00010003`,
   `0x8c`-byte records): inserting an id reallocs rbp's settings vector while other threads search
-  it unlocked. Factory reset: hook the reset path (`0x282630`) to rewrite the defaults. An ALL
+  it unlocked. Factory reset: `0x282630` (rbp's first-frame boot-key handler) is
+  detoured; on TEMPO RANGE + DELETE (not MEMORY) it clears `xdjmod.conf` and re-applies every
+  row's default before the stock reset runs (not yet exercised live). An ALL
   update reformats the data volume, which also clears it.
 - Callbacks run on the display thread: keep `commit` short. Keep labels ≤ ~18 characters, values
   ≤ ~15 (clipping not verified).
 
-## 5. UI frame rate 🔬
+## 5. `fps` — UI frame rate ✅ (emulator)
 
 - **The cap is a 50 ms loop period, not vsync or hardware.** `gui_task` (`0xb3a68`) draws a frame
   (`0x12922c`) and sleeps 50 ms minus the frame time (`0xb3aac cmp r4,#0x31`,
@@ -103,8 +123,10 @@ VERSION No.**; a **factory reset restores their defaults**.
 - **UI timers count frames.** Each frame calls the timer manager `0x1655b0` with a fixed 50
   (`0x12a314`); every UI timer (blinks, pop-up timeouts, auto-return, possibly hold detection) would
   run 3× fast at 60 fps — and already runs slow when a frame overruns 50 ms.
-- Mod: patch the two immediates for period P (16/17 ms ≈ 60 fps), and detour `0x1655b0` to pass the
-  real elapsed milliseconds (`CLOCK_MONOTONIC`), so timers keep real time at any rate.
+- `fps.c`: UTILITY → UI FRAME RATE = 20 (STOCK) / 30 / 60 → period P = 50 / 33 / 17 ms, written
+  live into the two immediates. The detour on `0x1655b0` passes the real elapsed milliseconds to the
+  UI timers at 30/60; at 20 (STOCK) nothing changes (stock immediates, timers count frames).
+  Every 10 s it logs `fps: P=.. ms  NN.N fps  interval avg/min/max` (time between GUI frames).
 - **First, measure — in the emulator.** Nothing is installed on a real unit until the firmware is
   proven in the emulator. A detour on `0x12922c` logs frame-time statistics (min/avg/p95 per few
   seconds); the app's View → FPS (`GET /fps`) shows the presented rate. Under TCG the absolute
@@ -114,7 +136,16 @@ VERSION No.**; a **factory reset restores their defaults**.
 - Risks: GUI CPU time scales with the rate (two Cortex-A9 cores shared with audio, USB/DB loading;
   watch `ALSA: Resolve xrun`); anything animated per frame instead of by timer speeds up; front-only
   drawing tears a little more.
-- UTILITY: "UI FRAME RATE" (20 / 30 / 60).
+- **Emulator benchmark** (2.24, Apple Silicon host, a track loaded): rbp's GUI loop runs
+  **19.2 fps** at 20 (interval avg 52 ms), **28.8 fps** at 30 (34 ms) and **40–46 fps** at 60
+  (21–24 ms, min 20–22 ms): under TCG a frame costs ~20–22 ms, so the emulator tops out near 45 fps.
+  The QEMU meter (frames whose content changed) shows ~4–8 changes/s at every setting on a static
+  or slowly changing screen — a still screen redraws identical frames.
+- Open: a scrolling-waveform benchmark needs real-time playback (the app's audio backend; the test
+  instance's `XDJAUDIO=none,…` did not advance the track); confirming the timer fix needs an
+  on-screen timer (pop-up timeout, blink) at 20 vs 60 — the panel LED blinks (1.0 / 0.5 s) are
+  unchanged at 60 but run on another clock (they don't slow down at stock's 52 ms frames either);
+  CPU headroom and `ALSA: Resolve xrun` with audio; the real unit last.
 
 ## 6. WAV 32-bit float and up to 96 kHz 🔬
 
@@ -197,15 +228,37 @@ means following their licences (source offer / notices):
 | `exfat` | musl libc (static) | MIT |
 | FLAC (planned) | [dr_flac](https://github.com/mackron/dr_libs) | public domain / MIT-0 |
 
-## 11. Plan
+## 11. Distribution: a delta patch, not a firmware image
 
-1. `preload` hardening: process + checksum gate, patch helpers, `xdjmod.conf`, UTILITY rows
-   (before VERSION No.), factory-reset hook.
-2. Frame-time measurement build (emulator) → FPS mod with real-time timers + UTILITY row.
+The 3.00 release is distributed as a **patch against the stock 2.21 `.UPD`** plus a small patcher:
+the user supplies Pioneer's official image, the patcher outputs 3.00. Pioneer's firmware is never
+redistributed. Design:
+
+- **Patch = only our content.** The mods already produce an overlay (§1). `xdj fw mkpatch BASE
+  OVERLAY` turns it into a patch file: new files verbatim (ours), and every edited Pioneer file as
+  line operations against the base (insert / replace / delete at line N) that carry only our new
+  lines plus the sha256 of the base file — no Pioneer text. Binary Pioneer files can't be edited by
+  a patch (none are). Plus metadata: base `.UPD` sha256, release `3.00`, the expected output sha256.
+- **Patcher = `xdj fw patch STOCK_2.21.UPD MODS.xdjpatch -o XDJRX.UPD`** (and a menu item in the
+  desktop app): verify the base, decrypt, apply, rebuild, encrypt, verify the output hash. No
+  Docker or shell needed on the user's side.
+- The `.UPD` is AES-encrypted with Pioneer's key, which we can't ship either: the patcher gets it
+  the way the app does (the user's key file, or derived from Pioneer's published GPL source by
+  `tools/fetch_key.py`).
+- Needs a deterministic build (same output bytes on every machine): fixed mtimes for new files, a
+  stable order in cramfs/tar/ISO; checked by the output hash.
+
+## 12. Plan
+
+1. ✅ xdjmod framework: gate, patch helpers, `xdjmod.conf`, UTILITY rows (before VERSION No.),
+   factory-reset hook.
+2. ✅ FPS mod with real-time timers + UTILITY row; emulator benchmark. Open: real-time-playback
+   benchmark, on-screen timer check, factory reset live test.
 3. WAV float / hi-res (+ the 24-bit and AIFF-rate fixes).
 4. RGB / 3-band waveforms (own implementation, inspired by JaNeinHub/XDJ-RX-Mod) + UTILITY row.
 5. FLAC.
 6. OneLibrary converter, only if OneLibrary-only sticks turn up.
+7. Delta patch + patcher (§11).
 
 Release as 3.00 once the set is complete; test builds 2.22, 2.23, …. Everything is proven in the
 emulator before anything is installed on a real unit.

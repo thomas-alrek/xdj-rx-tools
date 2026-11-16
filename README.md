@@ -159,7 +159,7 @@ $X fw repack build/XDJ-RX_v221.zip build/unpacked --release 2.31 -o build/MY.UPD
 Then *File → Install Firmware Update…* → `build/MY.UPD`. The firmware's update check is only a CRC
 and a model prefix — there is no signature — so Pioneer's updater installs a rebuilt image like an
 official one. Best practices, the overlay workflow and the formats: [docs/custom-firmware.md](docs/custom-firmware.md).
-Feature mods are built from scripts (`tools/fw/build-custom-upd.sh 2.23 exfat,preload`):
+Feature mods are built from scripts (`tools/fw/build-custom-upd.sh 2.24 exfat,fps`):
 [docs/firmware-mods.md](docs/firmware-mods.md).
 Never commit firmware contents.
 
