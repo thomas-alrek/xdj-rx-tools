@@ -21,7 +21,7 @@ for f in "$@"; do
 done
 FEATURES=()
 while IFS= read -r f; do [ -n "$f" ] && FEATURES+=("$f"); done < "$WORK/features.txt"
-"$HERE/build.sh" "$WORK" ${FEATURES[@]+"${FEATURES[@]}"} | tail -1
+"$HERE/build.sh" "$WORK" "$UNP/rootfs/lib" ${FEATURES[@]+"${FEATURES[@]}"} | tail -1
 
 mkdir -p "$OV/pioneer/pioneer"
 install -m 0755 "$WORK/libxdjmod.so" "$OV/pioneer/pioneer/libxdjmod.so"

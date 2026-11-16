@@ -55,8 +55,10 @@ int xm_expect32(uintptr_t addr, uint32_t expect);
 int xm_patch32(uintptr_t addr, uint32_t expect, uint32_t val);
 /*
  * Detour the ARM function at `addr` to `hook` (same calling convention). The first
- * two instructions are moved into a stub, so they must not be PC-relative; they must
- * equal expect0/expect1. Returns the stub (call it to run the original), or 0.
+ * two instructions (which must equal expect0/expect1) move into a stub; a PC-relative
+ * literal load (`ldr rX, [pc, #imm]`) among them is relocated, other PC-relative forms
+ * (branches, pc-based arithmetic) are not allowed. Returns the stub (call it to run
+ * the original), or 0.
  */
 void *xm_detour(uintptr_t addr, uint32_t expect0, uint32_t expect1, void *hook);
 

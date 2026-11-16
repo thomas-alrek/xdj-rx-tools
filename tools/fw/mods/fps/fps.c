@@ -103,5 +103,5 @@ XM_MODULE(fps)
     timers_orig = (timers_fn)xm_detour(TIMERS_FN, TIMERS_W0, TIMERS_W1, (void *)timers_hook);
     if (!timers_orig)
         return;
-    xm_menu_add("UI FRAME RATE", RATES, NRATES, "fps", 0, set_rate);
+    xm_menu_add("UI FRAME RATE", RATES, NRATES, "fps", 2, set_rate);   /* default: 60 */
 }

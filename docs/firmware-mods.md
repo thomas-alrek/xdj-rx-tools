@@ -12,10 +12,10 @@ Status: ✅ built and verified in the emulator · 🔬 researched (static analys
 | `exfat` — exFAT USB sticks | ✅ (2.22) | FUSE driver + udev rule | done | — |
 | `preload` — the xdjmod framework (`libxdjmod.so`) | ✅ (2.24) | `LD_PRELOAD` in `apl_start` | done | — |
 | UTILITY menu rows for mods (framework) | ✅ (2.24) | extended item table | done | — |
-| `fps` — UI frame rate 20 / 30 / 60 | ✅ (2.24) emulator | 2 immediates + timer detour | done (real unit: untested) | real-unit test |
+| `fps` — UI frame rate 20 / 30 / 60 (default 60) | ✅ (2.33) emulator | 2 immediates + timer detour | done (real unit: untested) | real-unit test |
 | `wav` — WAV float / 32-bit / up to 192 kHz | ✅ (2.27) emulator | reader vtable slots + tag-parser checks | done (AIFF: open) | AIFF |
 | FLAC | 🔬 | preload: reader factory + dr_flac | medium-high | 1–2 weeks |
-| RGB / 3-band waveforms | 🔬 | preload: ANLZ PWV5/PWV7 + renderers | high / medium-high | 1–3 weeks |
+| `waveform` — RGB / 3-band waveforms (default 3-band) | ✅ (2.33) emulator | `.EXT` interposer + detail/overview detours | done (real unit: untested) | tuning |
 | OneLibrary | 🔬 | mount-time `export.pdb` synthesis | medium, low value | 2–3 weeks |
 
 All addresses below are for the 2.21 `rbp` (sha256 `4f62aa71…`, [rbp-binary-internals] skill).
@@ -69,8 +69,15 @@ tools/fw/build-custom-upd.sh 2.24 exfat,fps          # -> build/custom-upd/XDJRX
   the core's patch sites hold 2.21's words?) → load settings → each module's init → install the
   UTILITY table → hook factory reset. Any mismatch: the library stays inert.
 - `build.sh` compiles core + features with Debian's armel gcc in Docker (image `xdjmod-armel-cc`,
-  built once) and fails if the library needs a glibc symbol newer than 2.13 (e.g. `clock_gettime`
-  is 2.17 in libc — `xm_now_ms` uses the raw syscall). `apply.sh` installs it in `/root/pioneer/`
+  built once) and **links against the firmware's own libraries** (the unpacked rootfs's `lib/`:
+  glibc 2.13 `libc`/`libdl`/`libpthread`/`libm`, `libstdc++`) with `-nostdlib --no-undefined`, so
+  every symbol binds to the library and version the unit really has — a symbol it lacks fails the
+  build, not rbp's start. (Linking against the toolchain's glibc once bound `dlsym@GLIBC_2.4` to
+  `libc.so.6`; on the unit it lives in `libdl.so.2`, and rbp died with a relocation error.) Symbols
+  that are header wrappers or newer in 2.13 are avoided: `xm_now_ms` and the waveform module use raw
+  syscalls (`clock_gettime`, `stat64`).
+- `xm_detour` relocates a PC-relative literal load (`ldr rX, [pc, #imm]`) among the two moved
+  instructions into the stub (with a copy of the literal); branches are refused. `apply.sh` installs it in `/root/pioneer/`
   and prefixes both rbp launch lines in `apl_start` with `LD_PRELOAD=`.
 - rbp is non-PIE and links libdirectfb, libc, libmpg123, libasound… dynamically, so a mod can
   interpose those calls, and patch rbp's own code in memory from the constructor (`mprotect`,
@@ -123,7 +130,7 @@ VERSION No.**; a **factory reset restores their defaults**.
 - **UI timers count frames.** Each frame calls the timer manager `0x1655b0` with a fixed 50
   (`0x12a314`); every UI timer (blinks, pop-up timeouts, auto-return, possibly hold detection) would
   run 3× fast at 60 fps — and already runs slow when a frame overruns 50 ms.
-- `fps.c`: UTILITY → UI FRAME RATE = 20 (STOCK) / 30 / 60 → period P = 50 / 33 / 17 ms, written
+- `fps.c`: UTILITY → UI FRAME RATE = 20 (STOCK) / 30 / **60 (default)** → period P = 50 / 33 / 17 ms, written
   live into the two immediates. The detour on `0x1655b0` passes the real elapsed milliseconds to the
   UI timers at 30/60; at 20 (STOCK) nothing changes (stock immediates, timers count frames).
   Every 10 s it logs `fps: P=.. ms  NN.N fps  interval avg/min/max` (time between GUI frames).
@@ -136,6 +143,7 @@ VERSION No.**; a **factory reset restores their defaults**.
 - Risks: GUI CPU time scales with the rate (two Cortex-A9 cores shared with audio, USB/DB loading;
   watch `ALSA: Resolve xrun`); anything animated per frame instead of by timer speeds up; front-only
   drawing tears a little more.
+- **Visually confirmed** in the emulator: waveform playback is much smoother at 60 than at 20.
 - **Emulator benchmark** (2.24, Apple Silicon host, a track loaded): rbp's GUI loop runs
   **19.2 fps** at 20 (interval avg 52 ms), **28.8 fps** at 30 (34 ms) and **40–46 fps** at 60
   (21–24 ms, min 20–22 ms): under TCG a frame costs ~20–22 ms, so the emulator tops out near 45 fps.
@@ -204,7 +212,7 @@ VERSION No.**; a **factory reset restores their defaults**.
 - Risks: decode CPU (estimated a few % of a core per deck at 44.1/16, 2–3× at 96/24), slow seeks in
   files without a SEEKTABLE (load and hot-cue pre-cache), the browser question above.
 
-## 8. RGB / 3-band waveforms 🔬
+## 8. `waveform` — RGB / 3-band waveforms ✅ (emulator)
 
 - **Credit:** [JaNeinHub/XDJ-RX-Mod](https://github.com/JaNeinHub/XDJ-RX-Mod) (GPL-3.0) was first
   to add BLUE/RGB/3-BAND waveforms to 2.21, with an LD_PRELOAD `libxdjmod.so` hooking the detail
@@ -219,11 +227,29 @@ VERSION No.**; a **factory reset restores their defaults**.
   `0x28d78a0 + deck*0x2ee1c`). Detail columns: `0x1caf58` (deck, x, range; **zoom in `s0`**, a
   non-standard VFP argument) into an RGB565 canvas, 45 rows, colour = 8-entry palette `0x419d20`
   by whiteness. Overview: `0x1f8518` (called at `0x1fb3e8`), 300 columns, palette `0x41cf20`.
-- A palette change can't show RGB (8 entries vs 9-bit colour per entry). Mod: catch the `.EXT` /
-  `.2EX` reads (fopen/fread hooks), decode PWV5 (+ PWV4) or PWV7 (+ PWV6) into a side buffer per
-  deck (≈ 2–3 MB), and replace the column and overview routines with colour versions (same
-  geometry and marker overlay). CPU cost about as today.
-- UTILITY: "WAVEFORM COLOR" (BLUE / RGB / 3-BAND).
+- `waveform.c` (module `waveform`), UTILITY → **WAVEFORM COLOR** = BLUE (STOCK) / RGB /
+  **3-BAND (default)**:
+  - **Data:** `fopen`/`fopen64`/`open`/`open64` interposers see rbp open a track's `ANLZ*.EXT`
+    and parse it and its `.2EX` (≤ 8 tracks cached, keyed by path/size/mtime): PWV3 (to recognise
+    the track), PWV5 → RGB565 per entry, PWV7 → 3-band bar heights per entry (beat-link's
+    half-heights low × 0.4 / mid × 0.3 / high × 0.06, × 1.5 for rbp's 45 rows). Inert outside rbp.
+  - **Decks:** deck d's block is `**(0x10f020c + d*32)` (count at `+0`, entries `+0x2ee18` = rbp's
+    `{(b & 31) * 46 / 31, b >> 5}` per PWV3 byte, marker flags `+0x2ee10`); rbp's array runs ~20
+    entries past the file's PWV3. A deck matches a cached track when 48 sampled entries agree;
+    re-checked every 0.5 s. Unmatched decks (no colour data) draw stock.
+  - **Detail:** `0x1caf58` (zoom in `s0`; first instruction `ldr ip, [pc, #0x19c]`, relocated by
+    `xm_detour`) is detoured through an assembly shim. BLUE or unmatched: the original runs. RGB:
+    rbp's bar height and markers, colour of the tallest entry in the column. 3-BAND: layered from
+    the foot — white high on top, brown low+mid overlap, then the taller of blue low / amber mid
+    (beat-link / CDJ-3000 colours), markers above the bar.
+  - **Overview:** `0x1f8518` is detoured; after the original draws, the surface is locked again
+    (`0x13ca98`/`0x13cb00`) and each of the 300 bars is repainted from the PWV5/PWV7 entries of
+    its slice of the track (column x = PWAV entry x + x/3 of 400). The palette's "+6" variant isn't
+    played/unplayed (both sides use the same entries), so no played state is shown.
+- Verified (2.33, emulator): RGB and 3-band detail and overview on the rekordbox test stick.
+- Open: colour tuning (RGB looks pastel on bright tracks: PWV5's 3-bit channels mapped linearly;
+  beat-link swaps green/blue — check against rekordbox), a second track per deck / two decks,
+  zoom levels, CPU on the real unit.
 
 ## 9. OneLibrary 🔬 (low priority)
 
@@ -279,10 +305,12 @@ redistributed. Design:
 2. ✅ FPS mod with real-time timers + UTILITY row; emulator benchmark. Open: real-time-playback
    benchmark, on-screen timer check, factory reset live test.
 3. ✅ WAV float / 32-bit / hi-res + the 24-bit fix (emulator). Open: AIFF, a rekordbox export.
-4. RGB / 3-band waveforms (own implementation, inspired by JaNeinHub/XDJ-RX-Mod) + UTILITY row.
+4. ✅ RGB / 3-band waveforms (own implementation, inspired by JaNeinHub/XDJ-RX-Mod) + UTILITY row (emulator).
 5. FLAC.
 6. OneLibrary converter, only if OneLibrary-only sticks turn up.
 7. Delta patch + patcher (§11).
 
-Release as 3.00 once the set is complete; test builds 2.22, 2.23, …. Everything is proven in the
+Defaults (and factory-reset values) are the improvements — 60 fps and 3-band — so they show right
+after the update; the stock behaviour is one UTILITY setting away. Release as 3.00 once the set is
+complete; test builds 2.22, 2.23, …. Everything is proven in the
 emulator before anything is installed on a real unit.

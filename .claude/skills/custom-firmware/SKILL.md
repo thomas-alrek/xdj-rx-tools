@@ -28,6 +28,10 @@ stock rbp; API `tools/fw/mods/preload/src/xdjmod.h`: `XM_MODULE`, `xm_expect32/p
 No. with save/apply/factory-reset handled by the core); `fps` = UI FRAME RATE row; `wav` = WAV float/32-bit/≤192 kHz reader (vtable slots +
 the browser tag parser's format checks; test sticks: `tools/fw/mods/wav/make-wav-test-image.sh`,
 `tools/make-fat32-image.sh`; check the output by recording it: `XDJAUDIO=wav,path=…,timer-period=1451`).
+`waveform` = WAVEFORM COLOR row (RGB/3-band detail + overview; `.EXT` interposer). Defaults: 60 fps,
+3-band. **libxdjmod.so is linked against the unpacked firmware's own libs** (build.sh FWLIB) - never
+the toolchain's glibc; test every build on a copy of the unit (it must reach `loaded into rbp`)
+before anyone installs it: a library that fails to load stops rbp from starting.
 New rbp feature: `tools/fw/mods/<f>/<f>.c` with `XM_MODULE(f)` + a one-line `apply.sh`
 calling `../preload/apply.sh UNPACKED OVERLAY <f>.c`. Gate every patch on the expected words.
 Distribution goal: a delta patch vs stock 2.21 + patcher (`xdj fw mkpatch/patch`, docs §11).
