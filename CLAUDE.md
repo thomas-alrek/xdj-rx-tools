@@ -37,7 +37,7 @@ preservation on owned hardware.
 - `tools/` — `xdj-panel/` (`panel.html`, `logs.html`, `server.py` = the dev panel server kept identical
   to `panel.rs`, `test_panel_parity.py`, `debug/` RE helpers: `relaunch.sh`, `rsp.py`, `tables.py`,
   `mon.py`, `ser.py`, `inj.py`, `ledprobe.py`, `sweep_*.py`), `test/regress.py`, `fw/make-test-upd.sh`,
-  `fetch_key.py` (the AES key), `build-rb-usb.sh`, `requirements.txt` (dev-tool Python deps).
+  `fetch_key.py` (the AES key), `net/install-vmnet-bridge.sh` (optional LAN bridge), `build-rb-usb.sh`, `requirements.txt` (dev-tool Python deps).
 - `packaging/` — `build-macos-app.sh` (→ `dist/XDJ-RX.app`), `collect-licenses.py`.
 - `docs/` — `subucom-frame-map.md` (**authoritative control map**), `subucom-led-map.md`,
   `service-modes.md`, `firmware-update-and-nand.md`, `usb.md`, `custom-firmware.md`,
@@ -82,6 +82,9 @@ preservation on owned hardware.
 - **Audio** (`xdj-audio.c`, SDMA/SSI/AUDMUX; sonifier → SDMA ch1 = MasterOut). Audible needs routing
   = DECK + gains up. Stutter = guest ALSA xruns (rbp's ring is 2×64 frames); the pacer thread completes
   one period per 1.45 ms. Check `ALSA: Resolve xrun` on the console; `XDJ_AUDIO_STATS=1`.
+- **Network**: eth0 = user NAT, or the LAN / a Mac-only network (`… mac`, for rekordbox on the
+  same Mac) via the optional socket_vmnet daemon (`tools/net/install-vmnet-bridge.sh`; `-netdev stream` to `/var/run/socket_vmnet.bridged.<if>`),
+  picked per power-on (`XDJ_NET` app / `XDJNIC` watch.sh). Never QEMU's `vmnet-*` (needs root).
 - **Root shell**: boot the SD test bed (it blanks root's password); a NAND unit keeps the stock hash.
 
 ## Workflows (→ skill)

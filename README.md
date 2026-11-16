@@ -112,6 +112,37 @@ open dist/XDJ-RX.app
   LEDs, console. Claude Code: `claude mcp add --transport http xdj-rx http://127.0.0.1:8765/mcp`.
   Tools: [docs/standalone-app.md §7a](docs/standalone-app.md#7a-mcp-server-automation).
 
+### Networking (optional)
+
+The unit's Ethernet port works out of the box on QEMU's private NAT: it gets a DHCP lease and can
+reach out, but nothing else on your network can see it. To put it **on your LAN** as a device of its
+own (its own address from your router; reachable from a rekordbox PC or any other machine),
+install the bridge once:
+
+```sh
+tools/net/install-vmnet-bridge.sh          # bridges your default-route interface (e.g. en0)
+tools/net/install-vmnet-bridge.sh en1      # or a specific one
+tools/net/install-vmnet-bridge.sh mac      # or: a network between the unit and this Mac only
+tools/net/install-vmnet-bridge.sh --uninstall [en1|mac]
+```
+
+It installs [socket_vmnet](https://github.com/lima-vm/socket_vmnet) (a pinned, checksum-verified
+release) as a launchd daemon. macOS lets only root (or an Apple-granted entitlement) bridge a
+virtual machine to a network interface, so that daemon holds the bridge and the emulator keeps
+running as you. Nothing else changes: on every power-on the app (and `qemu/watch.sh`) uses a
+LAN bridge if one is installed, else the Mac-only network, else NAT. Override with `XDJ_NET` (app) / `XDJNIC`
+(`watch.sh`): `user` forces NAT, a path selects a socket. The app's log
+(`~/Library/Application Support/XDJ-RX/host.log`) says which one each boot used.
+
+`mac` is the one to use for rekordbox **on this Mac** (LINK): the Mac is `192.168.105.1`, the unit
+gets a `192.168.105.x` lease from macOS, broadcasts pass between them, and it needs no LAN, so it
+works on Wi-Fi. The app prefers a LAN bridge when both are installed. rekordbox does not link to
+the unit yet ([docs/emulator-status.md](docs/emulator-status.md#network)).
+
+For the LAN, bridge a **wired** interface. Over Wi-Fi the bridge carries LAN traffic to the unit, but the
+access point need not deliver replies to a MAC it never associated, and DHCP can fail (`No lease,
+failing` in *View → System Log*, the unit falls back to 169.254.x.x).
+
 ## Custom firmware
 
 ```sh

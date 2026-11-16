@@ -40,27 +40,35 @@ SMP="${XDJSMP:-2}"            # dual-core by default = real XDJ-RX config (boots
                              # XDJSMP=1 boots single-core (launches the rbp_solo symlink ->
                              # SAME binary; a bit slower under TCG).
 DISPLAY_OPT="${XDJDISPLAY:-cocoa,zoom-to-fit=on,zoom-interpolation=on}"
-# Network backend attached to the i.MX6 FEC (eth0). The firmware runs a DHCP
-# client on eth0 at boot (see qemu/build-nand.sh). Default: user-mode NAT -- it
-# always works, needs no root, and the UI window opens as you (eth0 still gets a
-# lease, just on a private NAT, not your LAN). Opt into bridged LAN so a rekordbox
-# PC on the same LAN can reach the device for library LINK:
-#     XDJNIC=bridged sudo qemu/watch.sh    # bridge to your default-route interface
-# macOS vmnet needs root for an unsigned qemu (run.sh elevates this for you).
-# XDJNIC may also be a literal qemu nic spec (e.g. vmnet-bridged,ifname=en1 for
-# Wi-Fi, or a tap into a bridge on Linux). rekordbox LINK is then enabled from the
-# app's LINK menu (needs the panel buttons -- feature C).
-case "${XDJNIC:-user}" in
-  user)    NIC="user" ;;
-  bridged)
-    IFN="$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}')"
-    NIC="vmnet-bridged,ifname=${IFN:-en0}"
-    echo "net: bridging eth0 to host ${IFN:-en0} (vmnet) — device will be on your LAN" >&2 ;;
-  *)       NIC="$XDJNIC" ;;
-esac
-if [ "$NIC" != "user" ] && [ "$(uname)" = "Darwin" ] && [ "$(id -u)" != "0" ]; then
-  echo "net: '$NIC' needs root on macOS (vmnet) — re-run with sudo, or unset XDJNIC for user-mode NAT" >&2
+# Network backend attached to the i.MX6 FEC (eth0); the firmware runs a DHCP client
+# on eth0 at boot. XDJNIC:
+#   auto (default) -- the LAN bridge if its socket_vmnet daemon is installed
+#                     (tools/net/install-vmnet-bridge.sh, one-time, optional), else the
+#                     Mac-only network (`… mac`), else NAT
+#   user           -- QEMU user-mode NAT: private 10.0.2.0/24, invisible to the LAN
+#   /path/to/sock  -- a socket_vmnet socket
+# QEMU runs as you in every mode (the root daemon owns the vmnet interface).
+XDJNIC="${XDJNIC:-auto}"
+if [ "$XDJNIC" = auto ]; then
+  IFN="$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}')"
+  XDJNIC=user
+  for d in /var/run /opt/homebrew/var/run /usr/local/var/run; do
+    [ -S "$d/socket_vmnet.bridged.$IFN" ] && { XDJNIC="$d/socket_vmnet.bridged.$IFN"; break; }
+  done
+  if [ "$XDJNIC" = user ]; then
+    for d in /var/run /opt/homebrew/var/run /usr/local/var/run; do
+      [ -S "$d/socket_vmnet" ] && { XDJNIC="$d/socket_vmnet"; break; }
+    done
+  fi
 fi
+case "$XDJNIC" in
+  user) NET_ARGS=(-nic user)
+        echo "net: user-mode NAT (not on the LAN; optional bridge: tools/net/install-vmnet-bridge.sh)" >&2 ;;
+  /*)   NET_ARGS=(-netdev "stream,id=xdjnet,server=off,reconnect-ms=1000,addr.type=unix,addr.path=$XDJNIC"
+                  -net nic,netdev=xdjnet)
+        echo "net: vmnet via $XDJNIC" >&2 ;;
+  *)    echo "XDJNIC=$XDJNIC: expected auto, user or a socket path" >&2; exit 1 ;;
+esac
 
 # Optional USB mass-storage at boot (a rekordbox-formatted disk image), cold-plugged on the
 # OTG bus -- for quick checks only. The front slots USB1/USB2 sit behind the hub and must be
@@ -110,7 +118,7 @@ exec "$QEMU" -M sabrelite -smp "$SMP" -m 256 -no-reboot \
   -device loader,file="$Q/atags.bin",addr=0x10000100,force-raw=on \
   -device loader,file="$Q/tramp.bin",addr=0x10000000,cpu-num=0 \
   -drive if=none,id=xdjsd,file="$SD",format=raw \
-  -nic "$NIC" \
+  "${NET_ARGS[@]}" \
   ${USB_ARGS[@]+"${USB_ARGS[@]}"} \
   ${CTRL_ARGS[@]+"${CTRL_ARGS[@]}"} \
   -serial mon:stdio -serial null

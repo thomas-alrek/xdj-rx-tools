@@ -257,6 +257,113 @@ fn env_u16(key: &str, default: u16) -> u16 {
         .unwrap_or(default)
 }
 
+/// The backend behind the unit's Ethernet port (the i.MX6 FEC, guest `eth0`).
+#[derive(Debug, Clone, PartialEq)]
+enum NetBackend {
+    /// QEMU user-mode NAT: always available, but the unit sits on a private 10.0.2.0/24
+    /// behind the host and is invisible to the LAN.
+    User,
+    /// A socket_vmnet daemon's unix socket: bridged mode puts the unit on the host's LAN,
+    /// shared mode on a network with the Mac only (192.168.105.0/24); either way it
+    /// gets its own DHCP lease and sees broadcasts. The root daemon owns the vmnet interface, so
+    /// QEMU itself runs as the user (README "Networking").
+    Vmnet(PathBuf),
+}
+
+impl NetBackend {
+    fn qemu_args(&self) -> Vec<String> {
+        match self {
+            NetBackend::User => vec!["-nic".into(), "user".into()],
+            // `-net nic` binds the board's on-board FEC to the netdev. reconnect-ms keeps
+            // the link retrying if the daemon restarts while the unit runs.
+            NetBackend::Vmnet(p) => vec![
+                "-netdev".into(),
+                format!(
+                    "stream,id=xdjnet,server=off,reconnect-ms=1000,addr.type=unix,addr.path={}",
+                    p.display()
+                ),
+                "-net".into(), "nic,netdev=xdjnet".into(),
+            ],
+        }
+    }
+}
+
+/// Where socket_vmnet keeps its sockets: the upstream launchd install, then Homebrew's.
+const VMNET_SOCK_DIRS: &[&str] = &["/var/run", "/opt/homebrew/var/run", "/usr/local/var/run"];
+
+/// Pick eth0's backend for this power-on from `XDJ_NET`:
+/// - unset / `auto`: a bridged socket_vmnet socket if one is installed (preferring the
+///   default-route interface), else the Mac-only shared socket, else user NAT;
+/// - `user`: user NAT;
+/// - an absolute path: that socket_vmnet socket.
+fn net_backend() -> NetBackend {
+    let want = std::env::var("XDJ_NET").unwrap_or_default();
+    match want.as_str() {
+        "user" => return NetBackend::User,
+        "" | "auto" => {}
+        p if p.starts_with('/') => return NetBackend::Vmnet(PathBuf::from(p)),
+        other => eprintln!("[host] XDJ_NET={other:?} not understood (auto|user|/path/to/socket); using auto"),
+    }
+    match find_vmnet_bridge(default_route_ifname().as_deref()).or_else(find_vmnet_shared) {
+        Some(p) => NetBackend::Vmnet(p),
+        None => NetBackend::User,
+    }
+}
+
+/// A bridged socket_vmnet socket (`socket_vmnet.bridged.<ifname>`): the one for `pref`
+/// if present, else the first found.
+fn find_vmnet_bridge(pref: Option<&str>) -> Option<PathBuf> {
+    let is_sock = |p: &Path| {
+        use std::os::unix::fs::FileTypeExt;
+        std::fs::metadata(p).map(|m| m.file_type().is_socket()).unwrap_or(false)
+    };
+    if let Some(ifn) = pref {
+        for d in VMNET_SOCK_DIRS {
+            let p = Path::new(d).join(format!("socket_vmnet.bridged.{ifn}"));
+            if is_sock(&p) {
+                return Some(p);
+            }
+        }
+    }
+    for d in VMNET_SOCK_DIRS {
+        let Ok(rd) = std::fs::read_dir(d) else { continue };
+        let mut found: Vec<PathBuf> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("socket_vmnet.bridged."))
+                    && is_sock(p)
+            })
+            .collect();
+        found.sort();
+        if let Some(p) = found.into_iter().next() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// The Mac-only (vmnet shared mode) socket_vmnet socket, `socket_vmnet`.
+fn find_vmnet_shared() -> Option<PathBuf> {
+    use std::os::unix::fs::FileTypeExt;
+    VMNET_SOCK_DIRS.iter().map(|d| Path::new(d).join("socket_vmnet")).find(|p| {
+        std::fs::metadata(p).map(|m| m.file_type().is_socket()).unwrap_or(false)
+    })
+}
+
+/// The host interface carrying the default route (macOS `route`), e.g. `en0`.
+fn default_route_ifname() -> Option<String> {
+    let out = std::process::Command::new("/sbin/route")
+        .args(["-n", "get", "default"])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("interface:").map(|s| s.trim().to_string()))
+}
+
 fn qemu_args(cfg: &Config, boot_dir: &Path) -> Vec<String> {
     let q = boot_dir.to_path_buf();
     let s = |p: PathBuf| p.to_string_lossy().into_owned();
@@ -279,12 +386,19 @@ fn qemu_args(cfg: &Config, boot_dir: &Path) -> Vec<String> {
         a.push("-audio".into());
         a.push(cfg.audio.clone());
     }
+    let net = net_backend();
+    match &net {
+        NetBackend::User => eprintln!(
+            "[host] network: user NAT (unit not visible on the LAN; optional LAN bridge: tools/net/install-vmnet-bridge.sh)"
+        ),
+        NetBackend::Vmnet(p) => eprintln!("[host] network: vmnet via {}", p.display()),
+    }
+    a.extend(net.qemu_args());
     a.extend([
         "-device".into(), format!("loader,file={},addr=0x10008000,force-raw=on", s(q.join("vmlinux.bin"))),
         "-device".into(), format!("loader,file={},addr=0x10000100,force-raw=on", s(q.join("atags.bin"))),
         "-device".into(), format!("loader,file={},addr=0x10000000,cpu-num=0", s(q.join("tramp.bin"))),
         // No SD card: like the real unit, everything lives in NAND (XDJ_NAND_IMG).
-        "-nic".into(), "user".into(),
         // USB-2.0 hub on HOST1 (guest bus 2 = usb-bus.1), hub-only boot: the front
         // slots live behind this hub at devpaths 2-1.1 (USB2) / 2-1.2 (USB1). Storage
         // is inserted AFTER rbp is polling (see maybe_insert_usb) — cold-plugging at
