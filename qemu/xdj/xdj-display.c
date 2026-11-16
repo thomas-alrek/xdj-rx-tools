@@ -10,6 +10,7 @@
  */
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "qapi/visitor.h"
 #include "qemu/timer.h"
 #include "qemu/audio.h"
 #include "hw/ssi/ssi.h"
@@ -572,6 +573,99 @@ static const GraphicHwOps xdj_fb_ops = {
     .gfx_update = xdj_fb_gfx_update,
 };
 
+/*
+ * Frame-rate meter: the guest's own presentation rate, independent of any
+ * viewer (VNC refreshes the console at <= ~33 Hz and only while a client is
+ * connected, so its update rate says nothing about the guest).
+ *
+ * A host-clock timer samples the scanned-out framebuffer at XDJ_FPS_HZ and
+ * counts the samples whose content (or IPU buffer address, i.e. a page flip)
+ * changed since the previous one; once a second that count becomes the rate.
+ * So it reads "new frames shown per wall-clock second": 0 on a still screen,
+ * at most XDJ_FPS_HZ.
+ *
+ * On demand only: reading the machine property "xdj-fps" (qom-get /machine
+ * xdj-fps; the panel's GET /fps) starts the sampler and returns the latest rate;
+ * the sampler stops itself XDJ_FPS_IDLE_NS after the last read, so it costs
+ * nothing while nobody is watching.
+ */
+#define XDJ_FPS_HZ       120
+#define XDJ_FPS_IDLE_NS  (3 * NANOSECONDS_PER_SECOND)
+
+static QEMUTimer *xdj_fps_timer;
+static bool xdj_fps_running;
+static int64_t xdj_fps_last_read, xdj_fps_win_start;
+static uint64_t xdj_fps_last_hash;
+static unsigned xdj_fps_changes;
+static double xdj_fps_value;
+
+/* FNV-1a over the visible framebuffer (64-bit words) + the IPU buffer address. */
+static uint64_t xdj_fb_hash(void)
+{
+    int bpp = xdj_fb_detect_bpp();
+    hwaddr want = (hwaddr)XDJ_FB_WIDTH * XDJ_FB_HEIGHT * ((bpp ? bpp : 32) / 8);
+    hwaddr len = want;
+    uint64_t h = 0xcbf29ce484222325ull;
+    const uint64_t *p;
+    size_t i;
+
+    if (ipu_cpmem_ram) {
+        h = (h ^ ldl_le_p(ipu_cpmem_ram + IPU_CH_W1_D0(IPU_DISP_CH))) * 0x100000001b3ull;
+    }
+    p = address_space_map(&address_space_memory, XDJ_FB_BASE, &len, false,
+                          MEMTXATTRS_UNSPECIFIED);
+    if (!p) {
+        return h;
+    }
+    for (i = 0; i < len / 8; i++) {
+        h = (h ^ p[i]) * 0x100000001b3ull;
+    }
+    address_space_unmap(&address_space_memory, (void *)p, len, false, 0);
+    return h;
+}
+
+static void xdj_fps_tick(void *opaque)
+{
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    uint64_t h;
+
+    if (now - xdj_fps_last_read > XDJ_FPS_IDLE_NS) {
+        xdj_fps_running = false;              /* nobody is watching: stop */
+        return;
+    }
+    h = xdj_fb_hash();
+    if (h != xdj_fps_last_hash) {
+        xdj_fps_changes++;
+        xdj_fps_last_hash = h;
+    }
+    if (now - xdj_fps_win_start >= NANOSECONDS_PER_SECOND) {
+        xdj_fps_value = xdj_fps_changes * (double)NANOSECONDS_PER_SECOND /
+                        (now - xdj_fps_win_start);
+        xdj_fps_changes = 0;
+        xdj_fps_win_start = now;
+    }
+    timer_mod(xdj_fps_timer, now + NANOSECONDS_PER_SECOND / XDJ_FPS_HZ);
+}
+
+static void xdj_fps_get(Object *obj, Visitor *v, const char *name,
+                        void *opaque, Error **errp)
+{
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    double fps = xdj_fps_value;
+
+    xdj_fps_last_read = now;
+    if (!xdj_fps_running) {                   /* (re)start a fresh measurement */
+        xdj_fps_running = true;
+        xdj_fps_value = 0;
+        fps = 0;
+        xdj_fps_changes = 0;
+        xdj_fps_win_start = now;
+        xdj_fps_last_hash = xdj_fb_hash();
+        timer_mod(xdj_fps_timer, now + NANOSECONDS_PER_SECOND / XDJ_FPS_HZ);
+    }
+    visit_type_number(v, name, &fps, errp);
+}
+
 /* realize: GPU (3D/2D/VG) + tempsense + IPU interrupt stubs, CPMEM, scanout console */
 void xdj_display_realize(FslIMX6State *s, DeviceState *dev, DeviceState *gic)
 {
@@ -729,4 +823,9 @@ void xdj_display_realize(FslIMX6State *s, DeviceState *dev, DeviceState *gic)
     /* Framebuffer scanout console (mirror of the mxc_sdc_fb memory) */
     xdj_fb_con = qemu_graphic_console_create(dev, 0, &xdj_fb_ops, NULL);
     qemu_console_resize(xdj_fb_con, XDJ_FB_WIDTH, XDJ_FB_HEIGHT);
+
+    /* Frame-rate meter (see xdj_fps_get): qom-get /machine xdj-fps */
+    xdj_fps_timer = timer_new_ns(QEMU_CLOCK_REALTIME, xdj_fps_tick, NULL);
+    object_property_add(qdev_get_machine(), "xdj-fps", "number",
+                        xdj_fps_get, NULL, NULL, NULL);
 }

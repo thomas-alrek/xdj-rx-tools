@@ -729,6 +729,17 @@ def _mon(cmds):
     return _qmp_hmp(QMP, cmds) if QMP else _hmp_raw(cmds)
 
 
+def guest_fps():
+    """qom-get /machine xdj-fps (= panel.rs GET /fps), rounded to 0.1; None if unavailable."""
+    try:
+        out = _mon(["qom-get /machine xdj-fps"])[0]
+        text = out.get("return", "") if isinstance(out, dict) else out
+        m = re.findall(r"^\s*(\d+(?:\.\d+)?)\s*$", text, re.M)
+        return round(float(m[-1]), 1) if m else None
+    except Exception:
+        return None
+
+
 def _mon_quiet(cmds):
     """Best-effort monitor commands; ignore any failure (e.g. device not present)."""
     try:
@@ -991,6 +1002,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     seen = seq
             except Exception:
                 pass                       # client went away
+        elif path == "/fps":
+            # The guest's own presentation rate (xdj-display.c's on-demand meter;
+            # reading it keeps the meter running). null while QEMU is off.
+            self._send(200, "application/json", json.dumps({"fps": guest_fps()}).encode())
         elif path == "/raw":
             fb = grab_raw()
             if fb:

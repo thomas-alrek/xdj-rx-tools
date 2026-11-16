@@ -220,6 +220,14 @@ copyright-free design (no device photography). Full detail is in the
 - **Power**: top-left POWER switch with a red LED; `POST /power` → host `power.sock`. USB images
   loaded while off are queued and inserted once the guest is ready; *Enter Firmware Update Mode*
   powers on with `XDJ_BOOT_UPDATE=1`.
+- **View → FPS** (checkbox, remembered): the window title shows the guest's own frame rate —
+  frames it presents per wall-clock second, measured inside QEMU, not the VNC update rate (which
+  is capped near 33 Hz and only runs with a viewer). `xdj-display.c` samples the scanned-out
+  framebuffer (+ the IPU buffer address, so page flips count) at 120 Hz on the host clock and
+  counts the samples that changed; read as `qom-get /machine xdj-fps` (`GET /fps` → `{"fps": n}`,
+  `null` while QEMU is off). The sampler runs only while someone reads it and stops 3 s after
+  the last read. The rekordbox UI presents ~4 fps under TCG (idle home screen, browsing and
+  jogging alike; 210 Hz screendumps agree), the boot screen ~40.
 
 ---
 

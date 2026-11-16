@@ -647,6 +647,21 @@ function build(){
   const sc=d(''); sc.id='screen'; place(sc,SCREEN0.x,SCREEN0.y,SCREEN0.w,SCREEN0.h);
 }
 
+// ===== View > FPS ==========================================================
+// The guest's own frame rate — frames it presents per second, measured inside QEMU
+// (xdj-display.c samples the framebuffer; GET /fps), not the VNC update rate — shown in
+// the window title while the item is checked. Polling /fps is what keeps the meter on.
+let fpsTimer=null;
+const titleWin=()=>{ const W=window.__TAURI__&&window.__TAURI__.window; return W&&W.getCurrentWindow?W.getCurrentWindow():null; };
+const BASE_TITLE=titleWin()?'Pioneer XDJ-RX':document.title;
+function setTitle(t){ document.title=t; const w=titleWin(); if(w) w.setTitle(t).catch(e=>console.warn('setTitle',e)); }
+function fpsUI(){ clearInterval(fpsTimer); fpsTimer=null;
+  if(!PREF.get('showFps',false)){ setTitle(BASE_TITLE); return; }
+  const tick=async()=>{ let f=null;
+    try{ f=(await (await fetch('/fps',{cache:'no-store'})).json()).fps; }catch(_){}
+    setTitle(BASE_TITLE+' — '+(f==null?'off':f.toFixed(1)+' fps')); };
+  tick(); fpsTimer=setInterval(tick,1000); }
+
 // ===== live screen ========================================================
 const VNC=new URLSearchParams(location.search).get('vnc');
 const conn=document.getElementById('conn')||{className:'',textContent:''};   // no status bar any more
@@ -841,7 +856,7 @@ const MENU=[
     ['Browse',()=>tap('browse')], ['Tag List',()=>tap('taglist')], ['Info',()=>tap('info')], ['Menu (Utility)',()=>tap('menu',2000)],
     ['Back',()=>tap('back')], ['Tag Track',()=>tap('tagtrk')], '-',
     ['Quantize',()=>tap('quant')], ['Deck 1/2',()=>tap('deck12')], ['Time Mode',()=>tap('timemd')], '-',
-    ['Pop Out Screen',popScreen], '-',
+    ['Pop Out Screen',popScreen], {check:'showFps',text:'FPS'}, '-',
     ['View Sub uCom Log',()=>openLog('subucom')], ['View System Log',()=>openLog('console')] ]],
 ];
 // ---- power (xdj-host owns QEMU; GET/POST /power on the sidecar) ----------------------
@@ -898,7 +913,7 @@ async function buildAppMenu(){
   const mk=async it=>{ if(it==='-') return PredefinedMenuItem.new({item:'Separator'});
     if(it && it.check){ const key=it.check; let item=null;   // persisted preference checkbox
       item=await CheckMenuItem.new({text:it.text,checked:PREF.get(key,PREF_DEFAULT[key]||false),
-        action:async()=>{ const v=await item.isChecked(); PREF.set(key,v); powerUI(); log(it.text+': '+(v?'on':'off')); }});
+        action:async()=>{ const v=await item.isChecked(); PREF.set(key,v); powerUI(); if(key==='showFps') fpsUI(); log(it.text+': '+(v?'on':'off')); }});
       return item; }
     const [text,v]=it; if(Array.isArray(v)) return Submenu.new({text,items:await Promise.all(v.map(mk))});
     return MenuItem.new({text,action:()=>{ try{ v(); }catch(e){ console.warn(e); } }}); };
@@ -932,7 +947,7 @@ function init(){
       if(now-last<450 && Math.abs(e.clientX-lx)<10 && Math.abs(e.clientY-ly)<10){ last=0; popScreen(); }
       else { last=now; lx=e.clientX; ly=e.clientY; } },true); }
   document.getElementById('screen').title='Double-click to pop the screen out into its own window';
-  buildAppMenu(); startPower(); adoptPopout();
+  buildAppMenu(); startPower(); adoptPopout(); fpsUI();
   setSrc(0,'DECK'); setSrc(1,'DECK');
   pushInitialState();
 }

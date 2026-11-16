@@ -851,6 +851,21 @@ pub(crate) async fn get(p: Arc<Panel>, path: &str, query: &str) -> Response<Body
             sse_headers(Body::from_stream(stream))
         }
         "/raw" => text(503, "no framebuffer (is QEMU on the monitor socket?)"),
+        "/fps" => {
+            // The guest's own presentation rate (xdj-display.c's on-demand meter;
+            // reading it keeps the meter running). null while QEMU is off.
+            let fps = crate::qmp_hmp(&p.cfg.qmp_sock, &["qom-get /machine xdj-fps".to_string()])
+                .await
+                .ok()
+                .and_then(|o| o.into_iter().next())
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .and_then(|v| v.get("return").and_then(|r| r.as_str()).and_then(|t| t.trim().parse::<f64>().ok()));
+            let body = match fps {
+                Some(f) => format!("{{\"fps\": {:.1}}}", f),
+                None => "{\"fps\": null}".to_string(),
+            };
+            resp(200, "application/json", body)
+        }
         _ => text(404, "not found"),
     }
 }

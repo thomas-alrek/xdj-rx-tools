@@ -12,6 +12,7 @@
     "dialog:allow-message",
     "core:webview:allow-create-webview-window",
     "core:window:allow-set-focus",
+    "core:window:allow-set-title",
     "core:window:allow-start-dragging",
     "core:window:allow-internal-toggle-maximize",
     "core:menu:default"

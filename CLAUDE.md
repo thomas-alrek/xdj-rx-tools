@@ -69,6 +69,8 @@ preservation on owned hardware.
 - **USB slots are read/write** (no `snapshot`): QEMU write-locks the backing, so one image/stick is
   in one slot at a time (a load moves it from the other slot), an image opened in macOS is
   ejected there first, and failed loads raise a native error dialog. `docs/usb.md` §4.
+- **Frame rate**: `qom-get /machine xdj-fps` = the guest's presented frames/s (120 Hz framebuffer
+  sampler in `xdj-display.c`, on demand); View → FPS shows it. The rekordbox UI runs ~4 fps.
 - **Browse encoder:** ROTATE = 16-bit counter `rbp[0x54]/[0x55]`; PUSH = `rbp[0x5d].4`.
   **Jog** = period `rbp[0x0c]` + counter `rbp[0x0e]` + flags `rbp[0x10]` (.0 touch, .1 reverse).
 - **Test mode** = MEMORY + TEMPO RANGE (`B 13 04` + `B 12 08`) held at rbp's first frame

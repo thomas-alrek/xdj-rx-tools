@@ -89,6 +89,9 @@ background, not as a shipped calibration reference.
   bar, so an "aspect-locked" window still left side bands); round widgets size from their smaller side,
   so they stay round. Further off → letterbox. Don't put CSS transitions on things toggled by
   `visibility` (an offscreen WKWebView never ticks them — the power button uses `transition:none`).
+- **View > FPS** (`PREF showFps`, `fpsUI()`): polls `GET /fps` each second and puts
+  "Pioneer XDJ-RX — n fps" in the window title (Tauri `setTitle`, capability
+  `core:window:allow-set-title`; `document.title` in a browser). Internal guest rate, not VNC.
 - **Pop-out screen** (**double-click the screen**, or View > Pop Out Screen): the same page with `?screen=1` renders only `#screen`,
   letterboxed in a resizable window, and never pushes state/holds (view-only; a second VNC client).
   In the app it is a Tauri `WebviewWindow` labelled `screen` (JS API; needs
@@ -135,6 +138,7 @@ shipped.
 | `POST /log/note` | text | append a panel note to the sub-ucom log |
 | `GET /leds` | — | **SSE** stream of rbp's 20-byte LED payload (`data: <40 hex>` per change); `?once=1` = JSON |
 | `GET /cal-ref` | — | dev calibration overlay image (`XDJ_CAL_REF`; 404 if unset) |
+| `GET /fps` | — | `{"fps": n}`: the guest's presented frames/s (`qom-get /machine xdj-fps`, xdj-display.c); `null` while QEMU is off. Reading it keeps QEMU's meter running |
 
 ## Inject/hold model (important)
 The QEMU harness treats each snapshot as the **whole** frame state (an omitted field falls back
