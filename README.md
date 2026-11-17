@@ -203,6 +203,7 @@ Never commit firmware contents.
 | [docs/usb.md](docs/usb.md) | USB slots, images and the insert rules |
 | [docs/rbp-and-panel-protocol.md](docs/rbp-and-panel-protocol.md) | the firmware's main app (`rbp`) and the panel protocol |
 | [docs/debug-console-protocol.md](docs/debug-console-protocol.md) | `rbp`'s built-in debug console |
+| [docs/decomp.md](docs/decomp.md) | decompiling `rbp` back to source: approach, what it's built from (the work itself stays local, `decomp/` is git-ignored) |
 | [docs/version-display-and-override.md](docs/version-display-and-override.md) | where the displayed version comes from |
 | [docs/testing.md](docs/testing.md) | the test suites and when to run them |
 
