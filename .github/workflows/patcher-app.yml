@@ -24,15 +24,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-latest
             name: macos
             target: universal-apple-darwin
             bundles: dmg
-          - os: windows-2022
+          - os: windows-latest
             name: windows
             target: x86_64-pc-windows-msvc
             bundles: nsis
-          - os: ubuntu-22.04
+          - os: ubuntu-latest
             name: linux
             target: x86_64-unknown-linux-gnu
             bundles: appimage,deb
@@ -68,6 +68,8 @@ jobs:
 
       - name: Build
         working-directory: app/patcher
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"     # the AppImage tools run without FUSE (runners lack it)
         run: |
           cat > bundle.json <<'EOF'
           {"bundle": {"active": true, "icon": ["icons/32x32.png", "icons/128x128.png",
@@ -95,7 +97,7 @@ jobs:
   attach:
     needs: build
     if: ${{ inputs.tags != '' }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
