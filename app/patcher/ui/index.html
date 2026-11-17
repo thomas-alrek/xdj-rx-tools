@@ -1,0 +1,232 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>XDJ-RX Firmware Patcher</title>
+  <!-- Styled like the emulator's setup screen (app/ui/index.html): same palette, card, buttons. -->
+  <style>
+    :root { color-scheme: dark; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: #0b0c0e; color: #c7ccd1;
+      font: 15px/1.5 -apple-system, system-ui, "Segoe UI", sans-serif;
+      display: flex; align-items: center; justify-content: center;
+      -webkit-user-select: none; user-select: none;
+    }
+    .card {
+      width: min(560px, 86vw); text-align: center; padding: 32px 28px 24px;
+      border: 2px dashed #2a2e35; border-radius: 16px; background: #101216;
+      transition: border-color .15s, background .15s; box-sizing: border-box;
+    }
+    body.drag .card { border-color: #d64541; background: #16130f; }
+    h1 { font-size: 20px; margin: 0 0 6px; color: #e6e9ec; font-weight: 600; }
+    .mark { width: 54px; height: 54px; margin: 0 auto 18px; border-radius: 12px;
+      background: #14161a; display: flex; align-items: center; justify-content: center; }
+    .mark i { width: 22px; height: 22px; background: #d64541; border-radius: 5px; display: block; }
+    p { margin: 8px 0 0; color: #9aa0a6; }
+    .hint { font-size: 13px; color: #6b7178; margin-top: 16px; }
+    #status { margin-top: 16px; min-height: 22px; color: #e6e9ec; }
+    #status.err { color: #ff6b66; }
+    .okmark { color: #5bd67a; }
+
+    /* file slots */
+    .slots { margin-top: 22px; display: flex; flex-direction: column; gap: 10px; }
+    .slot { display: flex; align-items: center; gap: 14px; text-align: left; cursor: pointer;
+      background: #0c0e11; border: 1.5px dashed #2a2e35; border-radius: 10px; padding: 11px 14px;
+      transition: border-color .15s; }
+    .slot:hover { border-color: #3a3f47; }
+    .slot.set { border-style: solid; border-width: 1px; padding: 11.5px 14.5px; }
+    .slot.good { border-color: #2f5c3c; }
+    .slot.bad { border-color: #ff6b66; }
+    .slot .n { flex: none; width: 26px; height: 26px; border-radius: 50%; background: #1b1f26;
+      color: #c7ccd1; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; }
+    .slot.good .n { background: #5bd67a; color: #0b0c0e; }
+    .slot.bad .n { background: #ff6b66; color: #0b0c0e; }
+    .slot .t { min-width: 0; flex: 1; }
+    .slot .name { color: #e6e9ec; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .slot .sub { color: #9aa0a6; font-size: 12.5px; }
+    .slot.good .sub { color: #5bd67a; }
+    .slot.bad .sub { color: #ff6b66; }
+    #error { margin-top: 8px; font-size: 13px; color: #ff6b66; text-align: left; }
+
+    /* key + output: like the setup screen's key box */
+    .box { margin-top: 20px; padding-top: 16px; border-top: 1px solid #22262d; text-align: left; }
+    .lbl { font-size: 13px; color: #9aa0a6; }
+    .link { color: #c7ccd1; text-decoration: underline; cursor: pointer; }
+    .link:hover { color: #fff; }
+    .row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+    #keyhex { flex: 1; min-width: 0; background: #0c0e11; border: 1px solid #2a2e35;
+      border-radius: 8px; color: #e6e9ec; padding: 8px 10px; font: 13px ui-monospace, monospace; }
+    #keyhex:focus { outline: none; border-color: #d64541; }
+    .btn2 { background: #1b1f26; color: #c7ccd1; border: 1px solid #2a2e35;
+      border-radius: 8px; padding: 8px 12px; font-weight: 600; cursor: pointer; white-space: nowrap; font-size: 13px; }
+    .btn2:hover:not(:disabled) { border-color: #3a3f47; color: #fff; }
+    .btn2:disabled { color: #6b7178; cursor: default; }
+    #out { flex: 1; min-width: 0; font-size: 12px; color: #6b7178;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+    .hidden { display: none !important; }
+
+    /* build */
+    #go { display: block; width: 100%; margin-top: 20px; background: #d64541; color: #fff; border: 0;
+      border-radius: 8px; padding: 12px 14px; font-weight: 600; font-size: 15px; cursor: pointer; }
+    #go:hover:not(:disabled) { background: #c23b37; }
+    #go:disabled { background: #3a2a2a; color: #9aa0a6; cursor: default; }
+    #prog { margin-top: 14px; font-size: 12px; color: #9aa0a6; }
+    #prog .bar { height: 6px; background: #1b1f26; border-radius: 3px; overflow: hidden; margin-bottom: 6px; }
+    #prog .bar i { display: block; height: 100%; width: 0; background: #d64541; transition: width .2s; }
+    #prog .step { color: #e6e9ec; font-size: 13px; }
+    #done { margin-top: 16px; text-align: left; }
+    #done .big { color: #5bd67a; font-weight: 600; font-size: 15px; }
+    #done .md5 { font: 12px ui-monospace, monospace; color: #9aa0a6; margin-top: 2px; word-break: break-all; }
+    #done .next { font-size: 13px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="mark"><i></i></div>
+    <h1>XDJ-RX Firmware Patcher</h1>
+    <p id="sub">Turns Pioneer's official XDJ-RX firmware 2.21 into custom firmware.</p>
+
+    <div class="slots">
+      <div class="slot" id="slot-firmware" data-kind="firmware">
+        <div class="n">1</div>
+        <div class="t"><div class="name">Official firmware 2.21</div>
+          <div class="sub">Drop Pioneer's XDJ-RX_v221.zip (or XDJRX.UPD) here, or click to choose</div></div>
+      </div>
+      <div class="slot" id="slot-patch" data-kind="patch">
+        <div class="n">2</div>
+        <div class="t"><div class="name">Patch file</div>
+          <div class="sub">Drop the release's .xdjpatch file here, or click to choose</div></div>
+      </div>
+    </div>
+    <div id="error" class="hidden"></div>
+
+    <div class="box">
+      <div id="key-auto">
+        <div class="lbl">The firmware key is downloaded automatically from Pioneer's public GPL
+          source code (<span id="mb">~280</span> MB). <span class="link" id="key-own-on">I have the key</span></div>
+      </div>
+      <div id="key-own" class="hidden">
+        <div class="lbl">Your firmware key — drop your <b>aes256.key</b> file here, or paste the 64-hex key:</div>
+        <div class="row">
+          <input id="keyhex" placeholder="64 hexadecimal characters or a key file" spellcheck="false" autocomplete="off" />
+          <button class="btn2" id="keybrowse">Browse…</button>
+          <button class="btn2" id="key-own-off">Download instead</button>
+        </div>
+      </div>
+      <div class="row" style="margin-top: 12px">
+        <div id="out">Saves to: a folder next to the official firmware</div>
+        <button class="btn2" id="outchange" disabled>Change…</button>
+      </div>
+    </div>
+
+    <button id="go" disabled>Build custom firmware</button>
+
+    <div id="prog" class="hidden"><div class="bar"><i></i></div><div class="step"></div><div class="detail"></div></div>
+    <div id="status"></div>
+    <div id="done" class="hidden">
+      <div class="big"></div>
+      <div class="md5"></div>
+      <div class="row"><button class="btn2" id="reveal">Show in folder</button></div>
+      <div class="next">Next: copy <b>XDJRX.UPD</b> to the root of a <b>FAT32</b> USB stick and update the
+        XDJ-RX as the release notes describe.</div>
+    </div>
+
+    <div class="hint">Everything stays on your computer; nothing is uploaded.</div>
+  </div>
+  <script>
+    const invoke = window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke;
+    const $ = id => document.getElementById(id);
+    const statusEl = $('status');
+    let st = {};
+
+    function show(msg, isErr) {
+      statusEl.className = isErr ? 'err' : '';
+      statusEl.textContent = msg || '';
+    }
+    function clearStatus() { show(''); $('done').classList.add('hidden'); $('prog').classList.add('hidden'); }
+    function dragging(on) { document.body.classList.toggle('drag', on); }
+
+    function slot(kind, name, state, sub) {
+      const el = $('slot-' + kind);
+      el.classList.toggle('set', !!name);
+      el.classList.toggle('good', state === 'good');
+      el.classList.toggle('bad', state === 'bad');
+      el.querySelector('.n').textContent = state === 'good' ? '✓' : state === 'bad' ? '!' : (kind === 'firmware' ? '1' : '2');
+      if (name) {
+        el.querySelector('.name').textContent = name;
+        el.querySelector('.sub').textContent = sub;
+      } else {
+        el.querySelector('.name').textContent = kind === 'firmware' ? 'Official firmware 2.21' : 'Patch file';
+        el.querySelector('.sub').textContent = kind === 'firmware'
+          ? "Drop Pioneer's XDJ-RX_v221.zip (or XDJRX.UPD) here, or click to choose"
+          : "Drop the release's .xdjpatch file here, or click to choose";
+      }
+    }
+
+    // Called from Rust with the whole state.
+    function render(s) {
+      st = s;
+      $('mb').textContent = '~' + s.downloadMb;
+      $('sub').textContent = s.ok
+        ? `Turns Pioneer's official XDJ-RX firmware ${s.from} into custom firmware ${s.release}.`
+        : "Turns Pioneer's official XDJ-RX firmware 2.21 into custom firmware.";
+      const fwState = s.checking ? '' : s.ok ? 'good' : s.errorIn === 'firmware' ? 'bad' : '';
+      const ptState = s.checking ? '' : s.ok ? 'good' : s.errorIn === 'patch' ? 'bad' : '';
+      slot('firmware', s.firmware, s.firmware && fwState,
+        s.checking ? 'checking…' : fwState === 'good' ? `official firmware ${s.from} · click to change`
+          : fwState === 'bad' ? "can't be used — see below" : 'Official firmware 2.21');
+      slot('patch', s.patch, s.patch && ptState,
+        s.checking ? 'checking…' : ptState === 'good' ? `custom firmware ${s.release} · click to change`
+          : ptState === 'bad' ? "can't be used — see below" : 'Patch file');
+      $('error').textContent = s.error || '';
+      $('error').classList.toggle('hidden', !s.error);
+      $('out').textContent = s.output ? 'Saves to: ' + s.output : 'Saves to: a folder next to the official firmware';
+      $('out').title = s.output || '';
+      $('outchange').disabled = !s.output || s.busy;
+      $('go').disabled = !s.ok || s.busy || s.checking;
+      $('go').textContent = s.busy ? 'Building…' : s.ok ? `Build custom firmware ${s.release}` : 'Build custom firmware';
+      for (const b of ['keybrowse', 'key-own-off']) $(b).disabled = s.busy;
+      $('keyhex').disabled = s.busy;
+      document.querySelectorAll('.slot').forEach(e => e.style.pointerEvents = s.busy ? 'none' : '');
+    }
+    function progress(pct, step, detail) {
+      $('done').classList.add('hidden'); show('');
+      $('prog').classList.remove('hidden');
+      $('prog').querySelector('.bar i').style.width = (pct * 100) + '%';
+      $('prog').querySelector('.step').textContent = step;
+      $('prog').querySelector('.detail').textContent = detail;
+    }
+    function done(r) {
+      $('prog').classList.add('hidden');
+      $('done').classList.remove('hidden');
+      $('done').querySelector('.big').textContent = `✓ Custom firmware ${r.release} is ready`;
+      $('done').querySelector('.md5').textContent = `${r.path}\nMD5 ${r.md5} (verified)`;
+      $('done').querySelector('.md5').style.whiteSpace = 'pre-line';
+    }
+    function failed(msg) { $('prog').classList.add('hidden'); show(msg, true); }
+    function ownKey(on) {
+      $('key-auto').classList.toggle('hidden', on);
+      $('key-own').classList.toggle('hidden', !on);
+      if (on) $('keyhex').focus();
+    }
+    function setKeyFile(path) { ownKey(true); $('keyhex').value = path; }
+
+    document.querySelectorAll('.slot').forEach(el =>
+      el.addEventListener('click', () => invoke && invoke('browse', { kind: el.dataset.kind })));
+    $('key-own-on').addEventListener('click', () => ownKey(true));
+    $('key-own-off').addEventListener('click', () => { $('keyhex').value = ''; ownKey(false); });
+    $('keybrowse').addEventListener('click', () => invoke && invoke('browse', { kind: 'key' }));
+    $('outchange').addEventListener('click', () => invoke && invoke('browse', { kind: 'output' }));
+    $('reveal').addEventListener('click', () => invoke && invoke('reveal'));
+    $('go').addEventListener('click', async () => {
+      const own = !$('key-own').classList.contains('hidden');
+      const key = own ? $('keyhex').value.trim() : '';
+      if (own && !key) { show('Enter your key, or choose "Download instead".', true); return; }
+      clearStatus();
+      try { await invoke('build', { key }); } catch (e) { show(String(e), true); }
+    });
+    if (invoke) invoke('ready'); else show('This page runs inside the XDJ-RX Firmware Patcher app.', true);
+  </script>
+</body>
+</html>

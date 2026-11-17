@@ -63,6 +63,13 @@ window. Architecture: **`docs/standalone-app.md`**. **Never patches `rbp`/kernel
   else user NAT; `user`; or a socket path — skill run-xdj-emulator "Network"). The panel finds its bundled assets itself.
   Firmware key: `app-data/key/aes256.key`, content-sniffed
   (64-hex → `XDJRX_AES_KEY`, else `--key-file`); **never bundled**, falls back to repo `.env` in dev.
+  The setup page's key box offers **Download the key automatically** first (shell command
+  `download_key` → `xdj_fw::gplkey::fetch_key`, ~280 MB from Pioneer's GPL source, progress via
+  `keyProgress`/`keySaved`/`keyFailed`), then paste-hex / drop / Browse a key file. Test it with
+  a private `HOME` (no saved key): `HOME=/tmp/x app/shell/target/release/xdj-rx-shell`.
+
+The patcher's desktop app (`app/patcher`) is a separate Tauri app styled like the setup page;
+see skill `release-patcher`. Change the setup page's look → keep `app/patcher/ui/index.html` in step.
 
 ## Build & run
 ```

@@ -32,15 +32,32 @@ index `docs/releases.md` (linked at the top of the README).
    xdelta of it (measured: 99.9 % of an xdelta 2.21→3.00 is the new image's bytes).
 
 ## Patcher internals (`crates/xdjrx-patcher`)
+- `src/lib.rs` = the work, shared with the desktop app: `Job::open(orig, patch)` (patch +
+  official MD5), `key_from_gpl(on)` / `key_from_arg`, `job.build(&key, out, on)`; progress as
+  `Msg::Step` / `Msg::Download`. `src/main.rs` = the CLI (prints, prompts) on top.
 - Input `.UPD` or `.zip` (`firmware::read_upd_bytes`), MD5 vs manifest `input.upd_md5`.
-- Key: `--key` (hex or file) → `$XDJRX_AES_KEY` → GPL download (two deflate64 ZIPs → nested
-  tar.gz → `initramfs/usr/local/pioneer/aes256.key` → `key_from_passphrase`) → prompt.
+- Key: `--key` (hex or file) → `$XDJRX_AES_KEY` → GPL download (`xdj_fw::gplkey::fetch_key`,
+  crate feature `gpl-key`, shared with the desktop app: two deflate64 ZIPs → nested tar.gz →
+  `initramfs/usr/local/pioneer/aes256.key` → `key_from_passphrase`) → prompt.
 - Overlay in a temp dir: new files + `.xdj-modes` (portable modes; `tree.rs` reads it), edited
   Pioneer files from `fwbuild::unpack` + ops (lines split after `\n` only, latin-1), each
   checked by SHA-256; `SOURCE_DATE_EPOCH` from the manifest; `fwbuild::build` +
   `firmware::pack`; writes only on an MD5 match. No arguments → interactive (drag and drop,
   "Press Enter to close").
 - A new release = a new `.xdjpatch` for the same patcher, unless the manifest `format` changes.
+
+## Desktop app (`app/patcher`, "XDJ-RX Firmware Patcher")
+- Tauri (same stack as the emulator shell), page `app/patcher/ui/index.html` styled like the
+  shell's setup screen (`app/ui/index.html`) - keep the two visually in step.
+- Two slots (official firmware, patch) filled only by drop or click-to-pick - **never scan the
+  user's folders to pre-fill**. Background `Job::open` check → green ✓ / red reason; key
+  downloaded by default or "I have the key"; output `XDJ-RX <rel>/XDJRX.UPD` next to the
+  firmware or "Change…"; progress bar; done = path + verified MD5 + Show in folder.
+- Run: `cd app/patcher && cargo build --release && target/release/xdjrx-patcher-app`.
+  Verify with a real build: MD5 must equal the release's (skip the download with "I have the
+  key" + `build/aes256.key`).
+- Not yet packaged: macOS `.app`; Windows / Linux need their own OS to build (Tauri webviews) -
+  CI runners, not Docker on the Mac.
 
 ## Gotchas
 - Users: firmware updates need a **FAT32** stick (also after 3.00: the boot-time updater has no

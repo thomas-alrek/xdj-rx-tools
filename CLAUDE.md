@@ -24,15 +24,19 @@ preservation on owned hardware.
 - Docs and comments describe the **current** state — no history, dates or "was …" notes.
 
 ## Layout
+- `app/patcher/` — **XDJ-RX Firmware Patcher**, the patcher's desktop app (Tauri, styled like the
+  shell's setup screen; uses `crates/xdjrx-patcher`'s library).
 - `app/` — the desktop app: `shell/` (Tauri) and `host/` (`xdj-host`: runs QEMU, the in-process
   virtual-panel server `src/panel.rs`, the MCP server `src/mcp.rs` (`POST :8765/mcp`), firmware
   prep, provisioning/NAND boot, power). No Python.
 - `crates/xdj-fw/` — Rust library + **`xdj` CLI**: `fw info|decrypt|unpack|diff|repack|build|pack|stick`,
   `prepare` (kernel boot blobs), `nand init|env|info|boot`. Codecs: `.UPD` crypto, ISO9660+Rock Ridge,
-  cramfs, payload tarballs. Tests: `cargo test --release`.
+  cramfs, payload tarballs; `gplkey` (feature `gpl-key`: the key from Pioneer's GPL source download,
+  used by the patcher and the app's key prompt). Tests: `cargo test --release`.
 - `crates/xdjrx-patcher/` — the end-user **`xdjrx-patcher`** (official 2.21 `.UPD` + a `.xdjpatch` →
-  the custom firmware release, MD5-verified; key from Pioneer's GPL source). Patch files:
-  `tools/fw/make-patch.py`; binaries for macOS/Linux/Windows: `tools/fw/build-patcher.sh`.
+  the custom firmware release, MD5-verified; key from Pioneer's GPL source): `src/lib.rs` the work,
+  `src/main.rs` the CLI. Patch files: `tools/fw/make-patch.py`; binaries for macOS/Linux/Windows:
+  `tools/fw/build-patcher.sh`.
 - `qemu/` — `xdj/*.c` (device models: board, display, audio, panel harness, NAND, MFi, USBNC — **edit
   these**; `build-qemu.sh` syncs them into the build tree), `patches/01..05` (stock QEMU files only:
   SoC hooks, i.MX peripherals, SABRE-SD board, ChipIdea USB/hub, macOS timers), `build-qemu.sh`

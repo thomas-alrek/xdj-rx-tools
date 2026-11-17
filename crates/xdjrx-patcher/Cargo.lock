@@ -918,6 +918,7 @@ dependencies = [
  "flate2",
  "libc",
  "tar",
+ "ureq",
  "zip",
 ]
 
@@ -925,14 +926,11 @@ dependencies = [
 name = "xdjrx-patcher"
 version = "1.0.0"
 dependencies = [
- "flate2",
  "md-5",
  "serde_json",
  "sha2",
  "tar",
- "ureq",
  "xdj-fw",
- "zip",
 ]
 
 [[package]]

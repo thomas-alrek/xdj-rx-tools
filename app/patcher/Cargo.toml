@@ -1,0 +1,23 @@
+[package]
+name = "xdjrx-patcher-app"
+version = "1.0.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "XDJ-RX Firmware Patcher: the desktop app for xdjrx-patcher (Tauri, styled like the emulator's setup screen)."
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde_json = "1"
+xdjrx-patcher = { path = "../../crates/xdjrx-patcher" }
+
+[[bin]]
+name = "xdjrx-patcher-app"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 2
+strip = true

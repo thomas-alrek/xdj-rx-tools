@@ -622,7 +622,7 @@ means following their licences (source offer / notices):
 ## 13. Distribution: a patch file + `xdjrx-patcher`
 
 Users get the release from Pioneer's official 2.21 firmware, a small patch file and a
-command-line tool; Pioneer's firmware is never redistributed.
+command-line tool (or its desktop app, below); Pioneer's firmware is never redistributed.
 
 ```
 xdjrx-patcher  ORIGINAL.UPD  PATCH.xdjpatch  [--key KEY]  [-o OUT.UPD]
@@ -641,8 +641,8 @@ xdjrx-patcher  ORIGINAL.UPD  PATCH.xdjpatch  [--key KEY]  [-o OUT.UPD]
   output MD5.
 - **KEY** (optional): 64 hex characters, or a key file. Without it the patcher downloads
   Pioneer's public GPL source release for the XDJ-RX (two deflate64 ZIPs, ~280 MB) and derives
-  the key from `initramfs/usr/local/pioneer/aes256.key` (as `tools/fetch_key.py`), asking for
-  it only if that fails. `$XDJRX_AES_KEY` also works.
+  the key from `initramfs/usr/local/pioneer/aes256.key` (`xdj_fw::gplkey`, also used by the
+  desktop app's key prompt; same result as `tools/fetch_key.py`), asking for it only if that fails. `$XDJRX_AES_KEY` also works.
 - **What it does:** decrypts the original (the key is checked: ISO9660 must appear), unpacks the
   two edited files, applies the edits and checks their hashes, writes the overlay (new files'
   modes in each part's `.xdj-modes`, so Windows builds the same bytes as macOS/Linux), sets
@@ -651,10 +651,25 @@ xdjrx-patcher  ORIGINAL.UPD  PATCH.xdjpatch  [--key KEY]  [-o OUT.UPD]
   (`5492b333f6eb4b853cb7cfa113c48659` for 3.00); default output `XDJ-RX 3.00/XDJRX.UPD` next
   to the original. Run without arguments, it asks for the two files (drag and drop) and waits
   for Enter at the end (double-click use on Windows).
-- **Code / builds:** `crates/xdjrx-patcher` (Rust; `xdj-fw`, `ureq` + rustls, `zip`
-  deflate64, `tar`, `md-5`, `sha2`). `tools/fw/build-patcher.sh` → `dist/patcher/`:
-  `xdjrx-patcher-macos` (universal), `-linux-x86_64` (static musl, Docker),
-  `-windows-x86_64.exe` (MinGW, Docker).
+- **Code / builds:** `crates/xdjrx-patcher` (Rust): the library `src/lib.rs` does the work
+  (`Job::open` reads the patch and checks the official MD5, `key_from_gpl` / `key_from_arg`,
+  `Job::build` with step and download progress through a callback) and `src/main.rs` is the CLI
+  on top (`xdj-fw` with `gpl-key`, `tar`, `md-5`, `sha2`, `serde_json`).
+  `tools/fw/build-patcher.sh` → `dist/patcher/`: `xdjrx-patcher-macos` (universal),
+  `-linux-x86_64` (static musl, Docker), `-windows-x86_64.exe` (MinGW, Docker).
+- **Desktop app** (`app/patcher`, "XDJ-RX Firmware Patcher"): Tauri, like the emulator's shell,
+  and styled like its setup screen (`ui/index.html`). Two slots - official firmware, patch file -
+  filled by dropping files on the window or clicking a slot (native picker); nothing is
+  pre-filled or looked for on disk. The pair is checked in the background (`Job::open`: green ✓
+  or the reason in red). The key is downloaded from Pioneer's GPL source by default (kept in
+  memory for the session); "I have the key" takes 64 hex or a key file. Output defaults to
+  `XDJ-RX <release>/XDJRX.UPD` next to the official firmware ("Change…" = save dialog). Build
+  shows a progress bar (download 0-70 %, build steps after), then the path, the verified MD5,
+  "Show in folder" and the FAT32 next step. Page ↔ Rust: `render(state)`, `progress(pct, step,
+  detail)`, `done(result)`, `failed(msg)`, `dragging(on)` / commands `ready`, `browse(kind)`,
+  `build(key)`, `reveal`. Build and run: `cd app/patcher && cargo build --release &&
+  target/release/xdjrx-patcher-app`. Not yet packaged: macOS `.app`, and Windows / Linux builds
+  (Tauri needs those systems' webviews, so they build on their own OS, e.g. CI runners).
 - **Why not a standard delta format** (xdelta3 / VCDIFF, BPS): the `.UPD` is AES-256-CBC per
   512-byte sector (IV = sector number), so unchanged sectors at unchanged positions encrypt
   identically — but the rebuild repacks and shifts the root filesystem and the app archive.
@@ -682,6 +697,8 @@ xdjrx-patcher  ORIGINAL.UPD  PATCH.xdjpatch  [--key KEY]  [-o OUT.UPD]
 10. On the real unit (after the emulator): CPU of SMOOTH and FLAC decode, tearing, big libraries.
 11. OneLibrary — nice to have; not now.
 12. ✅ Patch file + `xdjrx-patcher` for macOS, Linux and Windows (§13).
+13. Patcher desktop app (`app/patcher`, §13): works on macOS from the build tree; next: macOS
+    `.app` packaging, Windows / Linux builds (CI), release-notes install steps with the app.
 
 Defaults (and factory-reset values) are the improvements — 60 fps, 3-band, smooth scrolling —
 so they show right after the update; behaviour-changing features (BEAT JUMP) are opt-in.
