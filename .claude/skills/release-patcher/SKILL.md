@@ -21,12 +21,12 @@ index `docs/releases.md` (linked at the top of the README).
 4. `python3 tools/fw/make-patch.py` → `build/patch/xdjrx-<rel>.xdjpatch` (~300 KB: our files +
    insert-only line edits of Pioneer files; it refuses anything else, so no Pioneer text leaks).
 5. `tools/fw/build-patcher.sh` → `dist/patcher/`: `xdjrx-patcher-macos` (universal),
-   `-linux-x86_64`, `-linux-arm64` (static musl, Docker), `-windows-x86_64.exe` (MinGW, Docker).
+   `-linux-x86_64` (static musl, Docker), `-windows-x86_64.exe` (MinGW, Docker).
 6. Verify: run the patcher on the **official zip** with no key (it downloads Pioneer's GPL
    source and derives the key) → MD5 must equal step 1; also a Linux binary in Docker with
    `--key`. Wrong input / wrong key must be refused.
 7. Record the MD5s (docs §1 table, release notes Install, README box) and publish:
-   the `.xdjpatch` + the four patcher binaries as release assets. Never the `.UPD`, never an
+   the `.xdjpatch` + the three patcher binaries as release assets. Never the `.UPD`, never an
    xdelta of it (measured: 99.9 % of an xdelta 2.21→3.00 is the new image's bytes).
 
 ## Patcher internals (`crates/xdjrx-patcher`)

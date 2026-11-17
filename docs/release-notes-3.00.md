@@ -87,7 +87,7 @@ downloads:
 3. **The patcher** for your computer, from the same page:
    - Windows: `xdjrx-patcher-windows-x86_64.exe`
    - Mac: `xdjrx-patcher-macos`
-   - Linux: `xdjrx-patcher-linux-x86_64` (or `-linux-arm64`)
+   - Linux: `xdjrx-patcher-linux-x86_64`
 
 Put all three in the same folder, then start the patcher:
 

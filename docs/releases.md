@@ -16,4 +16,4 @@ release on your computer and checks the result; each release's notes have the st
 guide.
 
 Downloads per release: `xdjrx-<release>.xdjpatch`, `xdjrx-patcher-windows-x86_64.exe`,
-`xdjrx-patcher-macos`, `xdjrx-patcher-linux-x86_64`, `xdjrx-patcher-linux-arm64`.
+`xdjrx-patcher-macos`, `xdjrx-patcher-linux-x86_64`.

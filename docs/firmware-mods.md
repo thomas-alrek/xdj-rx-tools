@@ -651,7 +651,7 @@ xdjrx-patcher  ORIGINAL.UPD  PATCH.xdjpatch  [--key KEY]  [-o OUT.UPD]
   for Enter at the end (double-click use on Windows).
 - **Code / builds:** `crates/xdjrx-patcher` (Rust; `xdj-fw`, `ureq` + rustls, `zip`
   deflate64, `tar`, `md-5`, `sha2`). `tools/fw/build-patcher.sh` → `dist/patcher/`:
-  `xdjrx-patcher-macos` (universal), `-linux-x86_64` / `-linux-arm64` (static musl, Docker),
+  `xdjrx-patcher-macos` (universal), `-linux-x86_64` (static musl, Docker),
   `-windows-x86_64.exe` (MinGW, Docker).
 - **Why not a standard delta format** (xdelta3 / VCDIFF, BPS): the `.UPD` is AES-256-CBC per
   512-byte sector (IV = sector number), so unchanged sectors at unchanged positions encrypt

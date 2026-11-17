@@ -5,7 +5,6 @@
 #
 #   xdjrx-patcher-macos            universal (Apple Silicon + Intel), built natively (macOS host)
 #   xdjrx-patcher-linux-x86_64     static (musl), built in Docker
-#   xdjrx-patcher-linux-arm64      static (musl), built in Docker
 #   xdjrx-patcher-windows-x86_64.exe   built in Docker (MinGW)
 #
 # Needs Rust (rustup) on macOS and Docker (with linux/amd64 emulation on Apple Silicon).
@@ -31,7 +30,7 @@ if [[ " $WANT " == *" mac "* ]]; then
 fi
 
 if [[ " $WANT " == *" linux "* ]]; then
-  for arch in x86_64 arm64; do
+  for arch in x86_64; do
     plat=linux/amd64; t=x86_64-unknown-linux-musl
     [ "$arch" = arm64 ] && { plat=linux/arm64; t=aarch64-unknown-linux-musl; }
     docker run --rm --platform "$plat" -v "$ROOT/crates":/src -v "$VOL-$arch":/usr/local/cargo/registry \
