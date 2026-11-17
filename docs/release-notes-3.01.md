@@ -123,6 +123,16 @@ and writes nothing.
 For reference, the 3.01 `XDJRX.UPD` always has the MD5 **`c33963859ac201a5df7e4e0e591ceac6`**
 (the patcher checks this for you).
 
+**Prefer a window to a terminal?** The same release page has the **XDJ-RX Firmware Patcher**
+app, which does exactly the same with buttons: drop (or pick) the official firmware and the
+patch file, press **Build**, and it shows where `XDJRX.UPD` was written.
+- Windows: `xdjrx-patcher-app-windows-x86_64-setup.exe` installs it (same SmartScreen note as
+  above).
+- Mac: open `xdjrx-patcher-app-macos.dmg` and drag the app to Applications; the first time,
+  right-click it → **Open** → **Open**.
+- Linux: `xdjrx-patcher-app-linux-x86_64.AppImage` (`chmod +x`, then run it) or the `.deb`
+  (`sudo apt install ./xdjrx-patcher-app-linux-amd64.deb`).
+
 ### 2. Prepare a USB stick
 1. Use a USB stick formatted as **FAT32** (on a Mac: "MS-DOS (FAT)"). **Firmware updates
    only work from FAT32 sticks** — this one and every future update, even with 3.01

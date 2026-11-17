@@ -742,8 +742,9 @@ xdjrx-patcher  ORIGINAL.UPD  PATCH.xdjpatch  [--key KEY]  [-o OUT.UPD]
   "Show in folder" and the FAT32 next step. Page ↔ Rust: `render(state)`, `progress(pct, step,
   detail)`, `done(result)`, `failed(msg)`, `dragging(on)` / commands `ready`, `browse(kind)`,
   `build(key)`, `reveal`. Build and run: `cd app/patcher && cargo build --release &&
-  target/release/xdjrx-patcher-app`. Not yet packaged: macOS `.app`, and Windows / Linux builds
-  (Tauri needs those systems' webviews, so they build on their own OS, e.g. CI runners).
+  target/release/xdjrx-patcher-app`. Release bundles (macOS universal `.dmg`, Windows NSIS
+  installer, Linux AppImage / `.deb`): workflow `.github/workflows/patcher-app.yml`, built
+  natively per OS (Tauri needs each system's webview) and attached to the releases.
 - **Why not a standard delta format** (xdelta3 / VCDIFF, BPS): the `.UPD` is AES-256-CBC per
   512-byte sector (IV = sector number), so unchanged sectors at unchanged positions encrypt
   identically — but the rebuild repacks and shifts the root filesystem and the app archive.
@@ -771,8 +772,8 @@ xdjrx-patcher  ORIGINAL.UPD  PATCH.xdjpatch  [--key KEY]  [-o OUT.UPD]
 10. On the real unit (after the emulator): CPU of SMOOTH and FLAC decode, tearing, big libraries.
 11. OneLibrary — nice to have; not now.
 12. ✅ Patch file + `xdjrx-patcher` for macOS, Linux and Windows (§13).
-13. Patcher desktop app (`app/patcher`, §13): works on macOS from the build tree; next: macOS
-    `.app` packaging, Windows / Linux builds (CI), release-notes install steps with the app.
+13. ✅ Patcher desktop app (`app/patcher`, §13): bundles for macOS, Windows and Linux on the
+    3.00 and 3.01 releases. Open: code signing (macOS / Windows), a 1024 px app icon.
 
 Defaults (and factory-reset values) are the improvements — 60 fps, 3-band, smooth scrolling —
 so they show right after the update; behaviour-changing features (BEAT JUMP) are opt-in.

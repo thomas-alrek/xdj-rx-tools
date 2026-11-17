@@ -16,5 +16,7 @@ Linux) and a USB stick formatted as **FAT32**. The patcher turns the official fi
 release on your computer and checks the result; each release's notes have the step-by-step
 guide.
 
-Downloads per release: `xdjrx-<release>.xdjpatch`, `xdjrx-patcher-windows-x86_64.exe`,
-`xdjrx-patcher-macos`, `xdjrx-patcher-linux-x86_64`.
+Downloads per release: `xdjrx-<release>.xdjpatch` and the patcher, either as a command-line tool
+(`xdjrx-patcher-windows-x86_64.exe`, `xdjrx-patcher-macos`, `xdjrx-patcher-linux-x86_64`) or as
+the **XDJ-RX Firmware Patcher** app with a window (`xdjrx-patcher-app-windows-x86_64-setup.exe`,
+`xdjrx-patcher-app-macos.dmg`, `xdjrx-patcher-app-linux-x86_64.AppImage` / `-linux-amd64.deb`).

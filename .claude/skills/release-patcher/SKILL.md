@@ -56,8 +56,16 @@ index `docs/releases.md` (linked at the top of the README).
 - Run: `cd app/patcher && cargo build --release && target/release/xdjrx-patcher-app`.
   Verify with a real build: MD5 must equal the release's (skip the download with "I have the
   key" + `build/aes256.key`).
-- Not yet packaged: macOS `.app`; Windows / Linux need their own OS to build (Tauri webviews) -
-  CI runners, not Docker on the Mac.
+- Packaged per platform by the workflow **Patcher app** (`.github/workflows/patcher-app.yml`,
+  manual: `gh workflow run patcher-app.yml -f tags="<tag> ..."`): native Tauri bundles -
+  `xdjrx-patcher-app-macos.dmg` (universal), `-windows-x86_64-setup.exe` (NSIS),
+  `-linux-x86_64.AppImage`, `-linux-amd64.deb` - attached to the listed releases with
+  `SHA256SUMS-app.txt` once all three build. Windows / Linux need their own OS (webviews); the
+  macOS one also builds here: `tauri icon icons/icon.png -o <dir>`, then `tauri build --target
+  universal-apple-darwin --bundles dmg --config <json: bundle.active + those icons>` (Tauri CLI
+  from npm `@tauri-apps/cli@2`). Hosted macOS runners can queue for long: build it locally, take
+  Windows / Linux from the run's artifacts (`gh run download RUN -n patcher-app-windows`) and
+  upload by hand. Unsigned, like the CLI binaries.
 
 ## Gotchas
 - Users: firmware updates need a **FAT32** stick (also after 3.00: the boot-time updater has no
