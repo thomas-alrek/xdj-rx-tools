@@ -3,9 +3,9 @@
 **Status: working end to end.** A firmware rebuilt with `xdj fw build` from the
 official 2.21 image (new release number, edited root filesystem, edited `pioneer` payload)
 installs through Pioneer's own updater on the emulated unit and boots:
-`signature ok. version = 2.30` → `USER UPDATE 2.21 to 2.30` → every partition md5-verified →
+`signature ok. version = X.YY` → `USER UPDATE 2.21 to X.YY` → every partition md5-verified →
 "Firmware update is complete" (Ver.2.21 → Ver.2.30) → after a power cycle both console markers
-print and test mode shows **SYSTEM Ver.2.30**.
+print and test mode shows **SYSTEM Ver.X.YY**.
 
 This is the project's main deliverable: the emulator is a firmware testbed, so device features
 (exFAT, FLAC, ...) are developed as custom firmware and tested by booting it. Stock `rbp`, the
@@ -29,7 +29,7 @@ X=crates/xdj-fw/target/release/xdj
 $X fw unpack  build/XDJ-RX_v221.zip build/unpacked    # iso/ rootfs/ pioneer/ gui/ data/ user/
 $EDITOR build/unpacked/rootfs/etc/rc.d/rcS            # edit, add, delete, chmod +x, ln -s ...
 $X fw diff    build/XDJ-RX_v221.zip build/unpacked    # review: + new  ~ changed  - removed ...
-$X fw repack  build/XDJ-RX_v221.zip build/unpacked --release 2.31 -o build/MY.UPD
+$X fw repack  build/XDJ-RX_v221.zip build/unpacked --release X.YY -o build/MY.UPD
 ```
 `repack` = `diff` turned into an overlay (`--keep-overlay DIR` to keep it) + `build`. It carries
 content changes, new/removed files and dirs, symlink edits and exec-bit changes; ownership and
@@ -42,7 +42,7 @@ $X fw unpack build/XDJ-RX_v221.zip build/unpacked     # browse everything
 mkdir -p ov/pioneer/pioneer
 cp build/unpacked/pioneer/pioneer/apl_start ov/pioneer/pioneer/   # copy what you change
 $EDITOR ov/pioneer/pioneer/apl_start
-$X fw build build/XDJ-RX_v221.zip --overlay ov --release 2.30 -o build/MY.UPD
+$X fw build build/XDJ-RX_v221.zip --overlay ov --release X.YY -o build/MY.UPD
 $X fw info  build/MY.UPD                              # model, CRC, release, key check
 $X fw stick build/MY.UPD build/my-stick.img           # FAT16 stick with XDJRX.UPD
 ```
@@ -66,7 +66,7 @@ here or in a parent dir (written by `tools/fetch_key.py`), else the desktop app'
    commit them, nor patches that contain their lines. Keep your overlay in a private location, or
    (like `tools/fw/make-test-upd.sh`) a script that generates it from `xdj fw unpack` output at
    build time. Use `fw unpack` + `fw diff` to see exactly what your edit touches.
-3. **Bump the release** above what's installed (2.21 → 2.30, 2.31, ...). It's the number the unit
+3. **Bump the release** above what's installed (2.21 → X.YY). It's the number the unit
    shows (UTILITY > VERSION No., test mode SYSTEM) and the one the updater compares (as a float:
    use plain numbers). The footer model follows it automatically (`XDJAERO<release>`).
 4. **Put the change where it is flashed by the update you'll run.** A normal (USER) update writes
@@ -115,6 +115,13 @@ Rules (`crates/xdj-fw/src/tree.rs`, `tarball.rs`):
 - `--release X.YY` writes `images/release.txt` and, unless `--model` is given, the footer model
   `XDJAERO<release>`. Use a number: the updater compares releases as floats.
 
+**GUI images** (`gui/pset/imagedata/imagedata.dat`: every picture rbp draws, ids as rbp uses
+them, RGB565, `0xf81f` transparent; `gui/pioneer/imagedata/bin/*/<language>.bin`):
+`tools/fw/gui-images.py dump build/unpacked/gui OUT` writes them as PNGs with an index and a
+contact sheet (`index.html`); `tools/fw/gui-images.py put IN OUT ID PNG` replaces one (same size),
+for `OVERLAY/gui/pset/imagedata/imagedata.dat`. Not everything on screen is text: the deck
+panel's key, for example, is one of these images. The power-on splash is not drawn from this file.
+
 **Never commit firmware contents.** Every file in the image is Pioneer's. Keep overlays outside
 the repo, or generate them from the unpacked image at build time with a patch (as
 `make-test-upd.sh` does with `awk`/`printf`).
@@ -125,7 +132,7 @@ Read from the update initramfs and the `update` binary (unstripped ARM ELF in th
 
 1. **`check_sig`** (initramfs; `check_sig.c` + `CommonCrc32.c`, 7.5 KB): the footer CRC32 over
    the encrypted body and that the 12-byte model string starts with `XDJAERO`. It prints the rest
-   as the version ("signature ok. version = 2.30"). **No cryptographic signature.**
+   as the version ("signature ok. version = X.YY"). **No cryptographic signature.**
 2. **`decrypt_update`**: `losetup -e aes` with the AES key from the GPL initramfs, `mount` (the
    kernel autodetects iso9660 and uses Rock Ridge), copies `lib/` and `usr/lib/` from the image,
    runs `./update USB <language>` from the mounted image.
@@ -206,8 +213,8 @@ Reproducible output: new and changed entries get the mtime `$SOURCE_DATE_EPOCH` 
 |---|---|
 | `cargo test --release` (crates/xdj-fw) | ISO, cramfs, tar round trips + no-change build identical + overlay build + unpack→edit→repack (edit/add/delete/symlink; re-unpack diffs to 0): 5/5 |
 | independent readers on TEST.UPD | pycdlib: 87 files, only release.txt / rootfs.cramfs / pioneer.tar.gz differ; an independent Python cramfs walk (`qemu/cramfs_extract.py` logic) finds the rcS marker |
-| install on a clone of the provisioned 2.21 unit | `signature ok. version = 2.30`, USER update, PANELCOM + mtd3 + mtd5 + mtd7 + mtd9/10 Success, all md5 OK, 65 s; env `release=2.30`, `kernel_bank=A` |
-| boot of the installed 2.30 | both markers on the console; test mode Mode 1: **SYSTEM Ver.2.30**, SUB 0.35, APL 4206, KERNEL 4195 |
+| install on a clone of the provisioned 2.21 unit | `signature ok. version = X.YY`, USER update, PANELCOM + mtd3 + mtd5 + mtd7 + mtd9/10 Success, all md5 OK, 65 s; env `release=X.YY`, `kernel_bank=A` |
+| boot of the installed image | both markers on the console; test mode Mode 1: **SYSTEM Ver.X.YY**, SUB 0.35, APL 4206, KERNEL 4195 |
 
 Open observation: the *first* test-mode boot right after an update can come up in the normal UI
 (the next one enters test mode). Tracked by `regress.py`'s "custom: test mode after update".

@@ -80,4 +80,10 @@ int xm_menu_add(const char *label, const char *const *values, int nvalues,
 /* ---- time ---- */
 uint32_t xm_now_ms(void);   /* CLOCK_MONOTONIC in milliseconds */
 
+/* ---- GUI images ----
+ * rbp's image lookup 0x1694bc(id) returns imagedata.dat record `id`. One mod detours it (the
+ * waveform mod, else the keys mod); that detour first passes the id through xm_img_remap when
+ * set, so other mods can answer an image with another one (keys: Camelot key names). */
+extern unsigned (*volatile xm_img_remap)(unsigned id);
+
 #endif

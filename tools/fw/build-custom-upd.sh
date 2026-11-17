@@ -4,12 +4,12 @@
 # time from the unpacked firmware, so no Pioneer-owned file is ever committed.
 #
 #   tools/fw/build-custom-upd.sh RELEASE MOD[,MOD...] [BASE.UPD|.zip] [OUTDIR]
-#     e.g. tools/fw/build-custom-upd.sh 3.00 exfat
+#     e.g. tools/fw/build-custom-upd.sh X.YY exfat
 #     defaults: build/XDJ-RX_v221.zip  build/custom-upd
 #
 # Writes OUTDIR/XDJRX.UPD and OUTDIR/stick.img. Install: the app's File > Install
 # Firmware Update… (pick XDJRX.UPD). RELEASE must be above the installed one. The release
-# itself (3.00, every mod) is tools/fw/build-release.sh.
+# itself (every mod) is tools/fw/build-release.sh.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 REL="${1:?release number, e.g. 3.00}"

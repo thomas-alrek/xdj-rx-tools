@@ -17,7 +17,7 @@ cargo test --release                            # codec round trips (needs build
 Key: `--key-file`, else `$XDJRX_AES_KEY`, else `.env` (repo, from `tools/fetch_key.py`), else the app's key.
 
 ## Feature mods (scripted, regenerated from scratch)
-Writing/testing mods and the 3.00 release build: skill **[firmware-mods]**.
+Writing/testing mods and the release build (3.01): skill **[firmware-mods]**.
 ```
 tools/fw/build-custom-upd.sh REL exfat,fps        # -> build/custom-upd/XDJRX.UPD + stick.img
 ```
@@ -39,7 +39,7 @@ before anyone installs it: a library that fails to load stops rbp from starting.
 New rbp feature: `tools/fw/mods/<f>/<f>.c` with `XM_MODULE(f)` + a one-line `apply.sh`
 calling `../preload/apply.sh UNPACKED OVERLAY <f>.c`. Gate every patch on the expected words.
 Distribution goal: a delta patch vs stock 2.21 + patcher (`xdj fw mkpatch/patch`, docs/firmware-mods.md §13).
-Research, addresses and the plan per feature: **docs/firmware-mods.md**. The release is 3.00
+Research, addresses and the plan per feature: **docs/firmware-mods.md**. The release is 3.01
 (on the official 2.21). Test on a private `xdj-host` with a copy of the unit's fw dir, not the app's unit.
 Nothing goes on a real unit until proven in the emulator. The waveform mod is our own code,
 inspired by JaNeinHub/XDJ-RX-Mod (GPL-3, credited in docs/README) - don't copy its code.
@@ -49,7 +49,7 @@ inspired by JaNeinHub/XDJ-RX-Mod (GPL-3, credited in docs/README) - don't copy i
 X=crates/xdj-fw/target/release/xdj
 $X fw unpack build/XDJ-RX_v221.zip build/unpacked     # edit files in build/unpacked/<part>/...
 $X fw diff   build/XDJ-RX_v221.zip build/unpacked     # + new ~ changed - removed link mode
-$X fw repack build/XDJ-RX_v221.zip build/unpacked --release 2.31 -o build/MY.UPD
+$X fw repack build/XDJ-RX_v221.zip build/unpacked --release X.YY -o build/MY.UPD
 ```
 Carries content, new/removed files+dirs, symlink edits, exec-bit changes (owners/devices always
 from the base). Verify: unpack the result and `fw diff` it against itself → 0 changes.
@@ -68,7 +68,7 @@ X=crates/xdj-fw/target/release/xdj
 $X fw unpack build/XDJ-RX_v221.zip build/unpacked       # iso/ rootfs/ pioneer/ gui/ data/ user/
 mkdir -p ~/fw-ov/rootfs/etc && cp build/unpacked/rootfs/etc/<file> ~/fw-ov/rootfs/etc/
 $EDITOR ~/fw-ov/rootfs/etc/<file>
-$X fw build build/XDJ-RX_v221.zip --overlay ~/fw-ov --release 2.31 -o build/MY.UPD
+$X fw build build/XDJ-RX_v221.zip --overlay ~/fw-ov --release X.YY -o build/MY.UPD
 $X fw info build/MY.UPD && $X fw stick build/MY.UPD build/my-stick.img
 ```
 Overlay parts: `iso/` raw image files · `rootfs/` → rootfs.cramfs (mtd5) · `pioneer/` →
