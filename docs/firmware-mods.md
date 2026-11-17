@@ -45,10 +45,10 @@ order. The build is **reproducible byte for byte**: the same inputs give the sam
 |---|---|
 | `XDJ-RX_v221.zip` (Pioneer's download, input) | `c1ee67884f120e4cd8d4ffd6b9ad73eb` |
 | `XDJRX.UPD` inside it (official 2.21) | `e1facfb82de17b2544e958ca544e00c4` |
-| **`XDJRX.UPD` — custom firmware 3.01 (output)** | **`42c92c706e8bd870c84199659212c052`** |
+| **`XDJRX.UPD` — custom firmware 3.01 (output)** | **`945cb97252c7d46c7c42ea2be9aea0ac`** |
 | `XDJRX.UPD` — custom firmware 3.00 (previous release) | `5492b333f6eb4b853cb7cfa113c48659` |
 
-`xdj fw info` on the output: 48322576 bytes, model `XDJAERO3.01`, footer CRC32 `b2996727`,
+`xdj fw info` on the output: 48322576 bytes, model `XDJAERO3.01`, footer CRC32 `d6eef31c`,
 `images/release.txt = 3.01`. What the mods add (overlay, MD5):
 
 | Overlay file | MD5 |
@@ -56,7 +56,7 @@ order. The build is **reproducible byte for byte**: the same inputs give the sam
 | `rootfs/sbin/mount.exfat-fuse` | `3d8e08ccb61b480d4e021619f80b0ea1` |
 | `rootfs/lib/udev/xdj_is_exfat` | `5c79cf91a5d596af2362bce33ac0d9e0` |
 | `rootfs/etc/udev/rules.d/12-usb-memory-auto-mount.rules` (edited) | `310e73ef9f6ee510c229fe64cb41bb3f` |
-| `pioneer/pioneer/libxdjmod.so` | `bf7d36b75fc902b8b6f56fb3b9d65c9d` |
+| `pioneer/pioneer/libxdjmod.so` | `0a9eefd006d1d66b100874355e8aa28d` |
 | `pioneer/pioneer/apl_start` (edited) | `3583c3c711aa8285eece902669f0b526` |
 
 ### 1a. Prerequisites (macOS or Linux host)
@@ -77,7 +77,7 @@ order. The build is **reproducible byte for byte**: the same inputs give the sam
 ```sh
 tools/fw/build-release.sh                 # -> build/release/XDJRX.UPD + stick.img
 # >> base build/XDJ-RX_v221.zip md5 c1ee67884f120e4cd8d4ffd6b9ad73eb
-# >> build/release/XDJRX.UPD (release 3.01, mods exfat,fps,wav,waveform,flac,beatjump,keys,folders) md5 42c92c706e8bd870c84199659212c052
+# >> build/release/XDJRX.UPD (release 3.01, mods exfat,fps,wav,waveform,flac,beatjump,keys,folders) md5 945cb97252c7d46c7c42ea2be9aea0ac
 ```
 
 `build-release.sh [BASE] [OUTDIR]` fixes the release (3.01), the mod list and
@@ -419,10 +419,10 @@ unit: lead 4.5 ms, refresh 16.80 ms); this is our own implementation.
     entries past the file's PWV3. A deck matches a cached track when 48 sampled entries agree.
     rbp fills that array last - at the end of a load (seconds on a unit, ~20 s in the emulator) -
     but loads the **overview** first: deck d's `0x018a2ee4 + d*900` holds the `.DAT`'s 400 PWAV
-    entries as `{(b & 31) * 35 / 31, b >> 5}` (heights scaled, rounded down; whiteness as is)
-    within ~0.2 s of LOAD (track length `0x18a4510[d]` too). Until the detail matches, a deck
-    matches the cached track whose PWAV gives that array (all 400 entries, heights ±1; most
-    recently cached first), and a detail match is refused only when the overview identifies
+    entries as `{height, b >> 5}` within ~0.2 s of LOAD (track length `0x18a4510[d]` too); the
+    height is the file's `b & 31` on some exports and scaled up (`* 35 / 31`) on others. Until
+    the detail matches, a deck matches the cached track whose PWAV fits that array (all 400
+    entries: whiteness equal, height from h to h * 36 / 31 + 1; most recently cached first), and a detail match is refused only when the overview identifies
     another cached track (an array left over from the previous track can't win). So the chosen colours and hot cues A–H show from the
     first frame of a load - no stock blue / green A–D first. Re-checked at once when the deck's
     length, overview or detail array changes, else every 0.5 s. Unmatched decks (no colour data)
@@ -485,6 +485,15 @@ rekordbox stores up to 8 hot cues (A–H) with a colour each; the XDJ-RX shows A
   overview letters and triangles in those colours, E–H included; stock 2.21 (safe start) shows
   A–D in green only. Test stick: `tools/build-rb-usb.sh <rekordbox.xml> <playlist>` (baken writes
   PCO2 with the colours).
+- **Planned (after 3.01): letters on the detail waveform.** The cue's letter (A–H) next to each
+  triangle in the detail waveform, in the cue's colour, as on later Pioneer players. Groundwork
+  in place: the recoloured letter images (ids from `0x400`, `IMG_OURS`, 8 × 9 px, A–D from rbp,
+  E–H ours) and each cue's detail column, found by `wf_detail_icons()` when it recolours the
+  triangles. Plan: in `wf_detail_icons()` (after rbp's icon strips, so smooth scroll carries
+  them), blit the letter right of the top triangle (rows 0–8) and of the bottom one
+  (rows 115–123) with the blit stub (`0x129024`) or by copying the image pixels into the strip;
+  skip a letter that would overlap the next cue's triangle or letter (close cues at high zoom).
+  Check: both zoom ends, cues at the very start / end, hot loops, SMOOTH and ORIGINAL scroll.
 
 ## 10. WAVEFORM SCROLL: ORIGINAL / SMOOTH ✅ (emulator)
 
@@ -705,7 +714,7 @@ xdjrx-patcher  ORIGINAL.UPD  PATCH.xdjpatch  [--key KEY]  [-o OUT.UPD]
   modes in each part's `.xdj-modes`, so Windows builds the same bytes as macOS/Linux), sets
   `SOURCE_DATE_EPOCH` and rebuilds with `xdj_fw::fwbuild::build` + `firmware::pack` — the same
   code as `build-release.sh`. The result is written only if its MD5 is the manifest's
-  (`42c92c706e8bd870c84199659212c052` for 3.01); default output `XDJ-RX 3.01/XDJRX.UPD` next
+  (`945cb97252c7d46c7c42ea2be9aea0ac` for 3.01); default output `XDJ-RX 3.01/XDJRX.UPD` next
   to the original. Run without arguments, it asks for the two files (drag and drop) and waits
   for Enter at the end (double-click use on Windows).
 - **Code / builds:** `crates/xdjrx-patcher` (Rust): the library `src/lib.rs` does the work
@@ -749,7 +758,8 @@ xdjrx-patcher  ORIGINAL.UPD  PATCH.xdjpatch  [--key KEY]  [-o OUT.UPD]
    colour, HOT CUE E-H on SHIFT + pads (opt-in), safe start.
    3.01: KEY DISPLAY Camelot (§10c), SCREEN SYNC (§5a), colours from the first frame of a load.
 7. ✅ Releases 3.00 and 3.01, reproducible (§1).
-9. Open: smooth scroll checked by eye; pre-reading `export.pdb` at mount for big libraries (§10b).
+9. Open: smooth scroll checked by eye; pre-reading `export.pdb` at mount for big libraries (§10b);
+   cue letters on the detail waveform (§8a, planned).
 10. On the real unit (after the emulator): CPU of SMOOTH and FLAC decode, tearing, big libraries.
 11. OneLibrary — nice to have; not now.
 12. ✅ Patch file + `xdjrx-patcher` for macOS, Linux and Windows (§13).

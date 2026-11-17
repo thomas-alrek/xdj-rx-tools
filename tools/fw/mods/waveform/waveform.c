@@ -89,8 +89,8 @@ static int file_info(const char *path, int fd, long long *size, long *mtime)
 #define OV_ROWS       34
 #define OV_ENTRIES    400
 /* deck d's overview data as rbp loads it from the .DAT's PWAV, before anything else of the
- * track: OV_ENTRIES x {height (PWAV bits 0-4, scaled by 35/31), whiteness (bits 5-7)} at
- * OV_DATA + d * 900 */
+ * track: OV_ENTRIES x {height (PWAV bits 0-4, possibly scaled up, see ov_match), whiteness
+ * (bits 5-7)} at OV_DATA + d * 900 */
 #define OV_DATA       0x018a2ee4u
 #define OV_DECK_BYTES 900u
 #define TRACK_MS      0x18a4510u         /* per deck: track length, ms */
@@ -473,15 +473,16 @@ static int entries_match(const struct track *t, const uint8_t *e, uint32_t count
     return 1;
 }
 
-/* rbp scales the PWAV heights (0..31) to h * 35 / 31 for its overview (seen 8 -> 9, 16 -> 18,
- * 22 -> 24; whiteness unchanged); +-1 allowed for the top heights that weren't seen */
+/* rbp's overview vs a .DAT's PWAV: the whiteness is the same, the heights are the file's or
+ * scaled up (seen: unchanged on one export, h * 35 / 31 on another), so a track matches when every
+ * entry's whiteness is equal and its height lies between h and h * 36 / 31 + 1. */
 static int ov_match(const struct track *t, const uint8_t *ov)
 {
     if (!t->has_ov)
         return 0;
     for (int i = 0; i < OV_ENTRIES; i++) {
-        int want = t->ov[2 * i] * 35 / 31, got = ov[2 * i];
-        if (ov[2 * i + 1] != t->ov[2 * i + 1] || got < want - 1 || got > want + 1)
+        int h = t->ov[2 * i], got = ov[2 * i];
+        if (ov[2 * i + 1] != t->ov[2 * i + 1] || got < h || got > h * 36 / 31 + 1)
             return 0;
     }
     return 1;

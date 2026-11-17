@@ -168,7 +168,7 @@ Feature mods are built from scripts. **Custom firmware 3.01** (exFAT, 60 fps UI,
 ≤ 192 kHz, FLAC with tags, RGB / 3-band waveforms, smooth waveform scrolling, hot cues A–H in
 rekordbox colours (E–H playable on SHIFT + pads), beat jump, Camelot keys, rekordbox's Contents folder
 in [FOLDER]; hold MIDI at power-on for a stock start) is `tools/fw/build-release.sh`: the
-official 2.21 image in, a reproducible `XDJRX.UPD` out (MD5 `42c92c706e8bd870c84199659212c052`). Users get it with **`xdjrx-patcher`**
+official 2.21 image in, a reproducible `XDJRX.UPD` out (MD5 `945cb97252c7d46c7c42ea2be9aea0ac`). Users get it with **`xdjrx-patcher`**
 (`crates/xdjrx-patcher`; Windows, macOS, Linux): Pioneer's official file + a small `.xdjpatch` → 3.01, MD5-verified. Features and install guide:
 [docs/release-notes-3.01.md](docs/release-notes-3.01.md). Prerequisites, step-by-step from an unpacked
 2.21, and every mod's research: [docs/firmware-mods.md](docs/firmware-mods.md).

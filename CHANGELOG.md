@@ -13,7 +13,7 @@ and the install guide per release: [docs/releases.md](docs/releases.md).
   testing on real units.
 - **Fixed:** colour waveforms and hot cues A–H in their colours show from the first moment a
   track loads (3.00 showed the stock blue waveform and green A–D cues until the load finished).
-- Output MD5 `42c92c706e8bd870c84199659212c052`. [Release notes](docs/release-notes-3.01.md).
+- Output MD5 `945cb97252c7d46c7c42ea2be9aea0ac`. [Release notes](docs/release-notes-3.01.md).
 
 ## 3.00
 

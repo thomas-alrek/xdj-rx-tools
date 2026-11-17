@@ -15,7 +15,7 @@ Container/packing: skill [custom-firmware]. rbp analysis: skill [rbp-binary-inte
 tools/fw/build-release.sh          # base build/XDJ-RX_v221.zip -> build/release/XDJRX.UPD
 ```
 = official 2.21 + `exfat,fps,wav,waveform,flac,beatjump,keys,folders`, `SOURCE_DATE_EPOCH=1767225600`. Expected
-MD5s (base zip `c1ee6788…`, output `42c92c706e8bd870c84199659212c052`, per overlay file) and
+MD5s (base zip `c1ee6788…`, output `945cb97252c7d46c7c42ea2be9aea0ac`, per overlay file) and
 the step-by-step from an unpacked 2.21: docs §1. **Any change to a mod source changes the
 output MD5 — update docs §1 (table + example output) in the same commit**, after boot-testing.
 `xdj` uses `$SOURCE_DATE_EPOCH` for new/changed files' mtimes (`tree::now`); Docker base
@@ -120,14 +120,15 @@ FLAC and WAV folders, `--big` a 10,000-track library; ~1 min, ~4 with `--big`). 
   emulator's guest copy timing isn't the unit's, so only a real unit can pick the lead. In mods,
   use raw syscalls for clock_gettime/clock_nanosleep (glibc 2.13 has them in librt) and no `__thread`
   (the library isn't linked for TLS).
-- On LOAD rbp reads `.DAT` (overview → `0x018a2ee4 + d*900`, heights scaled ×35/31 — test with a
-  real export, generated sticks' low heights pass unscaled; track length) at once and fills the
+- On LOAD rbp reads `.DAT` (overview → `0x018a2ee4 + d*900`, heights as the file's or scaled up
+  ×35/31 depending on the export — test with real exports, not only generated sticks; track length) at once and fills the
   detail array only at the end of the load: recognise a deck by its overview first, or the
   stock look (blue, green A–D) shows until the load completes (`deck_track`, docs §8).
 - [FOLDER] hides PIONEER (always) and Contents (with a library) — the `folders` mod shows Contents.
 - Hot cues: rekordbox puts A–C in the `.DAT`, D–H in the `.EXT` PCOB, all 8 + colours in PCO2;
   stock shows A–D in green. Test stick with 8 coloured cues: `tools/build-rb-usb.sh` from a
   rekordbox XML (baken writes PCO2 colours).
+  Next (planned, docs §8a): cue letters next to the detail triangles, in `wf_detail_icons()`.
 - Screenshots for the user go to `build/screens/` (the scratchpad isn't visible to them).
 - Big test images: `cp -c` (APFS clone); plain `cp` of a sparse image with many files crawls.
 - rekordbox exports can have an empty beat grid (PQTZ with 0 beats): beat features must fall
