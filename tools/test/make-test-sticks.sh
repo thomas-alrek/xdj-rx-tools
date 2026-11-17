@@ -70,12 +70,12 @@ loop 126 120 44100 "$TMP/lib/synth_126_mp3.mp3" -c:a libmp3lame -b:a 192k \
 python3 - "$TMP/lib" > "$TMP/lib.xml" <<'EOF'
 import os, sys, urllib.parse
 d = sys.argv[1]
-TRACKS = [  # file, title, kind, bpm, seconds, rate, key
-    ("synth_128_mp3.mp3", "Synth 128 (MP3)", "MP3 File", 128, 90, 44100, "8A"),
-    ("synth_124_flac.flac", "Synth 124 (FLAC 24/96)", "FLAC File", 124, 90, 96000, "5A"),
-    ("synth_120_wav.wav", "Synth 120 (WAV 24/96)", "WAV File", 120, 90, 96000, "11B"),
-    ("synth_132_f32.wav", "Synth 132 (WAV float 48k)", "WAV File", 132, 60, 48000, "2A"),
-    ("synth_126_mp3.mp3", "Synth 126 (MP3)", "MP3 File", 126, 120, 44100, "9A"),
+TRACKS = [  # file, title, kind, bpm, seconds, rate, key (classic names, as rekordbox writes them)
+    ("synth_128_mp3.mp3", "Synth 128 (MP3)", "MP3 File", 128, 90, 44100, "Am"),
+    ("synth_124_flac.flac", "Synth 124 (FLAC 24/96)", "FLAC File", 124, 90, 96000, "Cm"),
+    ("synth_120_wav.wav", "Synth 120 (WAV 24/96)", "WAV File", 120, 90, 96000, "A"),
+    ("synth_132_f32.wav", "Synth 132 (WAV float 48k)", "WAV File", 132, 60, 48000, "Ebm"),
+    ("synth_126_mp3.mp3", "Synth 126 (MP3)", "MP3 File", 126, 120, 44100, "Em"),
 ]
 COLOURS = [(40, 226, 20), (48, 90, 255), (222, 68, 207), (255, 127, 42),   # A-D
            (0, 224, 255), (165, 225, 22), (180, 50, 255), (230, 40, 40)]   # E-H
@@ -131,7 +131,8 @@ if [ $BIG = 1 ]; then
 import os, random, sys, urllib.parse
 d = sys.argv[1]; N = 10000
 random.seed(7)
-keys = [f"{n}{m}" for m in "AB" for n in range(1, 13)]
+keys = ["Abm", "B", "Ebm", "F#", "Bbm", "Db", "Fm", "Ab", "Cm", "Eb", "Gm", "Bb", "Dm", "F",
+        "Am", "C", "Em", "G", "Bm", "D", "F#m", "A", "Dbm", "E"]   # classic, as rekordbox writes
 genres = ["House", "Techno", "Trance", "Hardstyle", "DnB", "Disco", "Pop", "HipHop"]
 seed = os.path.join(d, "seed.mp3"); size = os.path.getsize(seed)
 tr = []

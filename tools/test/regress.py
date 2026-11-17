@@ -12,7 +12,8 @@ never touches the app's cache or a running app. Stages:
   boot       normal NAND boot -> home screen
   panel      MENU held opens UTILITY, a short MENU tap leaves it; rbp's LED stream is live;
              MCP: handshake, tool list, a named press, a PNG screenshot
-  usb        BROWSE, panel USB LOAD of test/usb/*.img on USB1 -> its library appears
+  usb        BROWSE, panel USB LOAD of a FAT32 library stick (test/usb/gen_lib_fat32.img, else the
+             first non-exFAT test/usb/*.img) on USB1 -> its library appears
   standby    POWER off while rbp runs: POWER key -> rbp prepares -> TX 'S' -> power cut (< 10 s)
   testmode   File > Power On in Test Mode -> VERSION INFORMATION screen
   custom     tools/fw/make-test-upd.sh TEST.UPD (2.30) installed via File > Install Firmware
@@ -269,13 +270,19 @@ def main():
                 check("mcp: screenshot PNG", png[:8] == b"\x89PNG\r\n\x1a\n" and png[16:24] == bytes.fromhex("00000320000001e0"),
                       "%d bytes" % len(png))
             if "usb" in only and r:
+                # a FAT32 rekordbox library stock firmware reads: the generated one
+                # (tools/test/make-test-sticks.sh), else the first stick that isn't exFAT
                 img = sorted(glob.glob(os.path.join(ROOT, "test/usb/*.img")))
+                pref = os.path.join(ROOT, "test/usb/gen_lib_fat32.img")
+                img = [pref] if pref in img else [i for i in img if "exfat" not in os.path.basename(i).lower()]
                 if img:
                     # BROWSE shows USB1 ("NO USB" until a stick mounts); the library replaces it
                     u.tap("B 5f 08"); time.sleep(3)
                     before = u.shot("browse0")
                     stick = os.path.join(u.work, "usb1.img")   # slots are read/write: keep the fixture pristine
-                    shutil.copyfile(img[0], stick)
+                    # an APFS clone where possible (no space used; the images are 1 GB sparse)
+                    if subprocess.run(["cp", "-c", img[0], stick], capture_output=True).returncode:
+                        shutil.copyfile(img[0], stick)
                     msg = u.http("POST", "/usb", "usb1 " + stick)
                     t0, d = time.time(), 0.0
                     while time.time() - t0 < 40 and d < 0.03:
