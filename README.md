@@ -5,7 +5,7 @@
 [![QEMU 11.1.0](https://img.shields.io/badge/QEMU-11.1.0-orange.svg)](https://www.qemu.org/)
 [![Rust](https://img.shields.io/badge/Rust-stable-dea584.svg)](https://www.rust-lang.org/)
 [![Firmware: XDJ-RX 2.21](https://img.shields.io/badge/firmware-XDJ--RX%202.21-black.svg)](#2-get-the-firmware-and-its-key)
-[![Version: 1.0.0](https://img.shields.io/badge/version-1.0.0-brightgreen.svg)](#)
+[![Custom firmware release](https://img.shields.io/github/v/release/thomas-alrek/xdj-rx-tools?label=custom%20firmware&color=brightgreen)](https://github.com/thomas-alrek/xdj-rx-tools/releases/latest)
 
 > **Custom firmware 3.01 for the XDJ-RX** — exFAT USB sticks, FLAC, a 60 fps screen, colour
 > waveforms, hot cues A–H, Camelot keys and more: **[release notes and install guide](docs/release-notes-3.01.md)**
