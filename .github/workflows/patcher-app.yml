@@ -1,0 +1,114 @@
+# Build the XDJ-RX Firmware Patcher desktop app (app/patcher, Tauri) natively on macOS,
+# Windows and Linux, and attach the bundles to GitHub releases.
+#
+# Run: Actions -> "Patcher app" -> Run workflow (or `gh workflow run patcher-app.yml -f tags="3.01 3.00"`).
+# The app reads any release's patch file (same format), so one build serves every release listed.
+# Unsigned: macOS Gatekeeper (right-click -> Open), Windows SmartScreen (More info -> Run anyway).
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: Patcher app
+
+on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: "Release tags to attach the app to (space-separated; empty = build only)"
+        default: "3.01 3.00"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            name: macos
+            target: universal-apple-darwin
+            bundles: dmg
+          - os: windows-2022
+            name: windows
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - os: ubuntu-22.04
+            name: linux
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          if [ "${{ matrix.name }}" = macos ]; then
+            rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          else
+            rustup target add ${{ matrix.target }}
+          fi
+
+      - name: Linux packages (WebKitGTK)
+        if: matrix.name == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libayatana-appindicator3-dev patchelf file
+
+      - name: Tauri CLI
+        run: npm install -g @tauri-apps/cli@2
+
+      - name: Icons for the bundles
+        working-directory: app/patcher
+        run: tauri icon icons/icon.png -o icons
+
+      - name: Build
+        working-directory: app/patcher
+        run: |
+          cat > bundle.json <<'EOF'
+          {"bundle": {"active": true, "icon": ["icons/32x32.png", "icons/128x128.png",
+            "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]}}
+          EOF
+          tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config bundle.json
+
+      - name: Collect
+        run: |
+          mkdir -p out
+          B=app/patcher/target/${{ matrix.target }}/release/bundle
+          case "${{ matrix.name }}" in
+            macos)   cp "$B"/dmg/*.dmg            out/xdjrx-patcher-app-macos.dmg ;;
+            windows) cp "$B"/nsis/*-setup.exe     out/xdjrx-patcher-app-windows-x86_64-setup.exe ;;
+            linux)   cp "$B"/appimage/*.AppImage  out/xdjrx-patcher-app-linux-x86_64.AppImage
+                     cp "$B"/deb/*.deb            out/xdjrx-patcher-app-linux-amd64.deb ;;
+          esac
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: patcher-app-${{ matrix.name }}
+          path: out/*
+
+  attach:
+    needs: build
+    if: ${{ inputs.tags != '' }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Upload to the releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          cd out
+          sha256sum xdjrx-patcher-app-* > SHA256SUMS-app.txt
+          cat SHA256SUMS-app.txt
+          for tag in ${{ inputs.tags }}; do
+            gh release upload "$tag" xdjrx-patcher-app-* SHA256SUMS-app.txt --clobber --repo "$REPO"
+          done
