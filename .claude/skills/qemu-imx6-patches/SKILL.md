@@ -22,10 +22,13 @@ qemu/xdj/            real source files -- EDIT THESE; synced to <qemu>/hw/arm/xd
   xdj.h              shared interface (hooks, cross-module symbols)
   xdj-board.c        GPIO reset levels (key/fault pull-ups, update strap), bank captures,
                      source-key LED outputs, xdj_imx6_realize() dispatcher
-  xdj-display.c      Vivante GPU 3D/2D/VG stubs, DVFS GPT kick, TEMPSENSE stub, IPU1 vsync
-                     stub, IPU CPMEM capture, framebuffer scanout console, frame-rate
-                     meter (machine property `xdj-fps`: 120 Hz host-clock sampler of
-                     framebuffer changes, runs only while read)
+  xdj-display.c      Vivante GPU 3D/2D/VG stubs, DVFS GPT kick, TEMPSENSE stub, IPU1 EOF
+                     interrupt on the panel clock (CVT 800x480: 16.81 ms, panel_epoch),
+                     IPU CPMEM capture, raster readout (panel_img filled in 16-row bands
+                     at their readout times; XDJ_RASTER=0 off, XDJ_RASTER_BAND), tear meter
+                     (`xdj-tears`, `xdj-tear-row`; XDJ_RASTER_TRACE=1 per-refresh band map),
+                     frame-rate meter (`xdj-fps`: 120 Hz host-clock sampler of framebuffer
+                     changes); the meters run only while read
   xdj-audio.c        SDMA engine, SSI1-3/AUDMUX register files, pacer thread + PCM FIFO
   xdj-panel.c        front-panel MCU ("sub-ucom") SPI slave: inject harness (holds, one-shots,
                      ctrl/key chardevs -- bound at realize, NOT lazily: boot-time holds must
