@@ -29,3 +29,7 @@ node_modules/
 
 # Rust build output
 target/
+
+# rbp decompilation workspace: reconstructed Pioneer code, never committed or published.
+# It is its own local git repo (no remote); see docs/decomp.md.
+/decomp/
