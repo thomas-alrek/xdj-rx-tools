@@ -22,7 +22,7 @@ Status: ✅ built and verified in the emulator · 🔬 researched (static analys
 | Hot cues A–H on the waveforms, in rekordbox colours | ✅ emulator | PCO2 parse + marker bits + overview images (§8a) | done (real unit: untested) | — |
 | `beatjump` — BEAT JUMP on the pads (opt-in) | ✅ emulator | PlayerInnards onKey slot + LED detour (§10a) | done (real unit: untested) | — |
 | HOT CUE E-H on SHIFT + pads (opt-in) | ✅ emulator | getCue override around the stock hot-cue call (§10a) | done (real unit: untested) | — |
-| `keys` — Camelot key display (opt-in) | ✅ emulator (3.01) | name table swap, DB name detours, key-image remap (§10c) | done (real unit: untested) | KEY column / sort: check |
+| `keys` — Camelot key display (opt-in) | ✅ emulator (3.01) | name table swap, DB name detours, key-image remap (§10c) | done (real unit: untested) | — |
 | `folders` — [FOLDER] lists Contents | ✅ emulator | one branch (§7a) | done | — |
 | Large libraries (1000+ tracks) | 🔬 measured (§10b) | — | no memory limit hit | — |
 | OneLibrary | 🔬 later (nice to have) | mount-time `export.pdb` synthesis | medium | 2–3 weeks |
@@ -45,10 +45,10 @@ order. The build is **reproducible byte for byte**: the same inputs give the sam
 |---|---|
 | `XDJ-RX_v221.zip` (Pioneer's download, input) | `c1ee67884f120e4cd8d4ffd6b9ad73eb` |
 | `XDJRX.UPD` inside it (official 2.21) | `e1facfb82de17b2544e958ca544e00c4` |
-| **`XDJRX.UPD` — custom firmware 3.01 (output)** | **`945cb97252c7d46c7c42ea2be9aea0ac`** |
+| **`XDJRX.UPD` — custom firmware 3.01 (output)** | **`c33963859ac201a5df7e4e0e591ceac6`** |
 | `XDJRX.UPD` — custom firmware 3.00 (previous release) | `5492b333f6eb4b853cb7cfa113c48659` |
 
-`xdj fw info` on the output: 48322576 bytes, model `XDJAERO3.01`, footer CRC32 `d6eef31c`,
+`xdj fw info` on the output: 48322576 bytes, model `XDJAERO3.01`, footer CRC32 `9d6f4824`,
 `images/release.txt = 3.01`. What the mods add (overlay, MD5):
 
 | Overlay file | MD5 |
@@ -56,7 +56,7 @@ order. The build is **reproducible byte for byte**: the same inputs give the sam
 | `rootfs/sbin/mount.exfat-fuse` | `3d8e08ccb61b480d4e021619f80b0ea1` |
 | `rootfs/lib/udev/xdj_is_exfat` | `5c79cf91a5d596af2362bce33ac0d9e0` |
 | `rootfs/etc/udev/rules.d/12-usb-memory-auto-mount.rules` (edited) | `310e73ef9f6ee510c229fe64cb41bb3f` |
-| `pioneer/pioneer/libxdjmod.so` | `0a9eefd006d1d66b100874355e8aa28d` |
+| `pioneer/pioneer/libxdjmod.so` | `470fd07cf8c347b60f0455b133b515b8` |
 | `pioneer/pioneer/apl_start` (edited) | `3583c3c711aa8285eece902669f0b526` |
 
 ### 1a. Prerequisites (macOS or Linux host)
@@ -77,7 +77,7 @@ order. The build is **reproducible byte for byte**: the same inputs give the sam
 ```sh
 tools/fw/build-release.sh                 # -> build/release/XDJRX.UPD + stick.img
 # >> base build/XDJ-RX_v221.zip md5 c1ee67884f120e4cd8d4ffd6b9ad73eb
-# >> build/release/XDJRX.UPD (release 3.01, mods exfat,fps,wav,waveform,flac,beatjump,keys,folders) md5 945cb97252c7d46c7c42ea2be9aea0ac
+# >> build/release/XDJRX.UPD (release 3.01, mods exfat,fps,wav,waveform,flac,beatjump,keys,folders) md5 c33963859ac201a5df7e4e0e591ceac6
 ```
 
 `build-release.sh [BASE] [OUTDIR]` fixes the release (3.01), the mod list and
@@ -599,8 +599,15 @@ the stick changes; real exports store classic names ("Am") in `export.pdb`.
   djdbKey (`0x319b8c`, `0x319e1c`) and the rows they fetch (`0x31a4a0`) are tagged, closing
   (`0x31a24c`) untags; a tagged row's name comes back as the Camelot string, which rbp's parser
   turns back into the same index (harmonic matching keeps working).
-- **Sorting by KEY**: the sort builder `0x1128c8` (mode & 0x7f = 12) sorts by the name; while it
-  runs, names come back zero-padded ("08A") so 1A, 1B, 2A … 12B sort in Camelot order.
+- **Sorting by KEY** (browser MENU → SORT → KEY): the list builder `0x1134bc` (mode & 0x3f = 12)
+  sorts the rows by the key name it reads (`0x31a538(row, 1)` at `0x113d28`); while it runs
+  (CAMELOT), names come back zero-padded ("08A") so the list reads 1A, 1B, 2A … 12B. The KEY
+  column itself is drawn from `0x139c4c` ("8A"). The sort-table builder `0x1128c8` (rows of
+  `djdbTrackSort` through `0x319488(table, 7, values)`: track id, title, key name, &key id, …)
+  gets the padded name and the key index (Camelot order) as the number.
+- **"Needs free" flag:** a name read with the flag clear counts as no name for rbp's callers
+  (the list builder sorts it as empty), so the hook leaves the flag as the read set it; rbp's
+  pool free `0x1158f8` → `0x11ce80` returns for any pointer outside its pool (our strings).
 - **The deck panel's key is an image**, not text: imagedata.dat records `0x28e`–`0x2df` (72 × 24)
   hold every key name, one group per Camelot key in Camelot order — "1A", "01A", then the classic
   spelling(s) ("Abm", "G#m"), "2A", "02A", "Ebm", "D#m", … "12B", "12B", "E" (group starts in
@@ -609,8 +616,9 @@ the stick changes; real exports store classic names ("Am") in `export.pdb`.
   `0x2a6`) through the framework's `xm_img_remap` (the `waveform` mod owns that detour and applies
   the remap; without it `keys` detours the lookup itself). Neither the text renderer `0x13d0f0`
   (it draws few texts) nor DirectFB's string drawing is involved.
-- **Verified (emulator, 3.01):** browser KEY category 1A, 1B, 2A, …; the deck panel shows "8A" for
-  an Am track. To check: the KEY column of track lists and SORT by KEY.
+- **Verified (emulator, 3.01):** browser KEY category 1A, 1B, 2A, … with the harmonic lists; the
+  deck panel shows "8A" for an Am track; track lists' KEY column in Camelot; SORT → KEY orders
+  2A, 5A, 8A, 9A, 11B (CLASSIC: A, Am, Cm, Ebm, Em, as stock); harmonic highlights unchanged.
 - GUI images can be dumped to PNG (and one replaced) with `tools/fw/gui-images.py` (§2 of
   docs/custom-firmware.md).
 
@@ -714,7 +722,7 @@ xdjrx-patcher  ORIGINAL.UPD  PATCH.xdjpatch  [--key KEY]  [-o OUT.UPD]
   modes in each part's `.xdj-modes`, so Windows builds the same bytes as macOS/Linux), sets
   `SOURCE_DATE_EPOCH` and rebuilds with `xdj_fw::fwbuild::build` + `firmware::pack` — the same
   code as `build-release.sh`. The result is written only if its MD5 is the manifest's
-  (`945cb97252c7d46c7c42ea2be9aea0ac` for 3.01); default output `XDJ-RX 3.01/XDJRX.UPD` next
+  (`c33963859ac201a5df7e4e0e591ceac6` for 3.01); default output `XDJ-RX 3.01/XDJRX.UPD` next
   to the original. Run without arguments, it asks for the two files (drag and drop) and waits
   for Enter at the end (double-click use on Windows).
 - **Code / builds:** `crates/xdjrx-patcher` (Rust): the library `src/lib.rs` does the work

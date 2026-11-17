@@ -19,8 +19,14 @@
  *     are tagged; with CAMELOT a name read from such a row comes back as the Camelot string
  *     ("8A"), which rbp's parser turns back into the same key index (harmonic matching);
  *   - the deck panel's key is an image, not text (imagedata.dat 0x28e-0x2df, key_img_remap);
- *   - sorting by KEY: the sort builder 0x1128c8 (mode 12) sorts by the name string - while it
- *     runs, names come back zero-padded ("08A"), so 1A, 1B, 2A ... 12B sort in Camelot order.
+ *   - sorting by KEY: the browser's list builder 0x1134bc (mode & 0x3f = 12) sorts the rows by
+ *     the key name it reads; while it runs (CAMELOT) names come back zero-padded ("08A"), so the
+ *     list reads 1A, 1B, 2A ... 12B (the KEY column itself is drawn from 0x139c4c: "8A"). The
+ *     sort-table builder 0x1128c8 writes djdbTrackSort rows through 0x319488(table, 7, values)
+ *     {&track id, title, key name, &key id, ...}: there the row gets the padded name and the key
+ *     index (1..24, Camelot order) as its number.
+ *   - a name read with rbp's "needs free" flag clear counts as no name for rbp's callers, so the
+ *     flag is left as the read set it (rbp's pool free ignores pointers outside its pool).
  * Nothing is written to the stick.
  *
  * Addresses: docs/firmware-mods.md section 10c.
@@ -194,12 +200,63 @@ static void *db_field_hook(void *row, int field, char *needfree)
     int n = name_index((const uint16_t *)v);
     if (!n)
         return v;
-    if (needfree && *needfree == 1) {
+    /* "needs free" stays as rbp's read set it: callers take a name with the flag clear as no
+     * name at all (the list sorter 0x1134bc does). rbp's pool free ignores our static strings. */
+    if (needfree && *needfree == 1)
         ((void (*)(void *))POOL_FREE)(v);
-        *needfree = 0;
-    }
     int sorting = sort_active && pthread_equal(pthread_self(), sort_thread);
     return sorting ? cam_sort[n - 1] : cam[n - 1];
+}
+
+/* rows of rbp's sort table while a KEY sort runs: the Camelot order */
+#define DB_INSERT      0x319488u          /* int (table, nfields, void **values) */
+#define DB_INSERT_W0   0xe92d47f0u        /* push {r4-sl, lr} */
+#define DB_INSERT_W1   0xe24dd028u        /* sub sp, sp, #0x28 */
+typedef int (*db_insert_fn)(const char *, int, void **);
+static db_insert_fn db_insert_orig;
+static int sort_rank;                     /* the row's number while it is inserted (one sort at a time) */
+
+static int db_insert_hook(const char *table, int nf, void **v)
+{
+    if (sort_active && nf == 7 && v && v[2] && v[3] && pthread_equal(pthread_self(), sort_thread) &&
+        table && !strcmp(table, "djdbTrackSort")) {
+        int n = 0;                         /* the name is one of ours (db_field_hook) */
+        for (int i = 0; i < 24 && !n; i++)
+            if (v[2] == cam_sort[i] || v[2] == cam[i])
+                n = i + 1;
+        if (n) {
+            void *name = v[2], *num = v[3];
+            sort_rank = n;
+            v[2] = cam_sort[n - 1];
+            v[3] = &sort_rank;
+            int r = db_insert_orig(table, nf, v);
+            v[2] = name;
+            v[3] = num;
+            return r;
+        }
+    }
+    return db_insert_orig(table, nf, v);
+}
+
+/* the browser's list builder (sorted lists): mode & 0x3f = 12 is KEY; it sorts the rows by the
+ * key name it reads, so names come back zero-padded meanwhile ("08A": 1A, 1B, 2A ... 12B) */
+#define LIST_BUILD     0x1134bcu          /* int (a0, mode, cursor, int *filter) */
+#define LIST_BUILD_W0  0xe92d4ff0u        /* push {r4-fp, lr} */
+#define LIST_BUILD_W1  0xe24dd09cu        /* sub sp, sp, #0x9c */
+typedef int (*list_build_fn)(int, unsigned, int, int);
+static list_build_fn list_build_orig;
+
+static int list_build_hook(int a0, unsigned m, int a2, int a3)
+{
+    int key = mode == CAMELOT && (m & 0x3f) == SORT_KEY;
+    if (key) {
+        sort_thread = pthread_self();
+        sort_active = 1;
+    }
+    int r = list_build_orig(a0, m, a2, a3);
+    if (key)
+        sort_active = 0;
+    return r;
 }
 
 static int sort_build_hook(int a0, unsigned m, int a2, short *a3)
@@ -289,8 +346,12 @@ XM_MODULE(keys)
     db_fetch_orig = (db_fetch_fn)xm_detour(DB_FETCH, DB_FETCH_W0, DB_FETCH_W1, (void *)db_fetch_hook);
     db_close_orig = (db_close_fn)xm_detour(DB_CLOSE, DB_CLOSE_W0, DB_CLOSE_W1, (void *)db_close_hook);
     db_field_orig = (db_field_fn)xm_detour(DB_FIELD, DB_FIELD_W0, DB_FIELD_W1, (void *)db_field_hook);
-    sort_build_orig = (sort_build_fn)xm_detour(SORT_BUILD, SORT_BUILD_W0, SORT_BUILD_W1, (void *)sort_build_hook);
-    if (!db_open_orig || !db_open2_orig || !db_fetch_orig || !db_close_orig || !db_field_orig || !sort_build_orig)
+    list_build_orig = (list_build_fn)xm_detour(LIST_BUILD, LIST_BUILD_W0, LIST_BUILD_W1, (void *)list_build_hook);
+    db_insert_orig = (db_insert_fn)xm_detour(DB_INSERT, DB_INSERT_W0, DB_INSERT_W1, (void *)db_insert_hook);
+    if (db_insert_orig)
+        sort_build_orig = (sort_build_fn)xm_detour(SORT_BUILD, SORT_BUILD_W0, SORT_BUILD_W1, (void *)sort_build_hook);
+    if (!db_open_orig || !db_open2_orig || !db_fetch_orig || !db_close_orig || !db_field_orig || !sort_build_orig ||
+        !list_build_orig)
         xm_log("keys: database hooks incomplete (%d%d%d%d%d%d) - column / sort keys may stay classic",
                !!db_open_orig, !!db_open2_orig, !!db_fetch_orig, !!db_close_orig, !!db_field_orig,
                !!sort_build_orig);

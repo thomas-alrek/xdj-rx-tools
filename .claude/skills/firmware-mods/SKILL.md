@@ -15,7 +15,7 @@ Container/packing: skill [custom-firmware]. rbp analysis: skill [rbp-binary-inte
 tools/fw/build-release.sh          # base build/XDJ-RX_v221.zip -> build/release/XDJRX.UPD
 ```
 = official 2.21 + `exfat,fps,wav,waveform,flac,beatjump,keys,folders`, `SOURCE_DATE_EPOCH=1767225600`. Expected
-MD5s (base zip `c1ee6788…`, output `945cb97252c7d46c7c42ea2be9aea0ac`, per overlay file) and
+MD5s (base zip `c1ee6788…`, output `c33963859ac201a5df7e4e0e591ceac6`, per overlay file) and
 the step-by-step from an unpacked 2.21: docs §1. **Any change to a mod source changes the
 output MD5 — update docs §1 (table + example output) in the same commit**, after boot-testing.
 `xdj` uses `$SOURCE_DATE_EPOCH` for new/changed files' mtimes (`tree::now`); Docker base

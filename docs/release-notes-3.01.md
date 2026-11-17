@@ -120,7 +120,7 @@ and checks the result. When it says **Done**, the new firmware is in a new folde
 official one: **`XDJ-RX 3.01/XDJRX.UPD`**. If anything doesn't match, it stops with a message
 and writes nothing.
 
-For reference, the 3.01 `XDJRX.UPD` always has the MD5 **`945cb97252c7d46c7c42ea2be9aea0ac`**
+For reference, the 3.01 `XDJRX.UPD` always has the MD5 **`c33963859ac201a5df7e4e0e591ceac6`**
 (the patcher checks this for you).
 
 ### 2. Prepare a USB stick
