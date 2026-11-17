@@ -7,6 +7,10 @@
 [![Firmware: XDJ-RX 2.21](https://img.shields.io/badge/firmware-XDJ--RX%202.21-black.svg)](#2-get-the-firmware-and-its-key)
 [![Version: 1.0.0](https://img.shields.io/badge/version-1.0.0-brightgreen.svg)](#)
 
+> **Custom firmware 3.00 for the XDJ-RX** — exFAT USB sticks, FLAC, a 60 fps screen, colour
+> waveforms, hot cues A–H and more: **[release notes and install guide](docs/release-notes-3.00.md)**
+> · [all releases](docs/releases.md)
+
 Run the **Pioneer DJ XDJ-RX**'s own, unmodified firmware on your Mac — the real rekordbox UI,
 both decks, the mixer, USB libraries, firmware updates — and build and test **custom firmware**
 for it.
@@ -153,16 +157,20 @@ X=crates/xdj-fw/target/release/xdj
 $X fw unpack build/XDJ-RX_v221.zip build/unpacked          # iso/ rootfs/ pioneer/ gui/ data/ user/
 $EDITOR build/unpacked/rootfs/etc/rc.d/rcS                 # change, add, delete files
 $X fw diff   build/XDJ-RX_v221.zip build/unpacked          # review what changed
-$X fw repack build/XDJ-RX_v221.zip build/unpacked --release 2.31 -o build/MY.UPD
+$X fw repack build/XDJ-RX_v221.zip build/unpacked --release REL -o build/MY.UPD   # REL: above the installed
 ```
 
 Then *File → Install Firmware Update…* → `build/MY.UPD`. The firmware's update check is only a CRC
 and a model prefix — there is no signature — so Pioneer's updater installs a rebuilt image like an
 official one. Best practices, the overlay workflow and the formats: [docs/custom-firmware.md](docs/custom-firmware.md).
 Feature mods are built from scripts. **Custom firmware 3.00** (exFAT, 60 fps UI, WAV float/32-bit/
-≤ 192 kHz, FLAC with tags, RGB / 3-band waveforms) is `tools/fw/build-release.sh`: the official 2.21
-image in, a reproducible `XDJRX.UPD` out (MD5 `14b0a47aa78aa1a48243364e65ccdd4a`). Prerequisites,
-step-by-step from an unpacked 2.21, and every mod's research: [docs/firmware-mods.md](docs/firmware-mods.md).
+≤ 192 kHz, FLAC with tags, RGB / 3-band waveforms, smooth waveform scrolling, hot cues A–H in
+rekordbox colours (E–H playable on SHIFT + pads), beat jump, rekordbox's Contents folder
+in [FOLDER]; hold MIDI at power-on for a stock start) is `tools/fw/build-release.sh`: the
+official 2.21 image in, a reproducible `XDJRX.UPD` out (MD5 `5492b333f6eb4b853cb7cfa113c48659`). Users get it with **`xdjrx-patcher`**
+(`crates/xdjrx-patcher`; Windows, macOS, Linux): Pioneer's official file + a small `.xdjpatch` → 3.00, MD5-verified. Features and install guide:
+[docs/release-notes-3.00.md](docs/release-notes-3.00.md). Prerequisites, step-by-step from an unpacked
+2.21, and every mod's research: [docs/firmware-mods.md](docs/firmware-mods.md).
 Never commit firmware contents.
 
 ## Repository layout
@@ -183,6 +191,8 @@ Never commit firmware contents.
 |---|---|
 | [docs/standalone-app.md](docs/standalone-app.md) | the desktop app: architecture, provisioning, power, packaging, debugging |
 | [docs/custom-firmware.md](docs/custom-firmware.md) | building, installing and verifying custom firmware |
+| [docs/releases.md](docs/releases.md) | custom firmware releases (index) |
+| [docs/release-notes-3.00.md](docs/release-notes-3.00.md) | custom firmware 3.00: features, settings, install guide, going back to stock |
 | [docs/firmware-mods.md](docs/firmware-mods.md) | feature mods (exFAT, hook library, FPS, WAV/FLAC, waveforms, OneLibrary) and their research |
 | [docs/emulator-status.md](docs/emulator-status.md) | what works, what doesn't, open items |
 | [docs/subucom-frame-map.md](docs/subucom-frame-map.md) | the front-panel control map (every button, fader, knob, encoder) |
@@ -238,7 +248,7 @@ affiliated with or endorsed by them.
 - Pioneer DJ's published GPL/LGPL source release for the XDJ-RX (kernel, u-boot, drivers).
 - [JaNeinHub/XDJ-RX-Mod](https://github.com/JaNeinHub/XDJ-RX-Mod), the first RGB / 3-band waveform
   mod for the XDJ-RX (an LD_PRELOAD hook library for firmware 2.21): the inspiration for our own
-  waveform mod and its hook points, and of the planned WAVEFORM SCROLL (smooth) and BEAT JUMP
-  features ([docs/firmware-mods.md](docs/firmware-mods.md)).
+  waveform mod and its hook points, and of the WAVEFORM SCROLL (smooth) and BEAT JUMP
+  features (our own implementations) ([docs/firmware-mods.md](docs/firmware-mods.md)).
 - [Deep Symmetry's](https://djl-analysis.deepsymmetry.org/) rekordbox export and ANLZ format
   analysis, and [relan/exfat](https://github.com/relan/exfat) (the exFAT mod's FUSE driver).

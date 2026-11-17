@@ -19,7 +19,7 @@ Key: `--key-file`, else `$XDJRX_AES_KEY`, else `.env` (repo, from `tools/fetch_k
 ## Feature mods (scripted, regenerated from scratch)
 Writing/testing mods and the 3.00 release build: skill **[firmware-mods]**.
 ```
-tools/fw/build-custom-upd.sh 2.24 exfat,fps       # -> build/custom-upd/XDJRX.UPD + stick.img
+tools/fw/build-custom-upd.sh REL exfat,fps        # -> build/custom-upd/XDJRX.UPD + stick.img
 ```
 Each mod is `tools/fw/mods/<name>/apply.sh UNPACKED OVERLAY` (edits generated from the unpacked
 official image; our binaries built from source in Docker; mods stack). `exfat` = static
@@ -39,8 +39,8 @@ before anyone installs it: a library that fails to load stops rbp from starting.
 New rbp feature: `tools/fw/mods/<f>/<f>.c` with `XM_MODULE(f)` + a one-line `apply.sh`
 calling `../preload/apply.sh UNPACKED OVERLAY <f>.c`. Gate every patch on the expected words.
 Distribution goal: a delta patch vs stock 2.21 + patcher (`xdj fw mkpatch/patch`, docs/firmware-mods.md §13).
-Research, addresses and the plan per feature: **docs/firmware-mods.md**. Test releases 2.22+,
-final 3.00. Test on a private `xdj-host` with a copy of the unit's fw dir, not the app's unit.
+Research, addresses and the plan per feature: **docs/firmware-mods.md**. The release is 3.00
+(on the official 2.21). Test on a private `xdj-host` with a copy of the unit's fw dir, not the app's unit.
 Nothing goes on a real unit until proven in the emulator. The waveform mod is our own code,
 inspired by JaNeinHub/XDJ-RX-Mod (GPL-3, credited in docs/README) - don't copy its code.
 

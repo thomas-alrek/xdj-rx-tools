@@ -125,17 +125,19 @@ impl Tree {
     /// The file/dir/symlink part of [`apply_overlay`] (no `.xdj-delete` handling).
     pub fn apply_overlay_files_only(&mut self, dir: &Path) -> Result<Vec<String>, String> {
         let mut touched = Vec::new();
+        let modes = read_modes(dir)?;
         walk_host(dir, dir, &mut |rel, md, full| {
-            if rel == ".xdj-delete" || rel == ".xdj-metadata" || rel.ends_with(".DS_Store") {
+            if rel == ".xdj-delete" || rel == ".xdj-metadata" || rel == ".xdj-modes" || rel.ends_with(".DS_Store") {
                 return Ok(());
             }
             #[cfg(unix)]
-            let perm = {
+            let host_perm = {
                 use std::os::unix::fs::PermissionsExt;
                 md.permissions().mode()
             };
             #[cfg(not(unix))]
-            let perm = 0o644;
+            let host_perm = if md.is_dir() { 0o755 } else { 0o644 };
+            let perm = modes.get(rel).map(|m| (host_perm & !0o7777) | m).unwrap_or(host_perm);
             if md.file_type().is_symlink() {
                 let t = std::fs::read_link(full).map_err(|e| e.to_string())?;
                 self.remove(rel);
@@ -164,6 +166,19 @@ impl Tree {
         })?;
         Ok(touched)
     }
+}
+
+/// An overlay part's `.xdj-modes` (optional): `path octal-mode` per line, the permissions of
+/// new files/dirs regardless of the host (Windows has none): portable, reproducible overlays.
+fn read_modes(dir: &Path) -> Result<std::collections::HashMap<String, u32>, String> {
+    let mut m = std::collections::HashMap::new();
+    let Ok(t) = std::fs::read_to_string(dir.join(".xdj-modes")) else { return Ok(m) };
+    for l in t.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+        let (p, mode) = l.rsplit_once(char::is_whitespace).ok_or_else(|| format!(".xdj-modes: bad line {l:?}"))?;
+        let mode = u32::from_str_radix(mode.trim(), 8).map_err(|_| format!(".xdj-modes: bad mode in {l:?}"))?;
+        m.insert(p.trim().trim_start_matches('/').to_string(), mode & 0o7777);
+    }
+    Ok(m)
 }
 
 /// Timestamp for new/changed entries: `$SOURCE_DATE_EPOCH` when set (reproducible builds),

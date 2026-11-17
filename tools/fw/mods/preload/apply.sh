@@ -27,9 +27,27 @@ mkdir -p "$OV/pioneer/pioneer"
 install -m 0755 "$WORK/libxdjmod.so" "$OV/pioneer/pioneer/libxdjmod.so"
 SRC="$UNP/pioneer/pioneer/apl_start"
 [ -f "$OV/pioneer/pioneer/apl_start" ] && SRC="$OV/pioneer/pioneer/apl_start"
-sed -E 's#^([[:space:]]*)(/root/pioneer/rbp(_solo)? &)#\1LD_PRELOAD=/root/pioneer/libxdjmod.so \2#' \
-  "$SRC" > "$OV/pioneer/pioneer/apl_start.new"
-[ "$(grep -c 'LD_PRELOAD=/root/pioneer/libxdjmod.so' "$OV/pioneer/pioneer/apl_start.new")" = 2 ] \
-  || { echo "preload: rbp launch lines not found in apl_start" >&2; exit 1; }
+# Safe start: holding MIDI (top panel; GPIO 161 = GPIO6_IO01: `gpio -i 6 1` prints 1 idle, 0
+# pressed) from power-on until the splash starts the stock rbp without LD_PRELOAD. Read with the
+# firmware's own `gpio` tool right before rbp starts; MIDI isn't part of test mode (MEMORY + TEMPO RANGE) or update
+# mode (USB STOP + RELOOP/EXIT).
+SAFE='# xdjmod: hold MIDI (top panel) from power-on to start rbp without the mods (safe start)\
+XDJMOD_PRELOAD=/root/pioneer/libxdjmod.so\
+xdjmod_midi=`/usr/bin/gpio -i 6 1 2>/dev/null`\
+if [ "$xdjmod_midi" = "0" ]\
+then\
+	XDJMOD_PRELOAD=\
+	echo "### xdjmod: MIDI held: starting without mods (safe start) ###"\
+fi'
+if grep -q '^XDJMOD_PRELOAD=' "$SRC"; then            # an earlier feature mod already did it
+  cp "$SRC" "$OV/pioneer/pioneer/apl_start.new"
+else
+  sed -E -e 's#^([[:space:]]*)(/root/pioneer/rbp(_solo)? &)#\1LD_PRELOAD=$XDJMOD_PRELOAD \2#' \
+    -e "/^echo \"#### Application Start!! ###\"/a\\
+$SAFE" "$SRC" > "$OV/pioneer/pioneer/apl_start.new"
+  [ "$(grep -c 'LD_PRELOAD=$XDJMOD_PRELOAD' "$OV/pioneer/pioneer/apl_start.new")" = 2 ] \
+    && [ "$(grep -c '^XDJMOD_PRELOAD=/root/pioneer/libxdjmod.so$' "$OV/pioneer/pioneer/apl_start.new")" = 1 ] \
+    || { echo "preload: rbp launch lines / Application Start line not found in apl_start" >&2; exit 1; }
+fi
 mv "$OV/pioneer/pioneer/apl_start.new" "$OV/pioneer/pioneer/apl_start"
-echo "preload: libxdjmod.so + LD_PRELOAD in apl_start"
+echo "preload: libxdjmod.so + LD_PRELOAD in apl_start (safe start: hold MIDI)"

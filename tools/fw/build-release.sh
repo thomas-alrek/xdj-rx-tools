@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 REL=3.00
-MODS=exfat,fps,wav,waveform,flac
+MODS=exfat,fps,wav,waveform,flac,beatjump,folders
 BASE="${1:-build/XDJ-RX_v221.zip}"
 OUT="${2:-build/release}"
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1767225600}"   # 2026-01-01: fixed timestamps

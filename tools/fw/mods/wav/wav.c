@@ -44,6 +44,10 @@
 #define SLOT_PARSE    (WAV_VT + 2 * 4)
 #define SLOT_READ     (WAV_VT + 3 * 4)
 #define SLOT_RATE     (WAV_VT + 7 * 4)
+#define SLOT_DTOR     (WAV_VT + 0 * 4)   /* complete destructor */
+#define SLOT_DELETE   (WAV_VT + 1 * 4)   /* deleting destructor */
+#define STOCK_DTOR    0x378d0u
+#define STOCK_DELETE  0x3794cu
 #define STOCK_PARSE   0x375e0u
 #define STOCK_READ    0x37298u
 #define STOCK_RATE    0x2f278u
@@ -128,8 +132,13 @@ static struct wavinfo *info_of(void *obj, int create)
             break;
         }
     if (!w && create) {
-        w = &infos[next_info];
-        next_info = (next_info + 1) % NINFO;
+        for (int i = 0; i < NINFO && !w; i++)  /* a free entry, else the oldest */
+            if (!infos[i].obj)
+                w = &infos[i];
+        if (!w) {
+            w = &infos[next_info];
+            next_info = (next_info + 1) % NINFO;
+        }
         if (w->flac && xm_flac_close)
             xm_flac_close(w->flac);         /* a reader rbp has since destroyed */
         w->flac = 0;
@@ -137,6 +146,32 @@ static struct wavinfo *info_of(void *obj, int create)
     }
     pthread_mutex_unlock(&info_lock);
     return w;
+}
+
+/* A reader is going away: free its entry (else a busy table could recycle a live one). */
+static void forget(void *obj)
+{
+    pthread_mutex_lock(&info_lock);
+    for (int i = 0; i < NINFO; i++)
+        if (infos[i].obj == obj) {
+            if (infos[i].flac && xm_flac_close)
+                xm_flac_close(infos[i].flac);
+            infos[i].flac = 0;
+            infos[i].obj = 0;
+        }
+    pthread_mutex_unlock(&info_lock);
+}
+
+static void *wav_dtor(void *obj)
+{
+    forget(obj);
+    return ((void *(*)(void *))STOCK_DTOR)(obj);
+}
+
+static void *wav_delete(void *obj)
+{
+    forget(obj);
+    return ((void *(*)(void *))STOCK_DELETE)(obj);
 }
 
 /* ---- anti-alias low-pass for decimation (windowed sinc, Blackman) ---- */
@@ -496,7 +531,8 @@ static void wav_read(void *obj, int start, float *out, unsigned n)
 XM_MODULE(wav)
 {
     if (!xm_expect32(SLOT_PARSE, STOCK_PARSE) || !xm_expect32(SLOT_READ, STOCK_READ) ||
-        !xm_expect32(SLOT_RATE, STOCK_RATE))
+        !xm_expect32(SLOT_RATE, STOCK_RATE) || !xm_expect32(SLOT_DTOR, STOCK_DTOR) ||
+        !xm_expect32(SLOT_DELETE, STOCK_DELETE))
         return;
     design(fir2, TAPS2, 2);
     design(fir4, TAPS4, 4);
@@ -506,6 +542,8 @@ XM_MODULE(wav)
     int ok = xm_patch32(SLOT_PARSE, STOCK_PARSE, (uint32_t)(uintptr_t)wav_parse) &&
              xm_patch32(SLOT_READ, STOCK_READ, (uint32_t)(uintptr_t)wav_read) &&
              xm_patch32(SLOT_RATE, STOCK_RATE, (uint32_t)(uintptr_t)wav_rate_ok) &&
+             xm_patch32(SLOT_DTOR, STOCK_DTOR, (uint32_t)(uintptr_t)wav_dtor) &&
+             xm_patch32(SLOT_DELETE, STOCK_DELETE, (uint32_t)(uintptr_t)wav_delete) &&
              xm_patch32(TAG_TAG_BNE, 0x1afffff7u, ARM_NOP) &&
              xm_patch32(TAG_RATE_BNE, 0x1affffdcu, ARM_NOP) &&
              xm_patch32(TAG_BITS_BNE, 0x1affffbfu, ARM_NOP);

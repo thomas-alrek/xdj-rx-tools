@@ -25,7 +25,7 @@
 #include <time.h>
 #include <unistd.h>
 
-static struct xm_module *modules, **modules_tail = &modules;
+static struct xm_module *modules;
 
 void xm_log(const char *fmt, ...)
 {
@@ -37,11 +37,27 @@ void xm_log(const char *fmt, ...)
     fprintf(stderr, "### xdjmod: %s ###\n", buf);
 }
 
+/* Modules init (and add their UTILITY rows) in this order; others after them, in link
+ * order. */
+static const char *const MODULE_ORDER[] = { "fps", "waveform", "scroll", "keys", "beatjump", "wav",
+                                            "flac", "folders" };
+
+static int rank(const struct xm_module *m)
+{
+    int n = (int)(sizeof(MODULE_ORDER) / sizeof(MODULE_ORDER[0]));
+    for (int i = 0; i < n; i++)
+        if (!strcmp(m->name, MODULE_ORDER[i]))
+            return i;
+    return n;
+}
+
 void xm_register(struct xm_module *m)
 {
-    m->next = 0;
-    *modules_tail = m;
-    modules_tail = &m->next;
+    struct xm_module **p = &modules;
+    while (*p && rank(*p) <= rank(m))
+        p = &(*p)->next;
+    m->next = *p;
+    *p = m;
 }
 
 uint32_t xm_now_ms(void)

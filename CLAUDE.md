@@ -30,6 +30,9 @@ preservation on owned hardware.
 - `crates/xdj-fw/` — Rust library + **`xdj` CLI**: `fw info|decrypt|unpack|diff|repack|build|pack|stick`,
   `prepare` (kernel boot blobs), `nand init|env|info|boot`. Codecs: `.UPD` crypto, ISO9660+Rock Ridge,
   cramfs, payload tarballs. Tests: `cargo test --release`.
+- `crates/xdjrx-patcher/` — the end-user **`xdjrx-patcher`** (official 2.21 `.UPD` + a `.xdjpatch` →
+  the custom firmware release, MD5-verified; key from Pioneer's GPL source). Patch files:
+  `tools/fw/make-patch.py`; binaries for macOS/Linux/Windows: `tools/fw/build-patcher.sh`.
 - `qemu/` — `xdj/*.c` (device models: board, display, audio, panel harness, NAND, MFi, USBNC — **edit
   these**; `build-qemu.sh` syncs them into the build tree), `patches/01..05` (stock QEMU files only:
   SoC hooks, i.MX peripherals, SABRE-SD board, ChipIdea USB/hub, macOS timers), `build-qemu.sh`
@@ -100,7 +103,8 @@ preservation on owned hardware.
 - Reverse-engineer `rbp` → **`rbp-binary-internals`**.
 - `.UPD` format → **`upd-firmware-format`**; build/install custom firmware → **`custom-firmware`**;
   feature mods (xdjmod framework, test loop, the reproducible 3.00 release `tools/fw/build-release.sh`)
-  → **`firmware-mods`** (`docs/firmware-mods.md`).
+  → **`firmware-mods`** (`docs/firmware-mods.md`); releases, the patch file and the patcher →
+  **`release-patcher`** (`docs/releases.md`).
 - QEMU device models and patches → **`qemu-imx6-patches`**; the SD test-bed image → **`build-xdj-sd-image`**.
 - Desktop app (shell, host, packaging) → **`build-xdj-app`**; the virtual panel → **`xdj-virtual-panel`**.
 - Tests (`docs/testing.md`): `cargo test --release` (crates/xdj-fw), `tools/xdj-panel/test_panel_parity.py`

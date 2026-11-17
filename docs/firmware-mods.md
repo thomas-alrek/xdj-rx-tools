@@ -1,7 +1,7 @@
 # Firmware mods (custom firmware 3.00)
 
 Feature mods for the XDJ-RX on top of the official 2.21 firmware, and the research behind them.
-Test builds count up from **2.22**; the release is **3.00** (§1: how to reproduce it, MD5). Building and installing custom
+The release is **3.00**, built on the official **2.21** (§1: how to reproduce it, MD5). Building and installing custom
 firmware in general: [custom-firmware.md](custom-firmware.md).
 
 Status: ✅ built and verified in the emulator · 🔬 researched (static analysis), not built ·
@@ -9,35 +9,44 @@ Status: ✅ built and verified in the emulator · 🔬 researched (static analys
 
 | Mod | Status | Mechanism | Feasibility | Effort (est.) |
 |---|---|---|---|---|
-| `exfat` — exFAT USB sticks | ✅ (2.22) | FUSE driver + udev rule | done | — |
-| `preload` — the xdjmod framework (`libxdjmod.so`) | ✅ (2.24) | `LD_PRELOAD` in `apl_start` | done | — |
-| UTILITY menu rows for mods (framework) | ✅ (2.24) | extended item table | done | — |
-| `fps` — UI frame rate 20 / 30 / 60 (default 60) | ✅ (2.33) emulator | 2 immediates + timer detour | done (real unit: untested) | real-unit test |
-| `wav` — WAV float / 32-bit / up to 192 kHz | ✅ (2.27) emulator | reader vtable slots + tag-parser checks | done (AIFF: open) | AIFF |
-| `flac` — FLAC 16/24-bit ≤ 192 kHz, with tags + artwork | ✅ (2.43) emulator | suffix + browser hooks, dr_flac via the wav reader | done (real unit: untested) | — |
-| `waveform` — RGB / 3-band waveforms (default 3-band) | ✅ (2.33) emulator | `.EXT` interposer + detail/overview detours | done (real unit: untested) | tuning |
+| `exfat` — exFAT USB sticks | ✅ | FUSE driver + udev rule | done | — |
+| `preload` — the xdjmod framework (`libxdjmod.so`) | ✅ | `LD_PRELOAD` in `apl_start` | done | — |
+| UTILITY menu rows for mods (framework) | ✅ | extended item table | done | — |
+| Safe start — hold MIDI at power-on: stock rbp, no mods | ✅ emulator | `apl_start` key check (§3) | done | — |
+| `fps` — UI frame rate 20 / 30 / 60 (default 60) | ✅ emulator | 2 immediates + timer detour | done (real unit: untested) | real-unit test |
+| `wav` — WAV float / 32-bit / up to 192 kHz | ✅ emulator | reader vtable slots + tag-parser checks | done (AIFF: open) | AIFF |
+| `flac` — FLAC 16/24-bit ≤ 192 kHz, with tags | ✅ emulator | suffix + browser hooks, dr_flac via the wav reader | done (real unit: untested) | — |
+| `waveform` — RGB / 3-band waveforms (default 3-band) | ✅ emulator | `.EXT` interposer + detail/overview detours | done (real unit: untested) | tuning |
+| WAVEFORM SCROLL: ORIGINAL / SMOOTH (default SMOOTH) | ✅ emulator | playhead estimate + sub-pixel canvas shift (§10) | done (real unit: untested) | visual check, CPU |
+| Hot cues A–H on the waveforms, in rekordbox colours | ✅ emulator | PCO2 parse + marker bits + overview images (§8a) | done (real unit: untested) | — |
+| `beatjump` — BEAT JUMP on the pads (opt-in) | ✅ emulator | PlayerInnards onKey slot + LED detour (§10a) | done (real unit: untested) | — |
+| HOT CUE E-H on SHIFT + pads (opt-in) | ✅ emulator | getCue override around the stock hot-cue call (§10a) | done (real unit: untested) | — |
+| `keys` — Camelot key display (opt-in) | 🔬 partial, not in 3.00 | key-name table swap + DB name detour (§10c) | deck panel key: open | research |
+| `folders` — [FOLDER] lists Contents | ✅ emulator | one branch (§7a) | done | — |
+| Large libraries (1000+ tracks) | 🔬 measured (§10b) | — | no memory limit hit | — |
 | OneLibrary | 🔬 later (nice to have) | mount-time `export.pdb` synthesis | medium | 2–3 weeks |
-| Waveforms generated for folder tracks | 🔬 researched (§9) | fill rbp's per-deck entry arrays from our own decode | likely | 1–2 weeks |
-| WAVEFORM SCROLL: ORIGINAL / SMOOTH (default SMOOTH) | ⬜ to research (§10) | — | unknown | — |
-| BEAT JUMP (opt-in) | ⬜ to research (§10) | — | unknown | — |
 
-**In release 3.00:** `exfat`, `fps`, `wav`, `waveform`, `flac` (+ the framework). The rows below
-them are not built; when they are, they ship as a release above 3.00.
+**In release 3.00:** `exfat`, `fps`, `wav`, `waveform` (colour, hot cues A–H, scroll), `flac`,
+`beatjump` (beat jump, hot cues E–H on the pads), `folders` (+ the framework, safe start).
+UTILITY rows, in order: UI FRAME RATE (60), WAVEFORM COLOR (3-BAND), WAVEFORM SCROLL (SMOOTH),
+BEAT JUMP (OFF), BEAT JUMP A (4 BEATS), BEAT JUMP B (16 BEATS), HOT CUE E-H (OFF) — defaults in
+brackets, restored by a factory reset. `keys` (Camelot) is built and partly working but not in
+the release (§10c).
 
 All addresses below are for the 2.21 `rbp` (sha256 `4f62aa71…`, [rbp-binary-internals] skill).
 
 ## 1. Release 3.00: reproduce it from the official 2.21
 
-Release **3.00** = the official 2.21 image + the mods `exfat,fps,wav,waveform,flac`, in that
+Release **3.00** = the official 2.21 image + the mods `exfat,fps,wav,waveform,flac,beatjump,folders`, in that
 order. The build is **reproducible byte for byte**: the same inputs give the same `.UPD`.
 
 | File | MD5 |
 |---|---|
 | `XDJ-RX_v221.zip` (Pioneer's download, input) | `c1ee67884f120e4cd8d4ffd6b9ad73eb` |
 | `XDJRX.UPD` inside it (official 2.21) | `e1facfb82de17b2544e958ca544e00c4` |
-| **`XDJRX.UPD` — custom firmware 3.00 (output)** | **`14b0a47aa78aa1a48243364e65ccdd4a`** |
+| **`XDJRX.UPD` — custom firmware 3.00 (output)** | **`5492b333f6eb4b853cb7cfa113c48659`** |
 
-`xdj fw info` on the output: 48310288 bytes, model `XDJAERO3.00`, footer CRC32 `e33274d3`,
+`xdj fw info` on the output: 48318480 bytes, model `XDJAERO3.00`, footer CRC32 `c4a07df4`,
 `images/release.txt = 3.00`. What the mods add (overlay, MD5):
 
 | Overlay file | MD5 |
@@ -45,8 +54,8 @@ order. The build is **reproducible byte for byte**: the same inputs give the sam
 | `rootfs/sbin/mount.exfat-fuse` | `3d8e08ccb61b480d4e021619f80b0ea1` |
 | `rootfs/lib/udev/xdj_is_exfat` | `5c79cf91a5d596af2362bce33ac0d9e0` |
 | `rootfs/etc/udev/rules.d/12-usb-memory-auto-mount.rules` (edited) | `310e73ef9f6ee510c229fe64cb41bb3f` |
-| `pioneer/pioneer/libxdjmod.so` | `a3cc3889d080f789b08e630cb33feaca` |
-| `pioneer/pioneer/apl_start` (edited) | `92bd42fa03581944d29d642e2421092e` |
+| `pioneer/pioneer/libxdjmod.so` | `6133ad8e282462a11eee01075494e92a` |
+| `pioneer/pioneer/apl_start` (edited) | `3583c3c711aa8285eece902669f0b526` |
 
 ### 1a. Prerequisites (macOS or Linux host)
 
@@ -66,7 +75,7 @@ order. The build is **reproducible byte for byte**: the same inputs give the sam
 ```sh
 tools/fw/build-release.sh                 # -> build/release/XDJRX.UPD + stick.img
 # >> base build/XDJ-RX_v221.zip md5 c1ee67884f120e4cd8d4ffd6b9ad73eb
-# >> build/release/XDJRX.UPD (release 3.00, mods exfat,fps,wav,waveform,flac) md5 14b0a47aa78aa1a48243364e65ccdd4a
+# >> build/release/XDJRX.UPD (release 3.00, mods exfat,fps,wav,waveform,flac,beatjump,folders) md5 5492b333f6eb4b853cb7cfa113c48659
 ```
 
 `build-release.sh [BASE] [OUTDIR]` fixes the release (3.00), the mod list and
@@ -87,7 +96,7 @@ $X fw unpack build/XDJ-RX_v221.zip build/release/unpacked
 
 # 2. each mod reads the unpacked tree and writes only into the overlay, in this order
 mkdir -p build/release/overlay
-for m in exfat fps wav waveform flac; do
+for m in exfat fps wav waveform flac beatjump folders; do
   tools/fw/mods/$m/apply.sh build/release/unpacked build/release/overlay
 done
 
@@ -103,7 +112,7 @@ $X fw stick build/release/XDJRX.UPD build/release/stick.img
   rules, `rootfs/lib` to link against) and never modify it. `fw build` also needs the original
   image: owners, device nodes and untouched files come from it.
 - `exfat`: builds `mount.exfat-fuse` once (`build/mods/exfat/`) and adds it, `xdj_is_exfat` and
-  the udev rule. `fps`, `wav`, `waveform`, `flac`: each calls `preload/apply.sh` with its sources;
+  the udev rule. `fps`, `wav`, `waveform`, `flac`, `beatjump`, `folders`: each calls `preload/apply.sh` with its sources;
   the feature list accumulates in `build/release/xdjmod/features.txt`, and every call rebuilds
   `libxdjmod.so` with all features so far and adds the `LD_PRELOAD` to `apl_start`.
 - Mods stack: one that edits a file another mod already put in the overlay starts from that copy.
@@ -116,7 +125,7 @@ $X fw stick build/release/XDJRX.UPD build/release/stick.img
 ### 1d. Test builds and installing
 
 ```sh
-tools/fw/build-custom-upd.sh 2.44 exfat,fps   # any release/mod set -> build/custom-upd/
+tools/fw/build-custom-upd.sh REL exfat,fps   # any release number / mod set -> build/custom-upd/
 ```
 
 - Install: the app's *File → Install Firmware Update…* → `XDJRX.UPD`. The release must be above
@@ -125,6 +134,11 @@ tools/fw/build-custom-upd.sh 2.44 exfat,fps   # any release/mod set -> build/cus
   firmware dir (`XDJ_FW_DIR`, `XDJ_RUNTIME_DIR`, `XDJ_PANEL_PORT`, `XDJ_VNC_WS_PORT`) and POST the
   `.UPD` to `/install-update`. Installed = `release=` in the NAND env (`xdj nand env`). Booted =
   `### xdjmod: loaded into rbp … N module(s)` on the console. Skill: `firmware-mods`.
+- Verified for 3.00: installed over a wiped, freshly provisioned stock 2.21 unit (twice) and over
+  a used unit; defaults as listed above. One of the two fresh installs came up black on its first
+  boot (rbp running, no frames drawn) and was fine after a power cycle; the repeat booted
+  normally. Treated as a load-sensitive emulator flake (TCG, a busy host), not reproduced — worth
+  watching on the real unit.
 
 ## 2. `exfat` — exFAT USB sticks ✅
 
@@ -138,7 +152,7 @@ tools/fw/build-custom-upd.sh 2.44 exfat,fps   # any release/mod set -> build/cus
 - rbp classifies a mount by its `/proc/mounts` type (`0x132b0c`: `vfat` or no entry → 3,
   `hfsplus` → 4, `fuse` → 7) and stores it per slot (`0x132c28`). exfat-fuse mounts as `fuseblk`,
   which falls through to 3 — rbp handles the stick exactly like FAT32.
-- Verified (2.22): `test/usb/rekordbox_new_exfat.img` on USB1 shows the library, and a track loads
+- Verified: `test/usb/rekordbox_new_exfat.img` on USB1 shows the library, and a track loads
   with its waveform, key and length. Make the image with `tools/fw/mods/exfat/make-exfat-image.sh`.
 
 ## 3. `preload` — the xdjmod framework ✅
@@ -171,10 +185,21 @@ tools/fw/build-custom-upd.sh 2.44 exfat,fps   # any release/mod set -> build/cus
   interpose those calls, and patch rbp's own code in memory from the constructor (`mprotect`,
   write, `__builtin___clear_cache`; entry hooks are `ldr pc,[pc,#-4]` + address — `bl` can't reach
   the library). rbp on disk is never modified.
-- Verified (2.23): the constructor's console marker appears and rbp boots normally. **It appears in
+- Verified: the constructor's console marker appears and rbp boots normally. **It appears in
   every process rbp starts** (LD_PRELOAD is inherited by `sh`, `mount`, …), so hooks must only
   install inside rbp: check `/proc/self/exe` and rbp's sha256 / the original bytes at every patch
   site, and do nothing on a mismatch (another firmware version, or `rbp_solo`).
+
+### Safe start ✅ (emulator)
+
+Hold **MIDI** (top panel) from power-on until the splash: rbp starts **without `LD_PRELOAD`** —
+the stock rbp, no mods at all (no mod rows in UTILITY; VERSION No. still shows the installed
+release). For when a mod misbehaves; the settings in `xdjmod.conf` are untouched. `apl_start`
+(edited by `preload/apply.sh`) reads the key with the firmware's own `gpio -i 6 1` (GPIO 161 =
+GPIO6_IO01; prints 1 idle, 0 pressed) right before it starts rbp and logs `### xdjmod: MIDI held:
+starting without mods (safe start) ###`. MIDI is part of neither test mode (MEMORY + TEMPO RANGE,
+read by rbp) nor update mode (USB STOP + RELOOP/EXIT, read by the initramfs). Verified in the
+emulator: key held → stock rbp; not held → mods load.
 
 ## 4. UTILITY menu rows ✅ (framework)
 
@@ -194,7 +219,7 @@ VERSION No.**; a **factory reset restores their defaults**.
   `0xe7f40`, `0xe7f68`, `0xe7fa0`, `0xe7fb0`) and our own `render`/`commit`, which follow rbp's
   contract: `render(item, cells[2])` fills the label/value cells (u16 length at `+0x20`, text at
   `+0x22`) with the edit choice while editing, else the saved one; `commit` returns 1 on change.
-- Verified (2.24): the row shows in rbp's style before VERSION No., edits with the browse encoder
+- Verified: the row shows in rbp's style before VERSION No., edits with the browse encoder
   (push, rotate, push), saves, applies live, and comes back after a restart.
 - Persistence: `/root/rbp/xdjmod.conf` on the data volume, read in the constructor; `commit`
   rewrites it (temp + rename). Not `XdjSettings.dat` (header `0x2a7b9e8f`, version `0x00010003`,
@@ -232,7 +257,7 @@ VERSION No.**; a **factory reset restores their defaults**.
   watch `ALSA: Resolve xrun`); anything animated per frame instead of by timer speeds up; front-only
   drawing tears a little more.
 - **Visually confirmed** in the emulator: waveform playback is much smoother at 60 than at 20.
-- **Emulator benchmark** (2.24, Apple Silicon host, a track loaded): rbp's GUI loop runs
+- **Emulator benchmark** (Apple Silicon host, a track loaded): rbp's GUI loop runs
   **19.2 fps** at 20 (interval avg 52 ms), **28.8 fps** at 30 (34 ms) and **40–46 fps** at 60
   (21–24 ms, min 20–22 ms): under TCG a frame costs ~20–22 ms, so the emulator tops out near 45 fps.
   The QEMU meter (frames whose content changed) shows ~4–8 changes/s at every setting on a static
@@ -272,7 +297,7 @@ VERSION No.**; a **factory reset restores their defaults**.
     only sees ≤ 48 kHz. Per-reader state lives in a small side table (rbp's object has no room).
   - The library uses VFPv3 internally (`-mfloat-abi=softfp`), keeping rbp's soft-float calls.
   - Each parse logs one line (`wav: 96000 Hz 24-bit pcm 2 ch, decim 2 -> 48000 Hz, …`).
-- **Verified (2.27, emulator)** with `tools/fw/mods/wav/make-wav-test-image.sh` (tones in 6 formats
+- **Verified (emulator)** with `tools/fw/mods/wav/make-wav-test-image.sh` (tones in 6 formats
   under `XDJ WAV TEST`, browsed via [FOLDER]) and two real-world samples (96 kHz/24 and
   48 kHz/float, extensible with `fact`/`LIST` chunks) on a library-less FAT32 stick
   (`tools/make-fat32-image.sh`). All play with the right length. The unit's output, recorded with
@@ -285,6 +310,10 @@ VERSION No.**; a **factory reset restores their defaults**.
 - Open: the AIFF reader (slots at `0x35cfa0`/`0x35cfa4`, tag parser `0x1a7fe0`) — 32-bit/float
   AIFC, and the stock rate bug (96 kHz AIFF read as 48 kHz); a rekordbox-exported hi-res track
   (export.pdb path, not just [FOLDER]); CPU headroom on the real unit.
+
+- The per-reader table (16 entries) is freed from the reader's destructors (vtable slots 0/1,
+  `0x378d0` / `0x3794c`) and takes free entries first, so a busy table never recycles a live
+  reader's entry.
 
 ## 7. `flac` — FLAC ✅ (emulator)
 
@@ -307,20 +336,29 @@ VERSION No.**; a **factory reset restores their defaults**.
   8-bit text; beyond U+00FF → `?`).
 - **Library.** export.pdb tracks of type 5 load through the same suffix hook; their waveforms come
   from the rekordbox analysis (waveform mod).
-- **Verified (2.38–2.41, emulator):** 44.1/16, 48/24, 96/24, 192/24 with and without a seek table,
+- **Verified (emulator):** 44.1/16, 48/24, 96/24, 192/24 with and without a seek table,
   from [FOLDER] and from a rekordbox playlist on an exFAT stick; the recorded output has the exact
   test tones (1000 Hz L / 2000 Hz R at the WAV levels) and the ultrasonic tone at −96 … −134 dBFS;
   length, artist, album and comment shown in the folder view.
 - Test sticks: `tools/fw/mods/flac/make-flac-test-image.sh` (tagged tones, no library) and
   `tools/fw/mods/make-feature-test-image.sh XML [PLAYLIST]` — an exFAT stick with a real rekordbox
   export of a playlist (baken), the one-stick test of every mod.
-- **Artwork.** The PICTURE block (front cover preferred, else the first) is handed to rbp the way
-  the ID3 parser `0x1a6920` does for APIC: size `+0x2c`, file offset `+0x30`, then rbp's image
-  probe `0x1a5f7c(ctx, info)` fills the dimensions `+0x34`/`+0x36` (log: `flac: art 13379 bytes
-  @357 -> probe 0, 320x320`). The [FOLDER] info panel draws the generic disc for embedded art in
-  stock firmware too — an MP3 with the same cover as ID3 APIC (`m_44k_control.mp3` on the test
-  stick) shows the same disc — so FLAC matches stock there (verified 3.00, emulator).
+- **Artwork:** not passed on. The [FOLDER] info panel draws no embedded art in stock firmware,
+  not even an MP3's ID3 cover, so a FLAC PICTURE block would have no visible effect.
 - Open: FLAC decode CPU on the real unit.
+
+## 7a. `folders` — [FOLDER] lists Contents ✅ (emulator)
+
+- rbp's folder lister `0x1f1ed0` (readdir-based: FAT32, exFAT via FUSE and HFS+ all go through
+  it) skips two root folders by name: `PIONEER` (always on FAT32/exFAT; HFS+ uses `.PIONEER`, a
+  dot name) and `Contents` — the latter only when the stick has a rekordbox library (flag
+  `0x2954d40[slot]`, set at mount when `PIONEER/rekordbox/export.pdb` opens). The Contents test
+  starts with that flag: `0x1f2498` `bne 0x1f2154` (`0x1affff2d`; flag ≠ 1 → list the entry).
+  `folders.c` makes it unconditional (`b`, `0xeaffff2d`), so Contents is always listed; PIONEER
+  (rekordbox's own files: USBANLZ, Artwork, … — no audio) stays hidden.
+- Tracks under `Contents/<artist>/<album>/` load as plain files (no library cues or grid — the
+  library entry has those). `PIONEER REC` (MASTER REC, `0x1f298c`) keeps its own handling.
+- Verified (emulator): an exFAT library stick lists `Contents` and an extra folder.
 
 ## 8. `waveform` — RGB / 3-band waveforms ✅ (emulator)
 
@@ -341,8 +379,7 @@ VERSION No.**; a **factory reset restores their defaults**.
   **3-BAND (default)**:
   - **Data:** `fopen`/`fopen64`/`open`/`open64` interposers see rbp open a track's `ANLZ*.EXT`
     and parse it and its `.2EX` (≤ 8 tracks cached, keyed by path/size/mtime): PWV3 (to recognise
-    the track), PWV5 → RGB565 per entry, PWV7 → 3-band bar heights per entry (beat-link's
-    half-heights low × 0.4 / mid × 0.3 / high × 0.06, × 1.5 for rbp's 45 rows). Inert outside rbp.
+    the track), PWV5 → RGB565 per entry, PWV7 → 3-band bar rows per entry (low/mid/high bytes, `band_rows()`, below). Inert outside rbp.
   - **Decks:** deck d's block is `**(0x10f020c + d*32)` (count at `+0`, entries `+0x2ee18` = rbp's
     `{(b & 31) * 46 / 31, b >> 5}` per PWV3 byte, marker flags `+0x2ee10`); rbp's array runs ~20
     entries past the file's PWV3. A deck matches a cached track when 48 sampled entries agree;
@@ -360,56 +397,198 @@ VERSION No.**; a **factory reset restores their defaults**.
   near-white pastel, while rekordbox shows saturated hues. `pwv5_color` normalises the strongest
   channel to 255 and stretches the others away from it ×2.5 (7,6,5 → orange-salmon, 5,7,6 → green,
   6,6,7 → lavender); standard R/G/B order (beat-link swaps G/B).
-- Verified (emulator): RGB (2.34) and 3-band (2.33) detail and overview on the rekordbox test
+- **PWV7 byte order and scale.** The three bytes are physically **low, mid, high** (measured
+  against the audio of 16 rekordbox-analysed tracks: byte 0 follows < 400 Hz content, r = 0.87;
+  byte 2 > 2.5 kHz, r = 0.89), each 0..127. beat-link reads them as mid/high/low; with that order
+  bass was drawn in amber and the blue layer stayed thin, unlike rekordbox. `band_rows()` maps
+  low → blue × 0.6, mid → amber × 0.45, high → cream (248, 238, 218) × 0.75 rows per unit — fitted
+  to rekordbox's 3-band view of the same track and moment (blue kicks near full height, a cream
+  core with full-height transients, a thin amber/brown band between).
+- Verified (emulator): RGB and 3-band detail and overview on the rekordbox test
   stick; 3-band confirmed by eye against a CDJ-3000, with tracks on both decks and while zooming.
 - Open: RGB saturation tuning against rekordbox (one constant), CPU on the real unit.
 
-## 9. Waveforms for folder tracks 🔬
+## 8a. Hot cues A–H on the waveforms, in colour ✅ (emulator)
 
-Tracks played from [FOLDER] (no rekordbox analysis) get an overview (rbp builds it from the audio
-as it plays) but an empty detail waveform. Static analysis of 2.21:
+rekordbox stores up to 8 hot cues (A–H) with a colour each; the XDJ-RX shows A–D, always green
+(hot loops orange). Part of the `waveform` mod (`waveform.c`), always on.
+- **Where the cues are.** A rekordbox export keeps A–C in the `.DAT` (PCOB), D–H in the `.EXT`
+  (PCOB) and all eight in the `.EXT`'s **PCO2**: entries `PCP2` with hot cue number `+0x0c`
+  (1 = A), type `+0x10` (1 point, 2 loop), time ms `+0x14`, loop end `+0x18`, comment length
+  `+0x28` + UTF-16BE comment, then colour code, R, G, B (rekordbox's palette). rbp's parser
+  (`0x1c8804`) reads all of them; its getters keep hot cues 1–4 and nothing displays E–H or the
+  colours (PCO2 is only written back when the unit saves cues). The waveform mod's `.EXT`
+  interposer parses PCO2 into its per-track cache.
+- **Detail waveform.** rbp draws markers from a per-entry array (block `+0x2ee10`, 12 bytes
+  per 1/150 s entry; byte `+2`: 1 / 2 = top triangle (images `0x285` / `0x286`), 4 / 8 = bottom
+  one (`0x272` / `0x273`); A–D also set `u16 +0` bits `0x100 << i`, used by the overview). We
+  set the byte `+2` bits for E–H — after rbp's rebuild (detour of the last builder `0x12792c`)
+  and whenever a deck's track or waveform changes — so rbp draws the same triangles and smooth
+  scroll carries them. Colours: after rbp overlays the icon strips (`0x1cb3c4`, hooked by
+  `scroll.c`), `wf_detail_icons()` recolours the triangle pixels (`0x0700`) at each cue's column,
+  rows 0–4 and 119–123.
+- **Overview.** rbp's cue layer `0x1f8a50` blits images with `0x129024(surface, x, y, id)`:
+  triangles `0x285` (top, y 4) / `0x272` (bottom, y `0x33`), letters A `0x274`, B `0x27e`, C
+  `0x280`, D `0x282` (8 × 9 px RGB565, `0xf81f` transparent, `+1` = orange) from
+  `gui/pset/imagedata/imagedata.dat` (records of 0x2c bytes: size `+4`, format `+0x18`, data
+  offset `+0x20`). It has no E–H images. While the layer runs, a blit detour drops the A–D
+  letters; afterwards we draw every hot cue's triangles (over rbp's) and letters — left to
+  right, without overlaps — in its colour. The images are ours: ids from `0x400`, answered by a
+  detour of the image lookup `0x1694bc` with copies of rbp's records whose pixels we recolour:
+  rbp's triangle and A–D shapes, and E–H bitmaps drawn in the same 8 × 9 style.
+- Cues without a colour (older exports) keep rbp's green / orange.
+- **Verified (emulator):** a rekordbox export with A–H in eight colours (A red, B blue, C
+  green, D orange, E magenta, F cyan, G lime, H purple): detail top and bottom and the
+  overview letters and triangles in those colours, E–H included; stock 2.21 (safe start) shows
+  A–D in green only. Test stick: `tools/build-rb-usb.sh <rekordbox.xml> <playlist>` (baken writes
+  PCO2 with the colours).
 
-- **Deck block** `B = 0x28d78a0 + d*0x2ee1c` (fixed BSS; the descriptor at `0x10f0208 + d*32`
-  points at it): count `+0`, beat-grid offset `+4`, has-grid `+8`, beat count `+0xc`, beats
-  `{u32 ms, u32 beat#}` from `+0x10`; pointers to static arrays of 540000 entries (60 min at
-  150/s): `+0x2ee10` cue/memory markers (12 bytes each; byte 8 bits 1/2 → colours `0xb300` /
-  `0x3186`), `+0x2ee14` beat-in-bar ticks (u8, 0 = none), `+0x2ee18` `{height 0..46, whiteness
-  0..7}` entries. The pointers are set once at gui_task start (`0x12aa24`) and never change.
-- **Draw gate:** `0x1cd0f8` draws a deck's detail waveform whenever `*(u32 *)B != 0`; no other
-  per-deck flag. Zoom is rbp's (max height per column over the same 150/s entries); the visible
-  range comes from the deck status at `0x182405c + d*0xa0` (playhead ms × 0.15).
-- **Why folder tracks are empty:** a load/eject (`0x1218e0(d, 1)`) sets the clear flag
-  `0x17da820 + 4d`; gui_task's `0x12922c` then zeroes `B+0`/`B+8`. The only fill is a dbserver
-  cache hit with the track's PWV3 (`0xe1e1c` → source struct `0x17f326c + d*0x186c4` → decode in
-  `0x12922c`); folder tracks never hit, so the count stays 0.
-- **Overview of unanalysed tracks:** the Player's render (`0x75eb0`) feeds played audio to
-  `0x5e32c` → the `BpmWaveDetectManager` thread (`0x61304`, 400 bytes); `Tot_WaveWatcherTASK`
-  (`0xc4f10`) copies changes to `0x294f5b0 + d*0x38c` (flag `0x17da800 + 4d`), gui_task to
-  `0x18a2ee4 + d*900`. It fills progressively while playing.
-- **Deck → file:** `PlayEngine *pe = *(u32 *)0x1079cb0`; `Player *p = ((Player **)*(pe + 0xc))[d]`
-  (`p + 0x14` = index); `p + 0x134` = the loaded file's info (path first; cleared on eject); deck
-  state `*(int *)(0x17ec92c + d*0x5c) == 0x12` = loaded.
-- **Plan:** a worker thread decodes the loaded file with the wav/flac readers' code and computes
-  `{height, whiteness}` per 1/150 s of track time (and 3-band data for the waveform mod); a detour
-  at `0x12922c` (gui_task, before rbp's clear/fill; its first instructions relocate) installs it:
-  entries, zeroed tick and cue arrays, `B+8 = B+0xc = 0`, count last — and drops it when the clear
-  flag is set. Re-installs if `B+0` changes under it. Low priority on the real unit's CPU.
+## 10. WAVEFORM SCROLL: ORIGINAL / SMOOTH ✅ (emulator)
 
-## 10. WAVEFORM SCROLL and BEAT JUMP ⬜
+UTILITY → **WAVEFORM SCROLL** = ORIGINAL / **SMOOTH (default)**. `tools/fw/mods/waveform/scroll.c`.
+**Credit:** the feature comes from [JaNeinHub/XDJ-RX-Mod](https://github.com/JaNeinHub/XDJ-RX-Mod)
+(GPL-3.0, "WAVEFORM SCROLL: ORIGINAL / SMOOTH"); ours is an independent implementation.
 
-Two features of [JaNeinHub/XDJ-RX-Mod](https://github.com/JaNeinHub/XDJ-RX-Mod) (GPL-3.0; "XDJ-RX
-Mod v1.0" on r/PioneerDJ) to add as our own implementations, **credited to JaNeinHub** like the
-waveform mod (§8: in this doc, the module source and the README's acknowledgements):
+- **Stock.** Each GUI frame `0x1cd0f8` clears the 536 × 250 canvas (`*0x10f0248`, RGB565, pitch
+  0x430, deck d at `d*0x20fa0` bytes) and draws one column per pixel; the column under the
+  playhead line (x = 268) is `trunc(ms · 0.15 / zoom)` (`0x1cb58c`, state block
+  `0x10f0208 + d*32`: `+0x0c` that column, `+0x18` zoom = entries per column, 16/8/4/2 by
+  level). `ms` comes from a snapshot (`0x1824000`, copied by Ui_CycleTask `0x17814c` every
+  ≥ 16 ms), so the waveform moves in whole pixels at irregular moments — judder, more visible at
+  60 fps (at zoom 16 a 1-pixel step every ~107 ms).
+- **SMOOTH.**
+  1. `0x177cfc(d)` (Ui_CycleTask's per-deck playhead update) is detoured to timestamp each new
+     playhead (`*(0x294e03c + d*0xb4)`, ms) and keep a position/velocity estimate (snaps on
+     jumps > 60 ms, stops after three unchanged updates, extrapolates ≤ 100 ms).
+  2. `0x1cb58c(d)` is detoured: after it, the column is recomputed from the estimate at the
+     current time, P = clamp(ms · 0.15, 0, count) / zoom; its whole part goes to `+0x0c` (within
+     8 columns of rbp's own value), the fraction is kept.
+  3. `0x1cb3c4(d)` (the cue-icon overlay, the last step before the playhead line) is detoured:
+     after it, the deck's rows are shifted left by the fraction (1/32 steps, RGB565 blend of
+     neighbours). rbp mirrors rows 61..5 into 62..118, so only rows 0–61 and 119–123 are blended
+     and the mirror is copied. Waveform, beat ticks and cue icons glide together; the playhead
+     line stays sharp.
+- **Cost (emulator, both decks playing, waveform view):** ~36 fps vs ~39 fps with ORIGINAL, xruns
+  about the same (4 vs 3 a minute). A first, unoptimised version (blending all 124 rows) cost
+  8 xruns a minute.
+- Not done: tearing (the canvas is blitted to a front-only framebuffer, `0x13d884` →
+  `0x140ef8`; a vsync-timed blit via `FBIO_WAITFORVSYNC` could fix it) — not observable in the
+  emulator, needs the real unit.
 
-- **WAVEFORM SCROLL: ORIGINAL / SMOOTH** — a UTILITY row, **SMOOTH by default** (factory reset →
-  SMOOTH). Theirs scrolls the detail waveform smoothly instead of in whole-column steps, and times
-  the frame copy to the display refresh (it starts ~4.5 ms before it) against tearing. No
-  implementation detail is published: to research from the detail renderer `0x1cd0f8` / the
-  start-column computation `0x1cb58c` (the playhead → entry index × zoom), the canvas `*0x10f0248`
-  and the frame copy in the display path.
-- **BEAT JUMP** — a UTILITY row, **OFF by default (opt-in)**. Theirs: SHIFT + AUTO BEAT LOOP
-  switches the pads to beat jump, back/forward 1–32 beats. To research: the pad/loop handlers, the
-  beat grid (`B+0xc`/`+0x10`, §9) and the player's seek.
+## 10a. `beatjump` — BEAT JUMP on the pads ✅ (emulator)
+
+UTILITY → **BEAT JUMP** = **OFF (default)** / ON; **BEAT JUMP A** (4 BEATS), **BEAT JUMP B**
+(16 BEATS): 1–32. **Credit:** beat jump on the XDJ-RX's pads (SHIFT + AUTO BEAT LOOP) comes from
+[JaNeinHub/XDJ-RX-Mod](https://github.com/JaNeinHub/XDJ-RX-Mod) (GPL-3.0); independent
+implementation.
+
+- **Use.** SHIFT + BEAT LOOP switches a deck's pads to beat jump (BEAT LOOP blinks, the pads
+  light); HOT CUE, BEAT LOOP or LOOP SLICE switch back to rbp's pad modes. Pad A / B = back /
+  forward by A, pad C / D = back / forward by B. The jump keeps the position within the beat and
+  keeps playing.
+- **Keys.** Every deck key reaches `ui::PlayerInnards::onKey` `0x236784` (vtable slot
+  `0x421f08`; KeyEvent `+8` code, `+0xb` low nibble 0 press / 2 release; PlayerInnards `+0x26`
+  deck 1/2, `+0x34` SHIFT held, `+0x80` held-pad list). The slot points at our handler (checked
+  word patch), which takes SHIFT + BEAT LOOP and, in beat jump mode, the pads (press and
+  release, so rbp's held-pad list stays consistent) and passes the rest on. SHIFT + BEAT LOOP
+  does nothing in stock firmware, and the RX has no other beat jump control.
+- **Jump.** Position `PlayEngine::getPosition 0x4410c` (samples at 44.1 kHz); target from the
+  deck's beat grid (waveform block `0x28d78a0 + d*0x2ee1c`: `+8` has grid, `+0xc` beats,
+  `{u32 ms, u32 beat#}` from `+0x10` — the engine's own grid `0x6cb38(player)` agrees: beat
+  1 at 6 ms, beat 2 at 326 ms on the test track), else rbp's detected BPM (`0x5e1e8`/`0x5e200`),
+  else 120 BPM; then `Player::jump 0x6b274(player, samples)` — the call a hot cue makes.
+- **LEDs.** The panel LED encoder `0x21e6fc` is detoured; for a deck in beat jump mode its TX
+  byte `0x02 + 4d` gets pads A–D on and BEAT LOOP blinking (`.1`), the other pad-mode LEDs off.
+- **HOT CUE E-H** (UTILITY → **HOT CUE E-H** = **OFF (default)** / SHIFT+PAD), in the same
+  key handler: in HOT CUE pad mode (not in beat jump mode), SHIFT + pad A–D plays hot cue E–H
+  of the loaded track, exactly as a hot cue press (quantize, start from a pause, hot loops,
+  SLIP). The engine has room for hot cues 1–4 only (64-byte cue records, LoopQuantize slots
+  1–4; ids 5..8 would overrun them), so E–H borrow the pad's slot for the duration of one call:
+  the PcmReader's getCue (vtable slot `0x35db78`, stock `0x3d384` = `*(pcm+0xb4) + id*64`) is
+  pointed at our version, which — only on the calling thread, only during the call, only for
+  that reader and slot — returns a copy of the slot's record with the E–H position (`+0x20`
+  samples at 44.1 kHz, `+0x24` loop end or −1). The stock `DjEngineIF::playHotCue 0x544f0(dj,
+  deck, id, 1, 0)` does the rest; on release, SLIP's return (`0x55ea8`) runs in the same
+  window. Press and release are swallowed, so rbp's held-pad list stays consistent. While SHIFT
+  is held, the pads that have an E–H cue light (TX byte `0x02 + 4d`, `.7` = pad A). A pad
+  whose E–H cue doesn't exist keeps the stock SHIFT + pad (delete that hot cue). Positions come
+  from the waveform mod's PCO2 cache (`wf_hot_cue()`).
+- Beat jump and E–H share the onKey slot and the LED hook (one module): SHIFT + BEAT LOOP
+  toggles beat jump; in beat jump mode the pads are beat jump's, otherwise SHIFT + pads are
+  E–H's.
+- **Verified (emulator):** with a grid, 4 beats = exactly 1280 ms at 187.5 BPM; without one
+  (rekordbox exports with an empty PQTZ), the detected BPM (1512 ms per 4 beats at ~159 BPM);
+  back and forward on both sizes; LED byte `0xfa` in the TX frame. Open: SYNC/loop/SLIP
+  interplay, which beat-jumps like a hot cue call (a loop isn't moved). E–H: SHIFT + pad A /
+  D jumped to E (0:09.4) / H (2:24.8) while playing; with SHIFT held the pad LEDs read `0xf4`
+  (four E–H cues + the HOT CUE LED).
+
+## 10c. `keys` — Camelot key display 🔬 (partial; not in 3.00)
+
+UTILITY → **KEY DISPLAY** = **CLASSIC (default)** / CAMELOT ("8A" instead of "Am").
+- rbp's key index (1..24) is already in Camelot order: n → number (n + 1) / 2, A for odd n, B
+  for even (1 = 1A = Abm … 24 = 12B = E); `0x10687c` (the harmonic query builder) computes the
+  same codes.
+- Displayed key text comes from: the index → UTF-16 name table `0x462dd8` (24 pointers in
+  `.data`; the track-info builder `0x1e0df8`, the harmonic "matching keys" labels `0x1065a8`) —
+  CAMELOT points it at our strings, CLASSIC restores rbp's; and the library's key names, fetched
+  by `0x139c4c(category, id, u16 **out, flag)` (category 10 = djdbKey; browser KEY lists and key
+  columns) — detoured: the name goes through rbp's own parser (`0x105e84` → `0x106e68`, every
+  spelling it knows) and is replaced by the Camelot string (the pool free `0x1158f8` ignores
+  non-pool pointers). Its 16-entry name cache (`0x1080f2c`, stride `0x110`) is cleared on change.
+- The parsers (`0xdec0c`, `0x106e68`), harmonic matching, the sort tables and anything written
+  back use the names directly and stay classic; nothing on the stick changes.
+- **Not covered (open):** the deck panel's key on the main screen (next to the key icon) — no
+  string path found: neither name table feeds it at render time, possibly key glyph images
+  chosen by index (needs a live trace of the element setters `0x12890c` / text widgets
+  `0x13d484`); track lists with a KEY column read the name straight from the library
+  (`0x1134bc` case 0xC, `0x31a538(row, 1)` at `0x113d24`); the KEY breadcrumb `0x105590`
+  (request 0x3603). These stay classic.
+- **Verified (emulator):** the browser's KEY category lists 1A, 1B, 2A, …
+
+## 10b. Large libraries (1000+ tracks) 🔬
+
+Report: rbp unstable / glitchy with 1000+ track playlists on big sticks (static analysis; to be
+measured live).
+- **How the library is read.** DeviceSQL opens `export.pdb` with plain `open` (`0x321558`) and
+  reads 4 KB pages with lseek/read on demand — no mmap, no whole-file read. Config
+  `"INIT_CLOSED=T,PGA=SINGLE,PAGESZ=4096,NBUFS=1536"` (`0x40f2d4`): a page cache of up to ~6 MB
+  per open database.
+- **One fixed 32 MiB pool for all of it.** DeviceSQL and ~444 app call sites allocate from
+  `edbmalloc` (`0x1157a8`), a first-fit pool `malloc(0x2000000)`ed once (`0x1159b8`; control
+  block `0x18266ec`: size, free bytes `+0x10`, …). **When it runs out the engine calls a NULL
+  handler — a jump to address 0, a crash** (`0x3158fc`), after printing `edbmalloc NG! memory_allocate error`.
+- **Browse lists** are built by the DB tasks, not the GUI thread: a 50,000-row list (20 B/row,
+  ~1 MB, allocated up front; cap 65,000), O(N log N) heap sort; sorting by artist/album/genre/…
+  does an index lookup per row (random 4 KB page reads). No 1000/2000/5000 limits.
+- **System.** 256 MB, no swap; rbp's BSS is ~37 MB (12 MB of it memset, always resident); the DB
+  tasks are real-time threads and `apl_start` disables RT throttling
+  (`sched_rt_runtime_us=-1`), so long per-row loops over big playlists can starve other threads
+  (a likely source of "glitchy"); no `oom_score_adj`, no watchdog; `/tmp` is a 512 KB tmpfs.
+- **Obvious, low-risk changes (not made yet — measure first):** an engine out-of-memory handler
+  instead of the NULL jump (`0x315994`'s setter, re-implemented); a larger pool (`0x1159b8`
+  `mov r3, #0x2000000` → 48/64 MiB) if the pool is the limit; pre-reading `export.pdb` at mount
+  (warm page cache); `vm.min_free_kbytes` 6–8 MB in `apl_start`; `-o kernel_cache` for exFAT.
+  Not recommended without evidence: demoting the DB threads, dropping `O_SYNC`, a different
+  allocator.
+- **Measured (emulator, 256 MB, 3.00 + a temporary logger inside rbp):** synthetic exports
+  made with baken (3,000 tracks / 1.3 MB `export.pdb`; 10,000 tracks / 4.7 MB with playlists of
+  100–10,000), browsed: playlists, TRACK / ARTIST / ALBUM / KEY lists, scrolling all of them,
+  loads on both decks.
+  - Memory: idle rbp 134 MB resident, system 20 MB free + 53 MB page cache. With the 10,000-track
+    stick mounted and every list opened and scrolled: rbp 143 MB, pool 10.8 MB used of 32 MiB
+    (3,000 tracks: 7 MB), 3–4 MB free + 58 MB page cache, no `edbmalloc NG`. **The pool is
+    nowhere near full and the system isn't out of memory**, so a larger pool buys nothing and
+    would only take RAM from the page cache.
+  - CPU: idle ~9 xruns/min (emulator baseline). The first fast scroll through the cold
+    10,000-row TRACK list: 76 xruns in 100 s; the same scroll over cached rows: 16 (20 fps UI)
+    and 21 (60 fps UI) — the 60 fps mod isn't the cause. During list browsing gui_task uses
+    ~18–29 % of a core and the DB tasks (`DBComm_Tsk`, `DBSMain_Tsk`, RR 18–21) ~4 % each; the
+    audio thread `JuceALSA` is FIFO 99. The glitches come with **first-time `export.pdb` page
+    reads** (in the emulator the USB stack itself costs host CPU, so the real unit may differ).
+  - Obvious next step: pre-read `export.pdb` into the page cache at mount (a few MB), so the
+    first browse reads from RAM. Copying a 2 GB image with ~40,000 small files is slow on macOS
+    (`cp` walks the sparse extents): use `cp -c` (clone).
 
 ## 11. OneLibrary 🔬 (low priority)
 
@@ -438,42 +617,70 @@ means following their licences (source offer / notices):
 | `exfat` | musl libc (static) | MIT |
 | `flac` | [dr_flac](https://github.com/mackron/dr_libs) v0.13.5 | public domain / MIT-0 |
 
-## 13. Distribution: a delta patch, not a firmware image
+## 13. Distribution: a patch file + `xdjrx-patcher`
 
-The 3.00 release is distributed as a **patch against the stock 2.21 `.UPD`** plus a small patcher:
-the user supplies Pioneer's official image, the patcher outputs 3.00. Pioneer's firmware is never
-redistributed. Design:
+Users get the release from Pioneer's official 2.21 firmware, a small patch file and a
+command-line tool; Pioneer's firmware is never redistributed.
 
-- **Patch = only our content.** The mods already produce an overlay (§1). `xdj fw mkpatch BASE
-  OVERLAY` turns it into a patch file: new files verbatim (ours), and every edited Pioneer file as
-  line operations against the base (insert / replace / delete at line N) that carry only our new
-  lines plus the sha256 of the base file — no Pioneer text. Binary Pioneer files can't be edited by
-  a patch (none are). Plus metadata: base `.UPD` sha256, release `3.00`, the expected output sha256.
-- **Patcher = `xdj fw patch STOCK_2.21.UPD MODS.xdjpatch -o XDJRX.UPD`** (and a menu item in the
-  desktop app): verify the base, decrypt, apply, rebuild, encrypt, verify the output hash. No
-  Docker or shell needed on the user's side.
-- The `.UPD` is AES-encrypted with Pioneer's key, which we can't ship either: the patcher gets it
-  the way the app does (the user's key file, or derived from Pioneer's published GPL source by
-  `tools/fetch_key.py`).
-- Needs a deterministic build: done — `SOURCE_DATE_EPOCH` fixes the mtimes `xdj` gives new and
-  changed files, the containers are written in a stable order, the toolchains are pinned (§1); the
-  patcher checks the output against the 3.00 MD5/sha256.
+```
+xdjrx-patcher  ORIGINAL.UPD  PATCH.xdjpatch  [--key KEY]  [-o OUT.UPD]
+```
+
+- **ORIGINAL**: the official `XDJRX.UPD` 2.21, or the zip Pioneer distributes it in; checked by
+  MD5 (`e1facfb82de17b2544e958ca544e00c4`, zip `c1ee67884f120e4cd8d4ffd6b9ad73eb`).
+- **PATCH** (`xdjrx-3.00.xdjpatch`, ~310 KB): an uncompressed tar of `manifest.json` +
+  `files/<part>/<path>`. Made by `tools/fw/make-patch.py` from `build/release` (after
+  `tools/fw/build-release.sh`): the release's new files as they are (ours: `libxdjmod.so`,
+  `mount.exfat-fuse`, `xdj_is_exfat`, with their modes) and, for the two Pioneer files the mods
+  edit (`apl_start`, the USB mount rules), **line edits that carry only our text** — whole lines
+  inserted, or text inserted inside a line — with the SHA-256 of the original and of the result;
+  a change that isn't an insertion is refused, so no Pioneer text ends up in the patch. The
+  manifest also has the release (3.00), `SOURCE_DATE_EPOCH`, the input MD5s and the expected
+  output MD5.
+- **KEY** (optional): 64 hex characters, or a key file. Without it the patcher downloads
+  Pioneer's public GPL source release for the XDJ-RX (two deflate64 ZIPs, ~280 MB) and derives
+  the key from `initramfs/usr/local/pioneer/aes256.key` (as `tools/fetch_key.py`), asking for
+  it only if that fails. `$XDJRX_AES_KEY` also works.
+- **What it does:** decrypts the original (the key is checked: ISO9660 must appear), unpacks the
+  two edited files, applies the edits and checks their hashes, writes the overlay (new files'
+  modes in each part's `.xdj-modes`, so Windows builds the same bytes as macOS/Linux), sets
+  `SOURCE_DATE_EPOCH` and rebuilds with `xdj_fw::fwbuild::build` + `firmware::pack` — the same
+  code as `build-release.sh`. The result is written only if its MD5 is the manifest's
+  (`5492b333f6eb4b853cb7cfa113c48659` for 3.00); default output `XDJ-RX 3.00/XDJRX.UPD` next
+  to the original. Run without arguments, it asks for the two files (drag and drop) and waits
+  for Enter at the end (double-click use on Windows).
+- **Code / builds:** `crates/xdjrx-patcher` (Rust; `xdj-fw`, `ureq` + rustls, `zip`
+  deflate64, `tar`, `md-5`, `sha2`). `tools/fw/build-patcher.sh` → `dist/patcher/`:
+  `xdjrx-patcher-macos` (universal), `-linux-x86_64` / `-linux-arm64` (static musl, Docker),
+  `-windows-x86_64.exe` (MinGW, Docker).
+- **Why not a standard delta format** (xdelta3 / VCDIFF, BPS): the `.UPD` is AES-256-CBC per
+  512-byte sector (IV = sector number), so unchanged sectors at unchanged positions encrypt
+  identically — but the rebuild repacks and shifts the root filesystem and the app archive.
+  Measured: an xdelta3 patch 2.21 → 3.00 is 48.3 MB, 99.9 % of it the new image's bytes
+  (48,254,319 ADD vs 64,161 copied): the patch would be the whole firmware, decryptable with the
+  publicly derivable key. A delta-friendly rebuild (Pioneer's sectors kept in place) is possible
+  in principle but the gzip archive and cramfs make it uncertain; the patcher avoids the
+  question.
 
 ## 14. Plan
 
-1. ✅ xdjmod framework: gate, patch helpers, `xdjmod.conf`, UTILITY rows (before VERSION No.),
-   factory-reset hook.
-2. ✅ FPS mod with real-time timers + UTILITY row; emulator benchmark. Open: real-time-playback
-   benchmark, on-screen timer check, factory reset live test.
-3. ✅ WAV float / 32-bit / hi-res + the 24-bit fix (emulator). Open: AIFF.
-4. ✅ RGB / 3-band waveforms (own implementation, inspired by JaNeinHub/XDJ-RX-Mod) + UTILITY row (emulator).
-5. ✅ FLAC, with Vorbis-comment tags and artwork (emulator).
-6. ✅ Release 3.00, reproducible (§1).
-7. Waveforms for folder tracks (§9).
-8. WAVEFORM SCROLL (SMOOTH default) and opt-in BEAT JUMP, credited to JaNeinHub (§10).
-9. OneLibrary — nice to have, for when export.pdb goes away; not now.
-10. Delta patch + patcher (§13).
+1. ✅ xdjmod framework: gate, patch helpers, `xdjmod.conf`, UTILITY rows (before VERSION No.,
+   in a fixed module order: `core.c` `MODULE_ORDER`), factory-reset hook.
+2. ✅ FPS mod with real-time timers + UTILITY row; emulator benchmark.
+3. ✅ WAV float / 32-bit / hi-res + the 24-bit fix. Open: AIFF beyond stock.
+4. ✅ RGB / 3-band waveforms (inspired by JaNeinHub/XDJ-RX-Mod) + UTILITY row; 3-band byte order
+   and weights matched to rekordbox.
+5. ✅ FLAC, with Vorbis-comment tags.
+6. ✅ WAVEFORM SCROLL (SMOOTH), BEAT JUMP (opt-in), [FOLDER] lists Contents, hot cues A–H in
+   colour, HOT CUE E-H on SHIFT + pads (opt-in), safe start.
+   Later: KEY DISPLAY Camelot — the browser part works (`tools/fw/mods/keys`); the deck panel's
+   key needs a live trace first (§10c).
+7. ✅ Release 3.00, reproducible (§1).
+9. Open: smooth scroll checked by eye; pre-reading `export.pdb` at mount for big libraries (§10b).
+10. On the real unit (after the emulator): CPU of SMOOTH and FLAC decode, tearing, big libraries.
+11. OneLibrary — nice to have; not now.
+12. ✅ Patch file + `xdjrx-patcher` for macOS, Linux and Windows (§13).
 
-Defaults (and factory-reset values) are the improvements — 60 fps and 3-band — so they show right
-after the update; the stock behaviour is one UTILITY setting away. Everything is proven in the
-emulator before anything is installed on a real unit.
+Defaults (and factory-reset values) are the improvements — 60 fps, 3-band, smooth scrolling —
+so they show right after the update; behaviour-changing features (BEAT JUMP) are opt-in.
+Everything is proven in the emulator before anything is installed on a real unit.
