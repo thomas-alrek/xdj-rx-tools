@@ -16,6 +16,8 @@ index `docs/releases.md` (linked at the top of the README).
 2. Boot test on a **wiped** emulator unit (delete the test unit's `nand-flash.img` +
    `provisioned.stamp`, power on → stock 2.21 is provisioned, then install the release).
    Must show `### xdjmod: loaded into rbp … N module(s)` and UTILITY → VERSION No. = the release.
+2a. Stress test that unit for hours: `tools/test/stress.py --until HH:MM` (skill
+   `stress-test-firmware`); every `build/stress/crashes/NNN/` must be explained before release.
 3. Screenshots for the release notes → `docs/img/` (from that unit, so they show the release
    number; no test builds; no "EMERGENCY LOOP" — reboot or don't swap sticks with a track loaded).
 4. `python3 tools/fw/make-patch.py` → `build/patch/xdjrx-<rel>.xdjpatch` (~300 KB: our files +

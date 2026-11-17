@@ -39,7 +39,8 @@ preservation on owned hardware.
   (QEMU 11.1.0, `--disable-libssh`). SD-card test bed: `build-nand.py`/`.sh`, `cramfs_extract.py`, `watch.sh`.
 - `tools/` — `xdj-panel/` (`panel.html`, `logs.html`, `server.py` = the dev panel server kept identical
   to `panel.rs`, `test_panel_parity.py`, `debug/` RE helpers: `relaunch.sh`, `rsp.py`, `tables.py`,
-  `mon.py`, `ser.py`, `inj.py`, `ledprobe.py`, `sweep_*.py`), `test/regress.py`, `fw/make-test-upd.sh`, `fw/build-custom-upd.sh` + `fw/mods/<mod>/apply.sh` (feature mods),
+  `mon.py`, `ser.py`, `inj.py`, `ledprobe.py`, `sweep_*.py`), `test/regress.py`, `test/stress.py`,
+  `test/make-test-sticks.sh` (generated test sticks `test/usb/gen_*.img`), `fw/make-test-upd.sh`, `fw/build-custom-upd.sh` + `fw/mods/<mod>/apply.sh` (feature mods),
   `fetch_key.py` (the AES key), `net/install-vmnet-bridge.sh` (optional LAN bridge), `build-rb-usb.sh`, `requirements.txt` (dev-tool Python deps).
 - `packaging/` — `build-macos-app.sh` (→ `dist/XDJ-RX.app`), `collect-licenses.py`.
 - `docs/` — `subucom-frame-map.md` (**authoritative control map**), `subucom-led-map.md`,
@@ -103,12 +104,13 @@ preservation on owned hardware.
 - Reverse-engineer `rbp` → **`rbp-binary-internals`**.
 - `.UPD` format → **`upd-firmware-format`**; build/install custom firmware → **`custom-firmware`**;
   feature mods (xdjmod framework, test loop, the reproducible 3.00 release `tools/fw/build-release.sh`)
-  → **`firmware-mods`** (`docs/firmware-mods.md`); releases, the patch file and the patcher →
+  → **`firmware-mods`** (`docs/firmware-mods.md`); hours-long stress test of a firmware + the generated
+  test sticks → **`stress-test-firmware`**; releases, the patch file and the patcher →
   **`release-patcher`** (`docs/releases.md`).
 - QEMU device models and patches → **`qemu-imx6-patches`**; the SD test-bed image → **`build-xdj-sd-image`**.
 - Desktop app (shell, host, packaging) → **`build-xdj-app`**; the virtual panel → **`xdj-virtual-panel`**.
 - Tests (`docs/testing.md`): `cargo test --release` (crates/xdj-fw), `tools/xdj-panel/test_panel_parity.py`
-  (after touching `panel.rs` or `server.py`), `tools/test/regress.py` (end to end; `--app` for the bundle).
+  (after touching `panel.rs` or `server.py`), `tools/test/regress.py` (end to end; `--app` for the bundle), `tools/test/stress.py` (before a firmware release).
 
 ## Gotchas
 - TCG boots are load-sensitive: close REA/Ghidra before booting; don't run two emulators at once

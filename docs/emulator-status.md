@@ -180,6 +180,11 @@ handshake — [service-modes.md](service-modes.md).
 ## Known limitations and open items
 - **Test mode flake**: about 1 boot in 8 comes up in the normal UI although both keys are in every
   frame from the first — rbp-side timing ([service-modes.md](service-modes.md#test-mode)).
+- **USB hub chip not modelled**: `apl_start` configures the SMSC USB2512B hub over I2C bus 0
+  (slave `0x2c`, ~30 `i2cset` writes in `versionup/setup_usbhub.sh`). Nothing answers there, so
+  each write waits for a timeout; usually that adds nothing noticeable, but on a busy host the step
+  can stall the boot for minutes before `#### Application Start!! ###`. Anything timed from
+  power-on (holding a key through the boot) must last until `#### Application Start!! ###`.
 - **NAND unit root shell**: the serial getty needs the stock root password (not recovered); use the
   SD test bed (same `rbp`/kernel) for shell-level debugging.
 - **u-boot is not executed**: boot blobs are built host-side (`xdj prepare`, `xdj nand boot`); the

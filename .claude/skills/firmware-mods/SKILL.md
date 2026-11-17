@@ -55,8 +55,10 @@ images are pinned by digest (`preload/build.sh`, `exfat/build-exfat-fuse.sh`).
 
 ## Safe start
 Holding MIDI (top panel) from power-on starts rbp without `LD_PRELOAD` (`apl_start`, edited by
-`preload/apply.sh`, reads `gpio -i 6 1`). Emulator: power on, then `press midi` with `hold_ms`
-~40000 *after* QEMU is up (a hold sent while powered off never reaches the board).
+`preload/apply.sh`, reads `gpio -i 6 1` right after `+++ attach_usbhub +++`). Emulator: power on,
+once the console shows output `POST /mainkey 161` (held), release with `POST /mainkey_release`
+after `#### Application Start!! ###` (a hold sent while powered off never reaches the board; a
+fixed hold time is not enough - the unmodelled USB hub I2C setup can stall a boot for minutes).
 
 ## Test loop (never on the app's unit, never on a real unit first)
 1. Build: `tools/fw/build-custom-upd.sh 2.NN <mods>`.
@@ -72,8 +74,13 @@ Holding MIDI (top panel) from power-on starts rbp without `LD_PRELOAD` (`apl_sta
 5. USB: `POST /usb "usb1 <copy of img>"`; drive via MCP (`POST :18765/mcp`: `browse`,
    `press browse_push`, `screenshot`, `console`). Audio: analyse the recorded `out.wav`.
 6. Only then leave the build in `build/custom-upd` / tell the user which release is safe.
+7. Before a release: `tools/test/stress.py --until HH:MM` on that host (skill
+   `stress-test-firmware`, docs/testing.md).
 
-Test sticks: `mods/flac/make-flac-test-image.sh` (tagged FLAC tones + WAV/MP3 controls),
+Test sticks: **`tools/test/make-test-sticks.sh [--big]`** builds all of them from synthetic audio
+(`test/usb/gen_*.img`: exFAT + FAT32 rekordbox libraries with grids and coloured hot cues A–H,
+FLAC and WAV folders, `--big` a 10,000-track library; ~1 min, ~4 with `--big`). Per mod:
+`mods/flac/make-flac-test-image.sh` (tagged FLAC tones + WAV/MP3 controls),
 `mods/wav/make-wav-test-image.sh`, `mods/exfat/make-exfat-image.sh`,
 `mods/make-feature-test-image.sh XML [PLAYLIST]` (exFAT + rekordbox export via baken).
 

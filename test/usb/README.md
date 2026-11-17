@@ -6,6 +6,10 @@ whole-disk image (MBR + FAT32/exFAT partition), not a folder. `tools/xdj-panel/d
 and `tools/test/regress.py` use the first `test/usb/*.img` (regress.py loads a copy).
 
 ## Making one
+- **Generated, no music needed:** `tools/test/make-test-sticks.sh [--big]` → `gen_lib_exfat.img`,
+  `gen_lib_fat32.img` (rekordbox libraries with grids and coloured hot cues A–H), `gen_flac.img`,
+  `gen_wav.img`, `gen_big10k.img` (10,000 tracks). The stress test and the mod tests use these;
+  details in [docs/testing.md](../../docs/testing.md#test-sticks-toolstestmake-test-stickssh).
 - From a rekordbox collection, without a stick: `tools/build-rb-usb.sh` (see its header).
 - From a stick you exported to with rekordbox (macOS):
   ```sh

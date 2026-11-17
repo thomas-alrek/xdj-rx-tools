@@ -196,10 +196,12 @@ Hold **MIDI** (top panel) from power-on until the splash: rbp starts **without `
 the stock rbp, no mods at all (no mod rows in UTILITY; VERSION No. still shows the installed
 release). For when a mod misbehaves; the settings in `xdjmod.conf` are untouched. `apl_start`
 (edited by `preload/apply.sh`) reads the key with the firmware's own `gpio -i 6 1` (GPIO 161 =
-GPIO6_IO01; prints 1 idle, 0 pressed) right before it starts rbp and logs `### xdjmod: MIDI held:
-starting without mods (safe start) ###`. MIDI is part of neither test mode (MEMORY + TEMPO RANGE,
+GPIO6_IO01; prints 1 idle, 0 pressed) right before it starts rbp — after the USB hub setup
+(`+++ attach_usbhub +++`), about 19 s after power-on in the emulator — and logs `### xdjmod: MIDI
+held: starting without mods (safe start) ###`. The key must still be down at that moment: a
+release before it boots the mods as usual. MIDI is part of neither test mode (MEMORY + TEMPO RANGE,
 read by rbp) nor update mode (USB STOP + RELOOP/EXIT, read by the initramfs). Verified in the
-emulator: key held → stock rbp; not held → mods load.
+emulator: key held → stock rbp; not held → mods load (also `tools/test/stress.py --safe-starts N`).
 
 ## 4. UTILITY menu rows ✅ (framework)
 
