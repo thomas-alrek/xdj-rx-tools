@@ -25,6 +25,22 @@ Legend: ✅ works · 🔶 partial · ⬜ not started
 ✅ Boots to the live rekordbox deck UI, dual-core (`-smp 2`, the real configuration) by default.
 - **Display** (`xdj-display.c`): the splash renders at 32 bpp, the deck UI at 16 bpp RGB565; the
   scanout reads the live IPU display-channel stride and decodes whichever depth is active.
+- **Panel refresh and raster readout**: the panel runs the kernel's mode
+  (`video=mxcfb0:dev=ldb,800x480M@60` → CVT: 29.5 MHz, 992 × 500, **59.48 Hz, 16.81 ms**; a real
+  unit measures 16.80 ms). The end-of-frame interrupt comes on that free-running clock, and the
+  screen is read out the way the panel does it: top to bottom, in 16-row bands
+  (`XDJ_RASTER_BAND`), each when its rows' time comes. rbp draws into a single front-only
+  framebuffer, so a copy that races the readout **tears** here as on the unit
+  (`XDJ_RASTER=0`: the old instant whole-frame copy, no tearing possible).
+  - **Tear meter** (on demand, like `xdj-fps`): `qom-get /machine xdj-tears` = torn refreshes
+    per second, `xdj-tear-row` = their mean row (-1 none); `XDJ_RASTER_TRACE=1` logs each
+    refresh's bands to stderr (`N` new, `S` changed after it was read, `*` both).
+  - **Measured** (3.00 at 60 fps, a track playing, SMOOTH scroll): ~1 torn refresh per second,
+    mostly between the waveform and the lower deck area; the waveform itself is usually written
+    before the panel reads it. A real unit tears through the waveform (near row 93) on most
+    frames: how soon the drawing thread wakes after the interrupt and how fast it copies are
+    TCG timings, not the hardware's. So the emulator shows *whether* frames can tear and where
+    a fix puts the copy, not the real unit's tear rate.
 - **Vivante GPU** (`xdj-display.c`): the stock `galcore` driver fully initialises (`/dev/galcore`
   exists) and the deck UI renders through it via DirectFB's GAL driver. The stub provides:
   - the GC2000 3D core, a GC320 2D identity (so galcore derives `gcvHARDWARE_2D`) and the GC355
@@ -156,7 +172,7 @@ from its emulated NAND — [firmware-update-and-nand.md](firmware-update-and-nan
 
 ## Custom firmware
 ✅ `xdj fw build` (base image + overlay + `--release`) produces a `.UPD` that Pioneer's updater
-installs on the emulated unit, which then boots it (e.g. 2.21 → 2.30, test mode shows SYSTEM
+installs on the emulated unit, which then boots it (e.g. 2.21 → X.YY, test mode shows SYSTEM
 Ver.2.30) — [custom-firmware.md](custom-firmware.md) (skill `custom-firmware`). Not yet covered:
 kernel/initramfs rebuilding, u-boot and panel-MCU images (carried over untouched), downgrades.
 

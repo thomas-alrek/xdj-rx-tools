@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the custom firmware release (3.00) from the official 2.21 image: every mod, in
+# Build the custom firmware release (3.01) from the official 2.21 image: every mod, in
 # order. Checks the base image's MD5 first and prints the result's; the expected values
 # are in docs/firmware-mods.md §1 (the build is reproducible byte for byte).
 #
@@ -7,8 +7,8 @@
 #     defaults: build/XDJ-RX_v221.zip  build/release
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-REL=3.00
-MODS=exfat,fps,wav,waveform,flac,beatjump,folders
+REL=3.01
+MODS=exfat,fps,wav,waveform,flac,beatjump,keys,folders
 BASE="${1:-build/XDJ-RX_v221.zip}"
 OUT="${2:-build/release}"
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1767225600}"   # 2026-01-01: fixed timestamps

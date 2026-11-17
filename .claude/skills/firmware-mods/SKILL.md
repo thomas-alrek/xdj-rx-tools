@@ -1,6 +1,6 @@
 ---
 name: firmware-mods
-description: Write, build, test and release XDJ-RX firmware feature mods on the xdjmod framework (libxdjmod.so LD_PRELOADed into stock rbp) - hooking rbp with checked word patches and detours, adding native UTILITY menu rows with defaults and factory reset, interposing libc calls, and the emulator test loop (private xdj-host, test sticks, recorded audio, screenshots). Also the reproducible 3.00 release build (tools/fw/build-release.sh, its MD5) and the mods' research (fps, wav, flac, waveform colour / on-device analysis / smooth scroll, beat jump, [FOLDER] filter, large libraries). Use when adding or changing a mod in tools/fw/mods/, debugging a mod that doesn't load or doesn't take effect, or rebuilding/verifying the release.
+description: Write, build, test and release XDJ-RX firmware feature mods on the xdjmod framework (libxdjmod.so LD_PRELOADed into stock rbp) - hooking rbp with checked word patches and detours, adding native UTILITY menu rows with defaults and factory reset, interposing libc calls, and the emulator test loop (private xdj-host, test sticks, recorded audio, screenshots). Also the reproducible release build (3.01) (tools/fw/build-release.sh, its MD5) and the mods' research (fps, wav, flac, waveform colour / on-device analysis / smooth scroll, beat jump, [FOLDER] filter, large libraries). Use when adding or changing a mod in tools/fw/mods/, debugging a mod that doesn't load or doesn't take effect, or rebuilding/verifying the release.
 ---
 
 # Firmware mods (xdjmod)
@@ -10,12 +10,12 @@ Cutting a release, the patch file and `xdjrx-patcher`: skill **[release-patcher]
 Reference: **`docs/firmware-mods.md`** (per-mod research, addresses, status, plan).
 Container/packing: skill [custom-firmware]. rbp analysis: skill [rbp-binary-internals].
 
-## Release 3.00 (reproducible)
+## Release 3.01 (reproducible)
 ```
 tools/fw/build-release.sh          # base build/XDJ-RX_v221.zip -> build/release/XDJRX.UPD
 ```
-= official 2.21 + `exfat,fps,wav,waveform,flac,beatjump,folders`, `SOURCE_DATE_EPOCH=1767225600`. Expected
-MD5s (base zip `c1ee6788…`, output `5492b333f6eb4b853cb7cfa113c48659`, per overlay file) and
+= official 2.21 + `exfat,fps,wav,waveform,flac,beatjump,keys,folders`, `SOURCE_DATE_EPOCH=1767225600`. Expected
+MD5s (base zip `c1ee6788…`, output `42c92c706e8bd870c84199659212c052`, per overlay file) and
 the step-by-step from an unpacked 2.21: docs §1. **Any change to a mod source changes the
 output MD5 — update docs §1 (table + example output) in the same commit**, after boot-testing.
 `xdj` uses `$SOURCE_DATE_EPOCH` for new/changed files' mtimes (`tree::now`); Docker base
@@ -24,19 +24,22 @@ images are pinned by digest (`preload/build.sh`, `exfat/build-exfat-fuse.sh`).
 ## Layout
 - `tools/fw/build-custom-upd.sh REL MODS [BASE] [OUT]` — unpack → each `mods/<m>/apply.sh
   UNPACKED OVERLAY` in order → `xdj fw build` → stick. Test builds: any release above the
-  installed one (the release is 3.00; on a test unit, wipe its NAND to start over).
+  installed one (the release is 3.01; on a test unit, wipe its NAND to start over).
 - `mods/preload/` — the framework. `apply.sh UNPACKED OVERLAY [sources…]` accumulates feature
   sources in `OUT/xdjmod/features.txt`, rebuilds `libxdjmod.so` with all of them (`build.sh`:
   Debian armel gcc in Docker, `-nostdlib --no-undefined` against the **unpacked firmware's own
   `rootfs/lib`**, glibc ≤ 2.13 check) and adds `LD_PRELOAD` to both rbp lines of `apl_start`.
 - A feature = `mods/<f>/<f>.c` + `apply.sh` that calls `../preload/apply.sh "$1" "$2" <f>.c`
   (more sources / headers: list them; only `*.c` are compiled, headers are on the include path).
-- `keys` (KEY DISPLAY Camelot) exists but isn't in the release: the deck panel's key isn't covered (docs §10c).
-- Mods in 3.00: `exfat`, `fps` (UI FRAME RATE), `wav`, `waveform` (`waveform.c` WAVEFORM COLOR +
+- `keys` (KEY DISPLAY Camelot): name table swap, DB name detours, and the deck panel's
+  key - an **image** (imagedata.dat `0x28e`-`0x2df`), remapped through `xm_img_remap` (docs §10c).
+  Not everything on screen is text: dump the GUI images (`tools/fw/gui-images.py dump`) before
+  hunting a string that isn't in memory.
+- Mods in 3.01: `exfat`, `fps` (UI FRAME RATE + `sync.c` SCREEN SYNC), `wav`, `waveform` (`waveform.c` WAVEFORM COLOR +
   hot cues A–H in colour, `scroll.c` WAVEFORM SCROLL), `flac`,
   `beatjump` (BEAT JUMP + HOT CUE E-H on SHIFT + pads — one module: they share rbp's deck key
   handler slot and the LED detour, which can each be taken only once)
-  (BEAT JUMP / A / B), `folders`. Row order = `MODULE_ORDER` in `preload/src/core.c` (add a
+  (BEAT JUMP / A / B), `keys` (KEY DISPLAY), `folders`. Row order = `MODULE_ORDER` in `preload/src/core.c` (add a
   new module's name there).
 
 ## API (`preload/src/xdjmod.h`)
@@ -113,6 +116,14 @@ FLAC and WAV folders, `--big` a 10,000-track library; ~1 min, ~4 with `--big`). 
 - [FOLDER] FLAC is classified as WAV (11): type 5 empties the folder.
 - The folder info panel never draws embedded art (stock MP3 APIC neither) — not a FLAC bug.
 - rbp's deck waveform count runs ~20 entries past the file's PWV3: match tracks loosely.
+- SCREEN SYNC (`fps/sync.c`, docs §5a) is opt-in (default OFF) with a selectable lead: the
+  emulator's guest copy timing isn't the unit's, so only a real unit can pick the lead. In mods,
+  use raw syscalls for clock_gettime/clock_nanosleep (glibc 2.13 has them in librt) and no `__thread`
+  (the library isn't linked for TLS).
+- On LOAD rbp reads `.DAT` (overview → `0x018a2ee4 + d*900`, heights scaled ×35/31 — test with a
+  real export, generated sticks' low heights pass unscaled; track length) at once and fills the
+  detail array only at the end of the load: recognise a deck by its overview first, or the
+  stock look (blue, green A–D) shows until the load completes (`deck_track`, docs §8).
 - [FOLDER] hides PIONEER (always) and Contents (with a library) — the `folders` mod shows Contents.
 - Hot cues: rekordbox puts A–C in the `.DAT`, D–H in the `.EXT` PCOB, all 8 + colours in PCO2;
   stock shows A–D in green. Test stick with 8 coloured cues: `tools/build-rb-usb.sh` from a

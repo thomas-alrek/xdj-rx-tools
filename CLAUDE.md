@@ -77,6 +77,9 @@ preservation on owned hardware.
 - **USB slots are read/write** (no `snapshot`): QEMU write-locks the backing, so one image/stick is
   in one slot at a time (a load moves it from the other slot), an image opened in macOS is
   ejected there first, and failed loads raise a native error dialog. `docs/usb.md` §4.
+- **Tearing**: the panel (59.48 Hz, 16.81 ms) is read out row by row in bands (`xdj-display.c`
+  raster), so rbp's front-buffer copies can tear as on the unit; `qom-get /machine xdj-tears`
+  (torn refreshes/s), `xdj-tear-row`. TCG copy timing ≠ hardware: shows whether, not how often.
 - **Frame rate**: `qom-get /machine xdj-fps` = the guest's presented frames/s (120 Hz framebuffer
   sampler in `xdj-display.c`, on demand); View → FPS shows it. The rekordbox UI runs ~4 fps.
 - **Browse encoder:** ROTATE = 16-bit counter `rbp[0x54]/[0x55]`; PUSH = `rbp[0x5d].4`.
@@ -107,7 +110,7 @@ preservation on owned hardware.
 - Map a control: GPIO → **`map-gpio-control`**; sub-ucom → **`map-subucom-{button,fader,knob,rotary}`**.
 - Reverse-engineer `rbp` → **`rbp-binary-internals`**.
 - `.UPD` format → **`upd-firmware-format`**; build/install custom firmware → **`custom-firmware`**;
-  feature mods (xdjmod framework, test loop, the reproducible 3.00 release `tools/fw/build-release.sh`)
+  feature mods (xdjmod framework, test loop, the reproducible 3.01 release `tools/fw/build-release.sh`)
   → **`firmware-mods`** (`docs/firmware-mods.md`); hours-long stress test of a firmware + the generated
   test sticks → **`stress-test-firmware`**; releases, the patch file and the patcher →
   **`release-patcher`** (`docs/releases.md`).

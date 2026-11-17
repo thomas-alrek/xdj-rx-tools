@@ -7,8 +7,8 @@
 [![Firmware: XDJ-RX 2.21](https://img.shields.io/badge/firmware-XDJ--RX%202.21-black.svg)](#2-get-the-firmware-and-its-key)
 [![Version: 1.0.0](https://img.shields.io/badge/version-1.0.0-brightgreen.svg)](#)
 
-> **Custom firmware 3.00 for the XDJ-RX** — exFAT USB sticks, FLAC, a 60 fps screen, colour
-> waveforms, hot cues A–H and more: **[release notes and install guide](docs/release-notes-3.00.md)**
+> **Custom firmware 3.01 for the XDJ-RX** — exFAT USB sticks, FLAC, a 60 fps screen, colour
+> waveforms, hot cues A–H, Camelot keys and more: **[release notes and install guide](docs/release-notes-3.01.md)**
 > · [all releases](docs/releases.md)
 
 Run the **Pioneer DJ XDJ-RX**'s own, unmodified firmware on your Mac — the real rekordbox UI,
@@ -164,13 +164,13 @@ $X fw repack build/XDJ-RX_v221.zip build/unpacked --release REL -o build/MY.UPD 
 Then *File → Install Firmware Update…* → `build/MY.UPD`. The firmware's update check is only a CRC
 and a model prefix — there is no signature — so Pioneer's updater installs a rebuilt image like an
 official one. Best practices, the overlay workflow and the formats: [docs/custom-firmware.md](docs/custom-firmware.md).
-Feature mods are built from scripts. **Custom firmware 3.00** (exFAT, 60 fps UI, WAV float/32-bit/
+Feature mods are built from scripts. **Custom firmware 3.01** (exFAT, 60 fps UI, WAV float/32-bit/
 ≤ 192 kHz, FLAC with tags, RGB / 3-band waveforms, smooth waveform scrolling, hot cues A–H in
-rekordbox colours (E–H playable on SHIFT + pads), beat jump, rekordbox's Contents folder
+rekordbox colours (E–H playable on SHIFT + pads), beat jump, Camelot keys, rekordbox's Contents folder
 in [FOLDER]; hold MIDI at power-on for a stock start) is `tools/fw/build-release.sh`: the
-official 2.21 image in, a reproducible `XDJRX.UPD` out (MD5 `5492b333f6eb4b853cb7cfa113c48659`). Users get it with **`xdjrx-patcher`**
-(`crates/xdjrx-patcher`; Windows, macOS, Linux): Pioneer's official file + a small `.xdjpatch` → 3.00, MD5-verified. Features and install guide:
-[docs/release-notes-3.00.md](docs/release-notes-3.00.md). Prerequisites, step-by-step from an unpacked
+official 2.21 image in, a reproducible `XDJRX.UPD` out (MD5 `42c92c706e8bd870c84199659212c052`). Users get it with **`xdjrx-patcher`**
+(`crates/xdjrx-patcher`; Windows, macOS, Linux): Pioneer's official file + a small `.xdjpatch` → 3.01, MD5-verified. Features and install guide:
+[docs/release-notes-3.01.md](docs/release-notes-3.01.md). Prerequisites, step-by-step from an unpacked
 2.21, and every mod's research: [docs/firmware-mods.md](docs/firmware-mods.md).
 Never commit firmware contents.
 
@@ -193,7 +193,7 @@ Never commit firmware contents.
 | [docs/standalone-app.md](docs/standalone-app.md) | the desktop app: architecture, provisioning, power, packaging, debugging |
 | [docs/custom-firmware.md](docs/custom-firmware.md) | building, installing and verifying custom firmware |
 | [docs/releases.md](docs/releases.md) | custom firmware releases (index) |
-| [docs/release-notes-3.00.md](docs/release-notes-3.00.md) | custom firmware 3.00: features, settings, install guide, going back to stock |
+| [docs/release-notes-3.01.md](docs/release-notes-3.01.md) | custom firmware 3.01: features, settings, install guide, going back to stock (3.00: [notes](docs/release-notes-3.00.md)) |
 | [docs/firmware-mods.md](docs/firmware-mods.md) | feature mods (exFAT, hook library, FPS, WAV/FLAC, waveforms, OneLibrary) and their research |
 | [docs/emulator-status.md](docs/emulator-status.md) | what works, what doesn't, open items |
 | [docs/subucom-frame-map.md](docs/subucom-frame-map.md) | the front-panel control map (every button, fader, knob, encoder) |

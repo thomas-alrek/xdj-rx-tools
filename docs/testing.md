@@ -20,7 +20,8 @@ provisioning; `--keep` keeps the work dir; on failure it is kept anyway, with `h
 - **panel** — MENU *held* 2 s opens UTILITY, a short MENU tap leaves it (a short tap on the home
   screen does nothing — not a bug); rbp's LED stream is live; MCP (`POST /mcp`): handshake, tool
   list, a held `press menu`, a PNG `screenshot`.
-- **usb** — BROWSE, then a panel USB LOAD of `test/usb/*.img` on **USB1** (the browser shows USB1)
+- **usb** — BROWSE, then a panel USB LOAD of a FAT32 library stick (`test/usb/gen_lib_fat32.img`
+  from `make-test-sticks.sh`, else the first non-exFAT `test/usb/*.img`) on **USB1** (the browser shows USB1)
   → the stick's rekordbox library replaces "NO USB". It loads a copy in its work dir: slots are
   read/write, so the fixture stays pristine.
 - **standby** — POWER off while rbp runs → the standby handshake (rbp answers 'S', power cut < 10 s).

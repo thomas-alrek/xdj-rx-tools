@@ -3,7 +3,8 @@
 Put rekordbox-formatted USB disk **images** here (`*.img`, git-ignored —
 they are your own content). QEMU uses an image directly as a raw `usb-storage` disk, so it must be a
 whole-disk image (MBR + FAT32/exFAT partition), not a folder. `tools/xdj-panel/debug/relaunch.sh`
-and `tools/test/regress.py` use the first `test/usb/*.img` (regress.py loads a copy).
+uses the first `test/usb/*.img`; `tools/test/regress.py` uses `gen_lib_fat32.img` (else the first non-exFAT
+image; stock firmware can't read exFAT) and loads a copy.
 
 ## Making one
 - **Generated, no music needed:** `tools/test/make-test-sticks.sh [--big]` → `gen_lib_exfat.img`,

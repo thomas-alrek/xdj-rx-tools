@@ -44,8 +44,8 @@ xdj fw info    XDJRX.UPD                       # model, size, CRC, key check, re
 xdj fw decrypt XDJRX.UPD -o build/x.iso        # -> decrypted ISO9660
 xdj fw unpack  XDJRX.UPD build/unpacked        # ISO tree + rootfs/pioneer/gui/data/user payloads
 xdj fw diff    XDJRX.UPD build/unpacked        # what an edited unpack tree changes
-xdj fw repack  XDJRX.UPD build/unpacked --release 2.31 -o NEW.UPD  # edit-in-place -> new image
-xdj fw build   XDJRX.UPD --overlay DIR --release 2.30 -o NEW.UPD   # custom firmware (below)
+xdj fw repack  XDJRX.UPD build/unpacked --release X.YY -o NEW.UPD  # edit-in-place -> new image
+xdj fw build   XDJRX.UPD --overlay DIR --release X.YY -o NEW.UPD   # custom firmware (below)
 xdj fw pack    modified.iso -o NEW.UPD --model XDJAERO2.21          # raw re-encrypt + footer
 xdj fw stick   NEW.UPD stick.img               # FAT16 USB stick with XDJRX.UPD (to install)
 ```
@@ -76,7 +76,7 @@ D001 screen → `mount_nandupdate` (USB1, `XDJRX.UPD`) → `check_sig` → `decr
 How-to: skill **[custom-firmware]**; full write-up: `docs/custom-firmware.md`.
 **There is no cryptographic signature.** The update's `check_sig` (initramfs, `check_sig.c` +
 `CommonCrc32.c`) only checks the footer CRC32 and that the model string starts with `XDJAERO`;
-it prints the rest as the version ("signature ok. version = 2.30"). The updater's own checks are
+it prints the rest as the version ("signature ok. version = X.YY"). The updater's own checks are
 an md5 of each written partition read back vs its source file, and a version compare
 ("already updated target=%f, release=%f").
 
@@ -90,7 +90,7 @@ as the u-boot env `release`, shown by UTILITY → VERSION No. and test mode) and
 `XDJAERO<release>`. Codecs: `crates/xdj-fw/src/{iso,cramfs,tarball}.rs` (round-trip tests:
 `cargo test --release`, against `build/XDJRX.iso`).
 
-End-to-end check: **`tools/fw/make-test-upd.sh`** builds `build/test-upd/TEST.UPD` (2.30, console
+End-to-end check: **`tools/fw/make-test-upd.sh`** builds `build/test-upd/TEST.UPD` (its own test release number, console
 markers in `rcS` and `apl_start`; the overlay is generated from the unpacked firmware, so no
 Pioneer file is committed) + `stick.img`; install it in update mode with the stick on USB1. **Do not patch `rbp`
 in the emulator workflow** — custom firmware is tested by booting it, so keep stock `rbp`

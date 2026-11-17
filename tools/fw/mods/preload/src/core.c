@@ -39,7 +39,7 @@ void xm_log(const char *fmt, ...)
 
 /* Modules init (and add their UTILITY rows) in this order; others after them, in link
  * order. */
-static const char *const MODULE_ORDER[] = { "fps", "waveform", "scroll", "keys", "beatjump", "wav",
+static const char *const MODULE_ORDER[] = { "fps", "sync", "waveform", "scroll", "keys", "beatjump", "wav",
                                             "flac", "folders" };
 
 static int rank(const struct xm_module *m)
@@ -59,6 +59,8 @@ void xm_register(struct xm_module *m)
     m->next = *p;
     *p = m;
 }
+
+unsigned (*volatile xm_img_remap)(unsigned id);
 
 uint32_t xm_now_ms(void)
 {

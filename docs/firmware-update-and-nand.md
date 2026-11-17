@@ -214,7 +214,7 @@ Firmware 2.21, `XDJ_BOOT_UPDATE=1`, stick on USB1:
 | USER update on NAND | "USER UPDATE ???? to 2.21": PANELCOM, mtd4 uImage (md5 read-back), mtd5, mtd7, mtd9/mtd10 all Success → "Firmware update is complete.", MAIN and SUB 100 % |
 | ALL update (provisioning) | all partitions incl. mtd0 and data written; env `kernel_bank=B`, `release=2.21`, `rev_*`, `update_status=success`, `ubifs_formatted=true` |
 | NAND boot | `rootfs=nand`, UBI data/gui mounted, `rbp` → home screen (2 CPUs) |
-| custom firmware | a rebuilt 2.30 installs as a USER update and boots ([custom-firmware.md](custom-firmware.md) §5) |
+| custom firmware | a rebuilt image installs as a USER update and boots ([custom-firmware.md](custom-firmware.md) §5) |
 
 The regression suite covers provisioning, NAND boot and *Install Firmware Update*
 ([testing.md](testing.md)).

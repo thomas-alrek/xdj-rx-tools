@@ -88,6 +88,12 @@ static int file_info(const char *path, int fd, long long *size, long *mtime)
 #define OV_COLS       300
 #define OV_ROWS       34
 #define OV_ENTRIES    400
+/* deck d's overview data as rbp loads it from the .DAT's PWAV, before anything else of the
+ * track: OV_ENTRIES x {height (PWAV bits 0-4, scaled by 35/31), whiteness (bits 5-7)} at
+ * OV_DATA + d * 900 */
+#define OV_DATA       0x018a2ee4u
+#define OV_DECK_BYTES 900u
+#define TRACK_MS      0x18a4510u         /* per deck: track length, ms */
 
 enum { MODE_BLUE, MODE_RGB, MODE_3BAND };
 static volatile int mode = MODE_3BAND;  /* the default (and factory-reset) choice */
@@ -105,6 +111,8 @@ struct track {
     uint16_t *rgb;                     /* RGB565 per entry, or 0 */
     uint8_t *band;                     /* per entry: low, mid, high bar rows (0..45), or 0 */
     uint32_t used;                     /* LRU stamp */
+    uint8_t ov[OV_ENTRIES * 2];        /* the .DAT's PWAV: height, whiteness (see ov_match) */
+    uint8_t has_ov;
     uint8_t ncue;                      /* hot cues from PCO2 (type 1) */
     struct cue { uint8_t hc, loop; uint32_t ms, end_ms; uint16_t rgb; } cue[8];   /* rgb: RGB565, 0 = none */
 };
@@ -118,6 +126,8 @@ struct deckmatch {
     struct track *t;
     const uint8_t *entries;            /* rbp's entry array when matched */
     uint32_t count;
+    uint32_t len;                      /* the deck's track length (ms) when matched */
+    uint8_t ov_head[8];                /* the start of the deck's overview when matched */
     uint32_t checked_ms;
 };
 static struct deckmatch decks[NDECKS];
@@ -250,9 +260,9 @@ static void parse_hot_cues(const uint8_t *d, size_t len, struct track *t)
         if (!memcmp(d + o, "PCO2", 4) && be32(d + o + 12) == 1) {
             unsigned n = be16(d + o + 16);
             size_t q = o + lh;
-            for (unsigned i = 0; i < n && q + 0x18 <= o + lt && t->ncue < 8; i++) {
+            for (unsigned i = 0; i < n && q + 0x1c <= o + lt && t->ncue < 8; i++) {
                 uint32_t el = be32(d + q + 8);
-                if (el < 0x18 || q + el > o + lt || memcmp(d + q, "PCP2", 4))
+                if (el < 0x1c || q + el > o + lt || memcmp(d + q, "PCP2", 4))   /* through +0x18 */
                     break;
                 uint32_t hc = be32(d + q + 12);
                 uint16_t rgb = 0;
@@ -272,6 +282,32 @@ static void parse_hot_cues(const uint8_t *d, size_t len, struct track *t)
         }
         o += lt;
     }
+}
+
+/* The PWAV (overview) of a .DAT: height (0..31), whiteness per entry. */
+static int parse_pwav(const uint8_t *d, size_t len, uint8_t *ov)
+{
+    if (len < 12 || memcmp(d, "PMAI", 4))
+        return 0;
+    size_t o = be32(d + 4);
+    while (o + 12 <= len) {
+        uint32_t lh = be32(d + o + 4), lt = be32(d + o + 8);
+        if (lt < 12 || o + lt > len)
+            return 0;
+        if (!memcmp(d + o, "PWAV", 4) && lh >= 16 && lh <= lt) {
+            uint32_t n = be32(d + o + 12);
+            if (n != OV_ENTRIES || lh + n > lt)
+                return 0;
+            for (uint32_t i = 0; i < n; i++) {
+                uint8_t b = d[o + lh + i];
+                ov[2 * i] = b & 31;
+                ov[2 * i + 1] = b >> 5;
+            }
+            return 1;
+        }
+        o += lt;
+    }
+    return 0;
 }
 
 static void load_track(const char *ext_path)
@@ -325,6 +361,14 @@ static void load_track(const char *ext_path)
     parse_hot_cues(d, len, &t);
     free(d);
     free(d2);
+    /* the overview, so the deck is recognised as soon as rbp shows it (deck_track) */
+    size_t len3 = 0;
+    snprintf(path2, sizeof(path2), "%.*sDAT", (int)strlen(ext_path) - 3, ext_path);
+    uint8_t *d3 = slurp(path2, &len3);
+    if (d3) {
+        t.has_ov = (uint8_t)parse_pwav(d3, len3, t.ov);
+        free(d3);
+    }
     if (!t.pwv3)
         return;
 
@@ -353,20 +397,33 @@ static int is_ext(const char *path)
     return n > 4 && !strcasecmp(path + n - 4, ".EXT");
 }
 
+/* rbp opens a track's .DAT first, then its .EXT: cache the track at the first of them */
+static void anlz_opened(const char *path)
+{
+    size_t n = path ? strlen(path) : 0;
+    if (n > 4 && n < 256 && !strcasecmp(path + n - 4, ".DAT") && strstr(path, "/ANLZ")) {
+        char ext[256];
+        snprintf(ext, sizeof(ext), "%.*sEXT", (int)n - 3, path);
+        load_track(ext);
+    } else if (is_ext(path)) {
+        load_track(path);
+    }
+}
+
 /* ---- interposers: rbp opens ANLZ*.EXT through one of these ---- */
 FILE *fopen(const char *path, const char *m)
 {
     resolve();
-    if (active && is_ext(path))
-        load_track(path);
+    if (active)
+        anlz_opened(path);
     return real_fopen(path, m);
 }
 
 FILE *fopen64(const char *path, const char *m)
 {
     resolve();
-    if (active && is_ext(path))
-        load_track(path);
+    if (active)
+        anlz_opened(path);
     return real_fopen64(path, m);
 }
 
@@ -377,8 +434,8 @@ int open(const char *path, int flags, ...)
     int m = (flags & O_CREAT) ? va_arg(ap, int) : 0;
     va_end(ap);
     resolve();
-    if (active && is_ext(path) && !(flags & (O_WRONLY | O_RDWR)))
-        load_track(path);
+    if (active && !(flags & (O_WRONLY | O_RDWR)))
+        anlz_opened(path);
     return real_open(path, flags, m);
 }
 
@@ -389,8 +446,8 @@ int open64(const char *path, int flags, ...)
     int m = (flags & O_CREAT) ? va_arg(ap, int) : 0;
     va_end(ap);
     resolve();
-    if (active && is_ext(path) && !(flags & (O_WRONLY | O_RDWR)))
-        load_track(path);
+    if (active && !(flags & (O_WRONLY | O_RDWR)))
+        anlz_opened(path);
     return real_open64(path, flags, m);
 }
 
@@ -416,44 +473,73 @@ static int entries_match(const struct track *t, const uint8_t *e, uint32_t count
     return 1;
 }
 
-/* The cached track shown on deck d, or 0 (then the stock drawing runs). */
+/* rbp scales the PWAV heights (0..31) to h * 35 / 31 for its overview (seen 8 -> 9, 16 -> 18,
+ * 22 -> 24; whiteness unchanged); +-1 allowed for the top heights that weren't seen */
+static int ov_match(const struct track *t, const uint8_t *ov)
+{
+    if (!t->has_ov)
+        return 0;
+    for (int i = 0; i < OV_ENTRIES; i++) {
+        int want = t->ov[2 * i] * 35 / 31, got = ov[2 * i];
+        if (ov[2 * i + 1] != t->ov[2 * i + 1] || got < want - 1 || got > want + 1)
+            return 0;
+    }
+    return 1;
+}
+
+/* The cached track shown on deck d, or 0 (then the stock drawing runs).
+ * Recognised by rbp's data for the deck: the detail entries (complete only once the track has
+ * fully loaded, seconds after LOAD) or, until then, the overview (loaded first, right after
+ * LOAD; all 400 entries match, see ov_match), so the chosen waveform colours and the hot cues
+ * A-H apply from the first frame the track is shown. */
 static struct track *deck_track(int d)
 {
     if (d < 0 || d >= NDECKS)
         return 0;
     uint8_t *blk = deck_block(d);
-    if (!blk)
-        return 0;
-    const uint8_t *e = *(const uint8_t **)(blk + BLK_ENTRIES);
-    uint32_t count = *(const uint32_t *)(blk + BLK_COUNT);
+    const uint8_t *e = blk ? *(const uint8_t **)(blk + BLK_ENTRIES) : 0;
+    uint32_t count = blk ? *(const uint32_t *)(blk + BLK_COUNT) : 0;
+    const uint8_t *ov = (const uint8_t *)OV_DATA + OV_DECK_BYTES * (unsigned)d;
+    uint32_t len = ((volatile uint32_t *)TRACK_MS)[d];
     struct deckmatch *m = &decks[d];
     uint32_t now = xm_now_ms();
-    if (m->t && m->entries == e && m->count == count && now - m->checked_ms < 500)
+    /* re-check at once when the deck's track changes (length, overview, detail), else 2x/s */
+    if (m->entries == e && m->count == count && m->len == len && !memcmp(m->ov_head, ov, 8) &&
+        now - m->checked_ms < 500)
         return m->t;
     m->checked_ms = now;
-    if (!e || !count) {
-        m->t = 0;
-        return 0;
-    }
-    if (m->t && entries_match(m->t, e, count)) {
-        m->entries = e;
-        m->count = count;
-        return m->t;
-    }
+    m->entries = e;
+    m->count = count;
+    m->len = len;
+    memcpy(m->ov_head, ov, 8);
     struct track *found = 0;
+    int nz = 0;                        /* the deck shows an overview */
+    for (unsigned k = 0; k < 8 && !nz; k++)
+        nz = ov[k] != 0;
+    /* the cached track whose overview the deck shows (ov_match), most recent first */
+    struct track *owner = 0;
     pthread_mutex_lock(&lock);
-    for (int i = 0; i < NTRACKS && !found; i++)
-        if (tracks[i].pwv3 && entries_match(&tracks[i], e, count))
+    for (int i = 0; i < NTRACKS && nz; i++)
+        if (tracks[i].pwv3 && ov_match(&tracks[i], ov) && (!owner || tracks[i].used > owner->used))
+            owner = &tracks[i];
+    /* a detail match counts unless the overview identifies another track (a detail array left
+     * over from the previous track while the next one loads must not win); an overview that
+     * matches no cached track - rbp's can differ from the file's PWAV - doesn't veto it */
+#define AGREES(t) (!owner || owner == (t))
+    if (e && count && m->t && entries_match(m->t, e, count) && AGREES(m->t))
+        found = m->t;
+    for (int i = 0; i < NTRACKS && !found && e && count; i++)
+        if (tracks[i].pwv3 && entries_match(&tracks[i], e, count) && AGREES(&tracks[i]))
             found = &tracks[i];
+#undef AGREES
+    if (!found)                        /* still loading: the overview */
+        found = owner;
     pthread_mutex_unlock(&lock);
     if (found != m->t)
         xm_log("waveform: deck %d -> %s", d + 1, found ? found->path : "(no colour data)");
     m->t = found;
-    m->entries = e;
-    m->count = count;
     return found;
 }
-
 
 /* ---- hot cues A-H: E-H shown, all in their rekordbox colours ----
  * rbp shows hot cues A-D only, always green (loops orange): its parser keeps E-H and the PCO2
@@ -487,7 +573,6 @@ static struct track *deck_track(int d)
 #define CUE_LAYER_W0   0xe92d4ff0u        /* push {r4-fp, lr} */
 #define CUE_LAYER_W1   0xe24dd0bcu        /* sub sp, sp, #0xbc */
 #define CUE_SURFACES   0x123cd78u         /* per deck */
-#define TRACK_MS       0x18a4510u         /* per deck: track length, ms */
 #define CUE_BUILD      0x12792cu          /* last marker builder (deck, short *) */
 #define CUE_BUILD_W0   0xe92d4ff8u        /* push {r3-fp, lr} */
 #define CUE_BUILD_W1   0xe1a08001u        /* mov r8, r1 */
@@ -516,6 +601,9 @@ static img_lookup_fn img_lookup_orig;
 
 static void *img_lookup_hook(unsigned id)
 {
+    unsigned (*remap)(unsigned) = xm_img_remap;
+    if (remap)
+        id = remap(id);
     if (id < IMG_OURS || id >= IMG_OURS + NDECKS * 24)
         return img_lookup_orig(id);
     unsigned k = id - IMG_OURS, d = k / 24, c = (k % 24) / 3, v = k % 3;

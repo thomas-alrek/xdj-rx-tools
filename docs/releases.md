@@ -5,7 +5,8 @@ firmware. Each release lists its features, settings and how to install it.
 
 | Release | Based on | Highlights | Release notes |
 |---|---|---|---|
-| **3.00** (latest) | official 2.21 | exFAT USB sticks, FLAC, 60 fps screen, colour waveforms, hot cues A–H in colour (E–H on the pads), beat jump, smooth scrolling | [release notes](release-notes-3.00.md) |
+| **3.01** (latest) | official 2.21 | Camelot keys (KEY DISPLAY), SCREEN SYNC (experimental), colour waveforms and hot cue colours from the first moment of a load; everything in 3.00 | [release notes](release-notes-3.01.md) |
+| **3.00** | official 2.21 | exFAT USB sticks, FLAC, 60 fps screen, colour waveforms, hot cues A–H in colour (E–H on the pads), beat jump, smooth scrolling | [release notes](release-notes-3.00.md) |
 
 > Unofficial and not affiliated with Pioneer DJ / AlphaTheta. Install at your own risk.
 

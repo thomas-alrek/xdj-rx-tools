@@ -304,10 +304,10 @@ static const MemoryRegionOps imx6_tempsense_stub_ops = {
  * vsync / end-of-frame interrupts it waits on.  The driver then falls back to
  * a timeout on every DirectFB page-flip (DSFLIP_WAITFORSYNC) and on display
  * enable, which makes the UI crawl and stalls boot (~80s).  We model just the
- * IPU Control Module interrupt registers (INT_CTRL/INT_STAT) plus a 60Hz timer
+ * IPU Control Module interrupt registers (INT_CTRL/INT_STAT) plus a refresh timer
  * that asserts whatever interrupts the driver has enabled and pulses the IPU1
  * sync IRQ.  The kernel's chained ipu_sync_irq_handler demuxes and completes
- * the fb waits, exactly as real 60Hz vsync would.
+ * the fb waits, exactly as the panel's real ~60 Hz end of frame would.
  *
  * Register layout recovered from the firmware kernel's ipu_clear_irq /
  * ipu_enable_irq: CM block at IPU1 base + 0x200000; INT_CTRL_n at 0x3C+4*(n-1),
@@ -333,6 +333,32 @@ static uint32_t ipu_int_stat[IPU_NUM_INT_REG];
 static uint32_t ipu_int_seen[IPU_NUM_INT_REG];
 static qemu_irq ipu_sync_irq_line;
 static QEMUTimer *ipu_irq_timer;
+
+/*
+ * The panel's refresh.  The kernel sets the LCD up from the command line
+ * "video=mxcfb0:dev=ldb,800x480M@60" - a CVT mode (fbcvt): pixel clock
+ * 29.5 MHz, 992 x 500 total (480 visible lines + 3 front porch + 17 sync and
+ * back porch), so a line is 33.63 us and a refresh 16.81 ms (59.48 Hz; a real
+ * unit measures 16.80 ms).  The refresh free-runs from panel_epoch: the IDMAC
+ * end-of-frame (EOF) of refresh k comes at panel_epoch + k * PANEL_FRAME_NS,
+ * when the last visible line has been read; the next readout starts 20 lines
+ * later.  The EOF interrupt and the raster readout (xdj_raster_*) both follow
+ * this clock, as the hardware's do.
+ */
+#define PANEL_PIXCLK_HZ  29500000ull
+#define PANEL_HTOTAL     992
+#define PANEL_VTOTAL     500
+#define PANEL_VACTIVE    480
+#define PANEL_LINE_NS    ((int64_t)(PANEL_HTOTAL * 1000000000ull / PANEL_PIXCLK_HZ))
+#define PANEL_FRAME_NS   (PANEL_LINE_NS * PANEL_VTOTAL)
+static int64_t panel_epoch;
+
+/* The first EOF strictly after `now` (QEMU_CLOCK_VIRTUAL ns). */
+static int64_t panel_next_eof(int64_t now)
+{
+    int64_t k = (now - panel_epoch) / PANEL_FRAME_NS + 1;
+    return panel_epoch + k * PANEL_FRAME_NS;
+}
 
 /*
  * We synthesize interrupts for only the primary BG display channel (IDMAC
@@ -363,11 +389,10 @@ static void ipu_sync_update_irq(void)
  * exactly that (edge-triggered), rather than a free-running stream which
  * livelocks the driver's setup.  Armed from register writes (see ipu_cm_write).
  */
-/* schedule one frame's worth of interrupt delivery (~60Hz) */
+/* schedule the interrupt delivery at the panel's next end of frame */
 static void ipu_irq_arm(void)
 {
-    timer_mod(ipu_irq_timer,
-              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + NANOSECONDS_PER_SECOND / 60);
+    timer_mod(ipu_irq_timer, panel_next_eof(qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL)));
 }
 
 static void ipu_irq_fire(void *opaque)
@@ -391,7 +416,7 @@ static void ipu_irq_fire(void *opaque)
     }
     ipu_sync_update_irq();
     /*
-     * Free-run at ~60Hz while the BG channel interrupt stays enabled, so vsync
+     * Free-run at the panel's refresh while the BG channel interrupt stays enabled, so vsync
      * delivery is self-driving.  Without this a new IRQ was only scheduled when
      * the driver wrote an IPU register (ipu_cm_write), so the very first
      * display-enable wait and any DirectFB DSFLIP_WAITFORSYNC page-flip that
@@ -513,57 +538,227 @@ static int xdj_fb_detect_bpp(void)
     return 0;
 }
 
-static bool xdj_fb_gfx_update(void *opaque)
+/*
+ * Read framebuffer rows [y0, y0 + n) from guest memory and convert them to
+ * x8r8g8b8 at dst (dst_stride bytes per row).  With `hash`, also fold the raw
+ * bytes into *hash (FNV-1a over 64-bit words).
+ */
+static void xdj_fb_read_rows(int y0, int n, int bpp, uint8_t *dst, int dst_stride,
+                             uint64_t *hash)
 {
-    DisplaySurface *ds = qemu_console_surface(xdj_fb_con);
-    static int last_bpp = 32;        /* splash is 32bpp until the app switches */
-    uint8_t *dst;
-    int stride, x, y, bpp;
+    int x, y;
 
-    if (!ds) {
-        return false;
-    }
-    dst = surface_data(ds);
-    stride = surface_stride(ds);
+    for (y = y0; y < y0 + n; y++) {
+        uint32_t *d = (uint32_t *)(dst + (size_t)(y - y0) * dst_stride);
+        uint64_t raw[XDJ_FB_WIDTH * 4 / 8];
 
-    bpp = xdj_fb_detect_bpp();
-    if (bpp == 0) {
-        bpp = last_bpp;              /* keep the last known good mode */
-    } else {
-        last_bpp = bpp;
-    }
-
-    if (bpp == 16) {
-        /* RGB565: read each 16bpp row and expand R5G6B5 -> x8r8g8b8. */
-        uint16_t rowbuf[XDJ_FB_WIDTH];
-        for (y = 0; y < XDJ_FB_HEIGHT; y++) {
-            uint32_t *d = (uint32_t *)(dst + (size_t)y * stride);
+        if (bpp == 16) {
+            /* RGB565: read a row and expand R5G6B5 -> x8r8g8b8 */
+            const uint16_t *row = (const uint16_t *)raw;
             address_space_read(&address_space_memory,
                                XDJ_FB_BASE + (hwaddr)y * XDJ_FB_WIDTH * 2,
-                               MEMTXATTRS_UNSPECIFIED,
-                               rowbuf, XDJ_FB_WIDTH * 2);
+                               MEMTXATTRS_UNSPECIFIED, raw, XDJ_FB_WIDTH * 2);
             for (x = 0; x < XDJ_FB_WIDTH; x++) {
-                uint16_t p = rowbuf[x];
+                uint16_t p = row[x];
                 uint32_t r = (p >> 11) & 0x1f, g = (p >> 5) & 0x3f, b = p & 0x1f;
                 r = (r << 3) | (r >> 2);
                 g = (g << 2) | (g >> 4);
                 b = (b << 3) | (b >> 2);
                 d[x] = 0xff000000u | (r << 16) | (g << 8) | b;
             }
-        }
-    } else {
-        /* 32bpp x8r8g8b8 (boot splash): copy a row at a time, forcing alpha. */
-        uint32_t rowbuf[XDJ_FB_WIDTH];
-        for (y = 0; y < XDJ_FB_HEIGHT; y++) {
-            uint32_t *d = (uint32_t *)(dst + (size_t)y * stride);
+        } else {
+            /* 32bpp x8r8g8b8 (boot splash), forcing alpha */
+            const uint32_t *row = (const uint32_t *)raw;
             address_space_read(&address_space_memory,
                                XDJ_FB_BASE + (hwaddr)y * XDJ_FB_WIDTH * 4,
-                               MEMTXATTRS_UNSPECIFIED,
-                               rowbuf, XDJ_FB_WIDTH * 4);
+                               MEMTXATTRS_UNSPECIFIED, raw, XDJ_FB_WIDTH * 4);
             for (x = 0; x < XDJ_FB_WIDTH; x++) {
-                d[x] = 0xff000000u | (rowbuf[x] & 0x00ffffffu);
+                d[x] = 0xff000000u | (row[x] & 0x00ffffffu);
             }
         }
+        if (hash) {
+            int i, words = XDJ_FB_WIDTH * (bpp == 16 ? 2 : 4) / 8;
+            for (i = 0; i < words; i++) {
+                *hash = (*hash ^ raw[i]) * 0x100000001b3ull;
+            }
+        }
+    }
+}
+
+/* The live pixel depth, keeping the last known good one while CPMEM says nothing. */
+static int xdj_fb_bpp(void)
+{
+    static int last_bpp = 32;        /* splash is 32bpp until the app switches */
+    int bpp = xdj_fb_detect_bpp();
+
+    if (bpp) {
+        last_bpp = bpp;
+    }
+    return last_bpp;
+}
+
+/*
+ * Raster readout: what the panel shows.
+ *
+ * The real panel doesn't see the framebuffer at one instant: the IPU reads it
+ * line by line over each refresh (PANEL_LINE_NS per line, top to bottom, the
+ * readout of refresh k ending at its EOF).  rbp's DirectFB draws into a
+ * single, front-only framebuffer, copying each finished frame in right after
+ * its wait for the EOF; a copy that overlaps the readout shows the old frame
+ * above the point where it overtakes the readout and the new one below - a
+ * tear.  To show that, panel_img is filled band by band (XDJ_RASTER_BAND rows,
+ * default 16) at the times the panel reads those rows, and the console shows
+ * panel_img.  The guest's copy runs at TCG speed, not the hardware's, so where
+ * a tear lands differs from a real unit; whether frames tear, and whether a
+ * fix keeps the copy out of the readout, carries over.  XDJ_RASTER=0: the old
+ * whole-frame copy at each console refresh (no tearing possible).
+ *
+ * Tear meter (on demand, like xdj-fps): while "xdj-tears" is read, each
+ * readout's bands are hashed when read and again at its EOF.  A band that
+ * changed after it was read (stale), followed by a later band that shows new
+ * content (it differs from the previous refresh), is a tear at that band's
+ * first row.  qom-get /machine xdj-tears = torn refreshes per second over the
+ * last second, xdj-tear-row = their mean tear row (-1: none).
+ * XDJ_RASTER_TRACE=1 (with the meter running) logs each readout that had new
+ * content to stderr: per band 'N' new (differs from the previous refresh),
+ * 'S' stale (changed after it was read), '*' both, '.' neither.
+ */
+#define XDJ_RASTER_MAX_BANDS PANEL_VACTIVE
+#define XDJ_TEAR_IDLE_NS     (3 * NANOSECONDS_PER_SECOND)
+static bool xdj_raster_on;
+static int xdj_raster_band = 16, xdj_raster_nbands;
+static QEMUTimer *xdj_raster_timer;
+static uint32_t *panel_img;                  /* XDJ_FB_WIDTH x XDJ_FB_HEIGHT */
+static int xdj_raster_next;                  /* next band to read */
+static int64_t xdj_raster_start;             /* when row 0 of this readout is read */
+static int xdj_raster_bpp;                   /* depth for the whole readout */
+static uint64_t band_hash[XDJ_RASTER_MAX_BANDS], prev_hash[XDJ_RASTER_MAX_BANDS];
+
+static bool xdj_tear_running;
+static int64_t xdj_tear_last_read, xdj_tear_win_start;
+static unsigned xdj_tear_count, xdj_tear_row_sum;
+static double xdj_tear_value, xdj_tear_row_value = -1;
+
+static void xdj_raster_schedule(void)
+{
+    int rows_done = MIN((xdj_raster_next + 1) * xdj_raster_band, XDJ_FB_HEIGHT);
+    timer_mod(xdj_raster_timer, xdj_raster_start + rows_done * PANEL_LINE_NS);
+}
+
+/* End of a readout (its EOF): tear accounting, then the next refresh's readout. */
+static void xdj_raster_frame_end(void)
+{
+    int b;
+
+    if (xdj_tear_running) {
+        int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+        bool stale = false, trace = getenv("XDJ_RASTER_TRACE") != NULL, any = false;
+        int row = -1;
+        char map[XDJ_RASTER_MAX_BANDS + 1];
+
+        for (b = 0; b < xdj_raster_nbands; b++) {
+            int y0 = b * xdj_raster_band, n = MIN(xdj_raster_band, XDJ_FB_HEIGHT - y0);
+            uint64_t h = 0xcbf29ce484222325ull;
+            static uint32_t scratch[XDJ_FB_WIDTH * XDJ_RASTER_MAX_BANDS];
+            bool is_new = band_hash[b] != prev_hash[b], is_stale;
+
+            if (stale && is_new && row < 0) {
+                row = y0;                    /* new content below stale content */
+                if (!trace) {
+                    break;
+                }
+            }
+            xdj_fb_read_rows(y0, n, xdj_raster_bpp, (uint8_t *)scratch,
+                             XDJ_FB_WIDTH * 4, &h);
+            is_stale = h != band_hash[b];    /* changed after it was read */
+            stale |= is_stale;
+            map[b] = is_new ? (is_stale ? '*' : 'N') : (is_stale ? 'S' : '.');
+            any |= is_new || is_stale;
+        }
+        if (trace && any) {
+            map[xdj_raster_nbands] = 0;
+            fprintf(stderr, "XDJ_RASTER %s%s\n", map, row >= 0 ? "  TEAR" : "");
+        }
+        if (row >= 0) {
+            xdj_tear_count++;
+            xdj_tear_row_sum += row;
+        }
+        if (now - xdj_tear_last_read > XDJ_TEAR_IDLE_NS) {
+            xdj_tear_running = false;        /* nobody is watching: stop */
+        } else if (now - xdj_tear_win_start >= NANOSECONDS_PER_SECOND) {
+            xdj_tear_value = xdj_tear_count * (double)NANOSECONDS_PER_SECOND /
+                             (now - xdj_tear_win_start);
+            xdj_tear_row_value = xdj_tear_count ?
+                                 (double)xdj_tear_row_sum / xdj_tear_count : -1;
+            xdj_tear_count = xdj_tear_row_sum = 0;
+            xdj_tear_win_start = now;
+        }
+    }
+    memcpy(prev_hash, band_hash, sizeof(prev_hash));
+    xdj_raster_next = 0;
+    xdj_raster_start += PANEL_FRAME_NS;
+    /* after a pause (or a late main loop): resume at the coming readout */
+    {
+        int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+        if (xdj_raster_start + PANEL_VACTIVE * PANEL_LINE_NS < now) {
+            xdj_raster_start = panel_next_eof(now) - PANEL_VACTIVE * PANEL_LINE_NS;
+        }
+    }
+    xdj_raster_bpp = xdj_fb_bpp();
+}
+
+static void xdj_raster_tick(void *opaque)
+{
+    int y0 = xdj_raster_next * xdj_raster_band;
+    int n = MIN(xdj_raster_band, XDJ_FB_HEIGHT - y0);
+    uint64_t h = 0xcbf29ce484222325ull;
+
+    xdj_fb_read_rows(y0, n, xdj_raster_bpp,
+                     (uint8_t *)(panel_img + (size_t)y0 * XDJ_FB_WIDTH),
+                     XDJ_FB_WIDTH * 4, &h);
+    band_hash[xdj_raster_next] = h;
+    if (++xdj_raster_next >= xdj_raster_nbands) {
+        xdj_raster_frame_end();
+    }
+    xdj_raster_schedule();
+}
+
+static void xdj_tears_get(Object *obj, Visitor *v, const char *name,
+                          void *opaque, Error **errp)
+{
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    double val;
+
+    xdj_tear_last_read = now;
+    if (!xdj_tear_running) {                 /* (re)start a fresh measurement */
+        xdj_tear_running = xdj_raster_on;
+        xdj_tear_value = 0;
+        xdj_tear_row_value = -1;
+        xdj_tear_count = xdj_tear_row_sum = 0;
+        xdj_tear_win_start = now;
+    }
+    val = strcmp(name, "xdj-tear-row") == 0 ? xdj_tear_row_value : xdj_tear_value;
+    visit_type_number(v, name, &val, errp);
+}
+
+static bool xdj_fb_gfx_update(void *opaque)
+{
+    DisplaySurface *ds = qemu_console_surface(xdj_fb_con);
+    uint8_t *dst;
+    int stride, y;
+
+    if (!ds) {
+        return false;
+    }
+    dst = surface_data(ds);
+    stride = surface_stride(ds);
+    if (xdj_raster_on) {
+        for (y = 0; y < XDJ_FB_HEIGHT; y++) {
+            memcpy(dst + (size_t)y * stride, panel_img + (size_t)y * XDJ_FB_WIDTH,
+                   XDJ_FB_WIDTH * 4);
+        }
+    } else {
+        xdj_fb_read_rows(0, XDJ_FB_HEIGHT, xdj_fb_bpp(), dst, stride, NULL);
     }
     qemu_console_update(xdj_fb_con, 0, 0, XDJ_FB_WIDTH, XDJ_FB_HEIGHT);
     return true;
@@ -793,7 +988,7 @@ void xdj_display_realize(FslIMX6State *s, DeviceState *dev, DeviceState *gic)
                                         FSL_IMX6_ANALOG_ADDR + 0x180,
                                         &tempsense_stub, 1);
 
-    /* i.MX6 IPU1 interrupt stub: synthesize 60Hz vsync/EOF interrupts so the
+    /* i.MX6 IPU1 interrupt stub: synthesize the panel's EOF interrupts so the
      * mxc_sdc_fb display path's waits complete (fast boot, paced page-flips). */
     {
         static MemoryRegion ipu1_cm;
@@ -802,6 +997,7 @@ void xdj_display_realize(FslIMX6State *s, DeviceState *dev, DeviceState *gic)
                               "imx6.ipu1-cm", IPU_CM_SIZE);
         memory_region_add_subregion(get_system_memory(), IPU1_CM_BASE, &ipu1_cm);
         ipu_irq_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, ipu_irq_fire, NULL);
+        panel_epoch = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
         /* armed on demand when the driver writes the IPU interrupt registers */
     }
 
@@ -823,6 +1019,27 @@ void xdj_display_realize(FslIMX6State *s, DeviceState *dev, DeviceState *gic)
     /* Framebuffer scanout console (mirror of the mxc_sdc_fb memory) */
     xdj_fb_con = qemu_graphic_console_create(dev, 0, &xdj_fb_ops, NULL);
     qemu_console_resize(xdj_fb_con, XDJ_FB_WIDTH, XDJ_FB_HEIGHT);
+
+    /* Raster readout + tear meter (see xdj_raster_tick / xdj_tears_get) */
+    {
+        const char *r = getenv("XDJ_RASTER"), *band = getenv("XDJ_RASTER_BAND");
+        xdj_raster_on = !(r && strcmp(r, "0") == 0);
+        if (band && atoi(band) >= 1 && atoi(band) <= XDJ_FB_HEIGHT) {
+            xdj_raster_band = atoi(band);
+        }
+        xdj_raster_nbands = (XDJ_FB_HEIGHT + xdj_raster_band - 1) / xdj_raster_band;
+        if (xdj_raster_on) {
+            panel_img = g_new0(uint32_t, XDJ_FB_WIDTH * XDJ_FB_HEIGHT);
+            xdj_raster_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, xdj_raster_tick, NULL);
+            xdj_raster_start = panel_next_eof(panel_epoch) - PANEL_VACTIVE * PANEL_LINE_NS;
+            xdj_raster_bpp = 32;
+            xdj_raster_schedule();
+        }
+        object_property_add(qdev_get_machine(), "xdj-tears", "number",
+                            xdj_tears_get, NULL, NULL, NULL);
+        object_property_add(qdev_get_machine(), "xdj-tear-row", "number",
+                            xdj_tears_get, NULL, NULL, NULL);
+    }
 
     /* Frame-rate meter (see xdj_fps_get): qom-get /machine xdj-fps */
     xdj_fps_timer = timer_new_ns(QEMU_CLOCK_REALTIME, xdj_fps_tick, NULL);
