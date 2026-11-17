@@ -91,8 +91,9 @@ open dist/XDJ-RX.app
 
 ### 4. First run
 
-1. **Add the key** — drop `build/aes256.key` on the key box (or paste the 64 hex characters from
-   `.env`).
+1. **Add the key** — click **Download the key automatically** (the app gets it from Pioneer's
+   public GPL source, a one-time ~280 MB download), or drop `build/aes256.key` on the key box, or
+   paste the 64 hex characters from `.env`.
 2. **Drop the firmware** — drag `build/XDJ-RX_v221.zip` onto the window. The app prepares it
    (a few seconds), then powers the unit on and **installs the firmware** with Pioneer's own
    updater, like a new unit from the factory (about a minute).

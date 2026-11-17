@@ -46,6 +46,15 @@
     #keybrowse { background: #1b1f26; color: #c7ccd1; border: 1px solid #2a2e35;
       border-radius: 8px; padding: 8px 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
     #keybrowse:hover { border-color: #3a3f47; color: #fff; }
+    #keyget { display: block; width: 100%; background: #d64541; color: #fff; border: 0;
+      border-radius: 8px; padding: 10px 14px; font-weight: 600; cursor: pointer; }
+    #keyget:hover { background: #c23b37; }
+    #keyget:disabled { background: #3a2a2a; color: #9aa0a6; cursor: default; }
+    #keyprog { margin-top: 10px; font-size: 12px; color: #9aa0a6; }
+    #keyprog.hidden { display: none; }
+    #keyprog .bar { height: 6px; background: #1b1f26; border-radius: 3px; overflow: hidden; margin-bottom: 6px; }
+    #keyprog .bar i { display: block; height: 100%; width: 0; background: #d64541; transition: width .2s; }
+    #keybox .or { margin-top: 16px; }
     .okmark { color: #5bd67a; }
   </style>
 </head>
@@ -57,8 +66,11 @@
     <div id="status"></div>
 
     <div id="keybox" class="hidden">
-      <div class="lbl">This firmware is encrypted. Add your decryption key once —
-        drop your <b>aes256.key</b> file here, or paste the 64-hex key:</div>
+      <div class="lbl">This firmware is encrypted. Its key is in Pioneer's public GPL source
+        code — the app can get it for you (a one-time ~280 MB download from Pioneer):</div>
+      <button id="keyget">Download the key automatically</button>
+      <div id="keyprog" class="hidden"><div class="bar"><i></i></div><span></span></div>
+      <div class="lbl or">Or drop your <b>aes256.key</b> file here, or paste the 64-hex key:</div>
       <div class="keyrow">
         <input id="keyhex" placeholder="64 hexadecimal characters" spellcheck="false" autocomplete="off" />
         <button id="keybrowse">Browse…</button>
@@ -82,8 +94,31 @@
     function keySaved() {
       keybox.classList.add('hidden');
       statusEl.className = '';
-      statusEl.innerHTML = '<span class="okmark">✓</span> Key saved.';
+      statusEl.innerHTML = '<span class="okmark">✓</span> Key saved — now drop a firmware .UPD.';
     }
+    // Called from the Rust host while the key downloads, and if it fails.
+    const keyget = document.getElementById('keyget');
+    const keyprog = document.getElementById('keyprog');
+    function keyProgress(pct, text) {
+      keyprog.classList.remove('hidden');
+      keyprog.querySelector('.bar i').style.width = pct + '%';
+      keyprog.querySelector('span').textContent = text;
+    }
+    function keyFailed(msg) {
+      keyget.disabled = false;
+      keyget.textContent = 'Try the download again';
+      keyprog.classList.add('hidden');
+      show(msg, true);
+    }
+    keyget.addEventListener('click', e => {
+      e.stopPropagation();
+      if (!invoke) { show('the key download needs the desktop app', true); return; }
+      keyget.disabled = true;
+      keyget.textContent = 'Downloading…';
+      statusEl.className = ''; statusEl.innerHTML = '';
+      keyProgress(0, 'Connecting to Pioneer…');
+      invoke('download_key');
+    });
     async function refreshKey() {
       if (!invoke) return;               // not in the Tauri shell
       try { if (!(await invoke('key_present'))) keybox.classList.remove('hidden'); }

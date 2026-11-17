@@ -304,7 +304,7 @@ fn on_firmware_dropped(app: &tauri::AppHandle, path: PathBuf) {
         if let Some(w) = app.get_webview_window("setup") {
             let _ = w.eval(&format!(
                 "show({}, true)",
-                js_str("Add your firmware decryption key first — drop your aes256.key file, or paste the 64-hex key below.")
+                js_str("Add your firmware decryption key first — download it below, drop your aes256.key file, or paste the 64-hex key.")
             ));
         }
         return;
@@ -414,6 +414,57 @@ fn key_present() -> bool {
     has_key()
 }
 
+/// Fetch the key from Pioneer's public GPL source release (~280 MB, in memory) and store it,
+/// as `xdjrx-patcher` does. Runs in the background and reports to the setup page:
+/// `keyProgress(percent, text)`, then `keySaved()` or `keyFailed(message)`.
+#[tauri::command]
+fn download_key(app: tauri::AppHandle) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    if RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || {
+        let eval = |js: &str| {
+            if let Some(w) = app.get_webview_window("setup") {
+                let _ = w.eval(js);
+            }
+        };
+        let mut last_pct = u64::MAX;
+        let res = xdj_fw::gplkey::fetch_key(&mut |p| {
+            let part = match p.total {
+                Some(t) if t > 0 => p.done as f64 / t as f64,
+                _ => 0.0,
+            };
+            let pct = (((p.part - 1) as f64 + part) / p.parts as f64 * 100.0) as u64;
+            if pct != last_pct {
+                last_pct = pct;
+                let mb = |b: u64| b >> 20;
+                let text = match p.total {
+                    Some(t) => format!("Downloading part {} of {}: {} of {} MB", p.part, p.parts, mb(p.done), mb(t)),
+                    None => format!("Downloading part {} of {}: {} MB", p.part, p.parts, mb(p.done)),
+                };
+                eval(&format!("keyProgress({pct}, {})", js_str(&text)));
+            }
+        });
+        let res = res.and_then(|k| store_key_hex(&xdj_fw::gplkey::key_hex(&k)));
+        match res {
+            Ok(()) => {
+                eprintln!("[shell] firmware key downloaded and saved");
+                eval("keySaved&&keySaved()");
+            }
+            Err(e) => {
+                eprintln!("[shell] key download failed: {e}");
+                eval(&format!(
+                    "keyFailed({})",
+                    js_str(&format!("Couldn’t download the key ({e}). Drop your aes256.key file or paste the key instead."))
+                ));
+            }
+        }
+        RUNNING.store(false, Ordering::SeqCst);
+    });
+}
+
 /// Browse for a firmware .UPD/.zip (the setup page's drop area is also clickable).
 /// Uses the non-blocking picker: blocking_pick_file deadlocks the macOS main thread.
 #[tauri::command]
@@ -474,7 +525,7 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState { repo: repo.clone(), host: Mutex::new(None), busy: Mutex::new(false) })
-        .invoke_handler(tauri::generate_handler![set_key_hex, key_present, browse_firmware, browse_key])
+        .invoke_handler(tauri::generate_handler![set_key_hex, key_present, browse_firmware, browse_key, download_key])
         .on_page_load(|webview, _| {
             match webview.label() {
                 "screen" => lock_screen_aspect(&webview.window()),
@@ -545,7 +596,7 @@ fn main() {
 fn open_setup(app: &tauri::AppHandle) -> tauri::Result<()> {
     WebviewWindowBuilder::new(app, "setup", WebviewUrl::App("index.html".into()))
         .title("Pioneer XDJ-RX")
-        .inner_size(760.0, 520.0)
+        .inner_size(760.0, 640.0)
         .build()?;
     Ok(())
 }

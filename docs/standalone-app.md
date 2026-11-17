@@ -170,8 +170,16 @@ The app emulates the real unit: **no SD card**, everything lives in the emulated
 
 Pioneer `.UPD` files are AES-encrypted. The key is **user-supplied and never bundled**. Stored at
 `app-data/key/aes256.key`, content-sniffed at use (`resolve_firmware_key`): a 64-hex string is the
-key itself; anything else is treated as a losetup passphrase file. The setup page's key box (paste
-64-hex → `set_key_hex`, or drop/Browse a file → `store_key_file`) writes it. In dev, without that
+key itself; anything else is treated as a losetup passphrase file. The setup page's key box writes
+it, three ways:
+- **Download the key automatically** (`download_key`, the first option): the shell downloads
+  Pioneer's public GPL source release for the XDJ-RX (~280 MB, two deflate64 ZIPs, kept in
+  memory), takes `initramfs/usr/local/pioneer/aes256.key` out of it, derives the key and stores it
+  as 64 hex. Shared with `xdjrx-patcher`: `xdj_fw::gplkey::fetch_key` (crate feature `gpl-key`).
+  The page shows a progress bar (`keyProgress(percent, text)`), then `keySaved()`; on failure
+  `keyFailed(message)` re-enables the button and points at the manual options.
+- paste 64 hex → `set_key_hex`;
+- drop / Browse a file → `store_key_file`. In dev, without that
 file, `XDJRX_AES_KEY` in the environment or `XDJRX_AES_KEY=` in the repo's `.env` (written by
 `tools/fetch_key.py`) is used. No key anywhere → a clear "add your key" error.
 

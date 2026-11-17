@@ -4,6 +4,8 @@
 pub mod cramfs;
 pub mod firmware;
 pub mod fwbuild;
+#[cfg(feature = "gpl-key")]
+pub mod gplkey;
 pub mod iso;
 pub mod nand;
 pub mod tarball;
