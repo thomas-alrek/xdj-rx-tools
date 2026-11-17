@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Make the patch bundle for xdjrx-patcher: our 3.00 changes against the official 2.21,
+"""Make the patch bundle for xdjrx-patcher: our release changes against the official 2.21,
 holding only our own bytes.
 
     python3 tools/fw/make-patch.py [RELEASE_DIR] [OUT]
-      defaults: build/release (from tools/fw/build-release.sh)  build/patch/xdjrx-3.00.xdjpatch
+      defaults: build/release (from tools/fw/build-release.sh)  build/patch/xdjrx-3.01.xdjpatch
 
 From RELEASE_DIR/unpacked (the official image, unpacked) and RELEASE_DIR/overlay (what the
 mods produced):
@@ -21,8 +21,8 @@ import difflib, hashlib, io, json, os, sys, tarfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 REL_DIR = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "build/release")
-OUT = sys.argv[2] if len(sys.argv) > 2 else os.path.join(ROOT, "build/patch/xdjrx-3.00.xdjpatch")
-RELEASE = "3.00"
+OUT = sys.argv[2] if len(sys.argv) > 2 else os.path.join(ROOT, "build/patch/xdjrx-3.01.xdjpatch")
+RELEASE = "3.01"
 SOURCE_DATE_EPOCH = 1767225600
 OFFICIAL_ZIP_MD5 = "c1ee67884f120e4cd8d4ffd6b9ad73eb"
 OFFICIAL_UPD_MD5 = "e1facfb82de17b2544e958ca544e00c4"

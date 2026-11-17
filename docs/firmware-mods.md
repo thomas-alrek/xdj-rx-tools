@@ -1,7 +1,7 @@
-# Firmware mods (custom firmware 3.00)
+# Firmware mods (custom firmware 3.01)
 
 Feature mods for the XDJ-RX on top of the official 2.21 firmware, and the research behind them.
-The release is **3.00**, built on the official **2.21** (§1: how to reproduce it, MD5). Building and installing custom
+The release is **3.01**, built on the official **2.21** (§1: how to reproduce it, MD5). Building and installing custom
 firmware in general: [custom-firmware.md](custom-firmware.md).
 
 Status: ✅ built and verified in the emulator · 🔬 researched (static analysis), not built ·
@@ -14,6 +14,7 @@ Status: ✅ built and verified in the emulator · 🔬 researched (static analys
 | UTILITY menu rows for mods (framework) | ✅ | extended item table | done | — |
 | Safe start — hold MIDI at power-on: stock rbp, no mods | ✅ emulator | `apl_start` key check (§3) | done | — |
 | `fps` — UI frame rate 20 / 30 / 60 (default 60) | ✅ emulator | 2 immediates + timer detour | done (real unit: untested) | real-unit test |
+| SCREEN SYNC — copy timed before the refresh (opt-in, for unit testing) | 🔬 built, emulator can't judge | own refresh thread + FBIO_WAITFORVSYNC interposer (§5a) | default OFF | real-unit test |
 | `wav` — WAV float / 32-bit / up to 192 kHz | ✅ emulator | reader vtable slots + tag-parser checks | done (AIFF: open) | AIFF |
 | `flac` — FLAC 16/24-bit ≤ 192 kHz, with tags | ✅ emulator | suffix + browser hooks, dr_flac via the wav reader | done (real unit: untested) | — |
 | `waveform` — RGB / 3-band waveforms (default 3-band) | ✅ emulator | `.EXT` interposer + detail/overview detours | done (real unit: untested) | tuning |
@@ -21,40 +22,41 @@ Status: ✅ built and verified in the emulator · 🔬 researched (static analys
 | Hot cues A–H on the waveforms, in rekordbox colours | ✅ emulator | PCO2 parse + marker bits + overview images (§8a) | done (real unit: untested) | — |
 | `beatjump` — BEAT JUMP on the pads (opt-in) | ✅ emulator | PlayerInnards onKey slot + LED detour (§10a) | done (real unit: untested) | — |
 | HOT CUE E-H on SHIFT + pads (opt-in) | ✅ emulator | getCue override around the stock hot-cue call (§10a) | done (real unit: untested) | — |
-| `keys` — Camelot key display (opt-in) | 🔬 partial, not in 3.00 | key-name table swap + DB name detour (§10c) | deck panel key: open | research |
+| `keys` — Camelot key display (opt-in) | ✅ emulator (3.01) | name table swap, DB name detours, key-image remap (§10c) | done (real unit: untested) | KEY column / sort: check |
 | `folders` — [FOLDER] lists Contents | ✅ emulator | one branch (§7a) | done | — |
 | Large libraries (1000+ tracks) | 🔬 measured (§10b) | — | no memory limit hit | — |
 | OneLibrary | 🔬 later (nice to have) | mount-time `export.pdb` synthesis | medium | 2–3 weeks |
 
-**In release 3.00:** `exfat`, `fps`, `wav`, `waveform` (colour, hot cues A–H, scroll), `flac`,
-`beatjump` (beat jump, hot cues E–H on the pads), `folders` (+ the framework, safe start).
-UTILITY rows, in order: UI FRAME RATE (60), WAVEFORM COLOR (3-BAND), WAVEFORM SCROLL (SMOOTH),
-BEAT JUMP (OFF), BEAT JUMP A (4 BEATS), BEAT JUMP B (16 BEATS), HOT CUE E-H (OFF) — defaults in
-brackets, restored by a factory reset. `keys` (Camelot) is built and partly working but not in
-the release (§10c).
+**In release 3.01:** `exfat`, `fps` (+ SCREEN SYNC), `wav`, `waveform` (colour, hot cues A–H,
+scroll), `flac`, `beatjump` (beat jump, hot cues E–H on the pads), `keys` (Camelot), `folders`
+(+ the framework, safe start). 3.00 had the same without SCREEN SYNC and `keys`.
+UTILITY rows, in order: UI FRAME RATE (60), SCREEN SYNC (OFF), WAVEFORM COLOR (3-BAND), WAVEFORM
+SCROLL (SMOOTH), KEY DISPLAY (CLASSIC), BEAT JUMP (OFF), BEAT JUMP A (4 BEATS), BEAT JUMP B
+(16 BEATS), HOT CUE E-H (OFF) — defaults in brackets, restored by a factory reset.
 
 All addresses below are for the 2.21 `rbp` (sha256 `4f62aa71…`, [rbp-binary-internals] skill).
 
-## 1. Release 3.00: reproduce it from the official 2.21
+## 1. Release 3.01: reproduce it from the official 2.21
 
-Release **3.00** = the official 2.21 image + the mods `exfat,fps,wav,waveform,flac,beatjump,folders`, in that
+Release **3.01** = the official 2.21 image + the mods `exfat,fps,wav,waveform,flac,beatjump,keys,folders`, in that
 order. The build is **reproducible byte for byte**: the same inputs give the same `.UPD`.
 
 | File | MD5 |
 |---|---|
 | `XDJ-RX_v221.zip` (Pioneer's download, input) | `c1ee67884f120e4cd8d4ffd6b9ad73eb` |
 | `XDJRX.UPD` inside it (official 2.21) | `e1facfb82de17b2544e958ca544e00c4` |
-| **`XDJRX.UPD` — custom firmware 3.00 (output)** | **`5492b333f6eb4b853cb7cfa113c48659`** |
+| **`XDJRX.UPD` — custom firmware 3.01 (output)** | **`42c92c706e8bd870c84199659212c052`** |
+| `XDJRX.UPD` — custom firmware 3.00 (previous release) | `5492b333f6eb4b853cb7cfa113c48659` |
 
-`xdj fw info` on the output: 48318480 bytes, model `XDJAERO3.00`, footer CRC32 `c4a07df4`,
-`images/release.txt = 3.00`. What the mods add (overlay, MD5):
+`xdj fw info` on the output: 48322576 bytes, model `XDJAERO3.01`, footer CRC32 `b2996727`,
+`images/release.txt = 3.01`. What the mods add (overlay, MD5):
 
 | Overlay file | MD5 |
 |---|---|
 | `rootfs/sbin/mount.exfat-fuse` | `3d8e08ccb61b480d4e021619f80b0ea1` |
 | `rootfs/lib/udev/xdj_is_exfat` | `5c79cf91a5d596af2362bce33ac0d9e0` |
 | `rootfs/etc/udev/rules.d/12-usb-memory-auto-mount.rules` (edited) | `310e73ef9f6ee510c229fe64cb41bb3f` |
-| `pioneer/pioneer/libxdjmod.so` | `6133ad8e282462a11eee01075494e92a` |
+| `pioneer/pioneer/libxdjmod.so` | `bf7d36b75fc902b8b6f56fb3b9d65c9d` |
 | `pioneer/pioneer/apl_start` (edited) | `3583c3c711aa8285eece902669f0b526` |
 
 ### 1a. Prerequisites (macOS or Linux host)
@@ -75,10 +77,10 @@ order. The build is **reproducible byte for byte**: the same inputs give the sam
 ```sh
 tools/fw/build-release.sh                 # -> build/release/XDJRX.UPD + stick.img
 # >> base build/XDJ-RX_v221.zip md5 c1ee67884f120e4cd8d4ffd6b9ad73eb
-# >> build/release/XDJRX.UPD (release 3.00, mods exfat,fps,wav,waveform,flac,beatjump,folders) md5 5492b333f6eb4b853cb7cfa113c48659
+# >> build/release/XDJRX.UPD (release 3.01, mods exfat,fps,wav,waveform,flac,beatjump,keys,folders) md5 42c92c706e8bd870c84199659212c052
 ```
 
-`build-release.sh [BASE] [OUTDIR]` fixes the release (3.00), the mod list and
+`build-release.sh [BASE] [OUTDIR]` fixes the release (3.01), the mod list and
 `SOURCE_DATE_EPOCH=1767225600` (2026-01-01 00:00 UTC: the mtime `xdj` gives every new or changed
 file), checks the base MD5 and prints the output MD5.
 
@@ -96,12 +98,12 @@ $X fw unpack build/XDJ-RX_v221.zip build/release/unpacked
 
 # 2. each mod reads the unpacked tree and writes only into the overlay, in this order
 mkdir -p build/release/overlay
-for m in exfat fps wav waveform flac beatjump folders; do
+for m in exfat fps wav waveform flac beatjump keys folders; do
   tools/fw/mods/$m/apply.sh build/release/unpacked build/release/overlay
 done
 
-# 3. rebuild the image from the base + overlay, as release 3.00; then an update stick
-$X fw build build/XDJ-RX_v221.zip --overlay build/release/overlay --release 3.00 \
+# 3. rebuild the image from the base + overlay, as release 3.01; then an update stick
+$X fw build build/XDJ-RX_v221.zip --overlay build/release/overlay --release 3.01 \
   -o build/release/XDJRX.UPD
 $X fw info  build/release/XDJRX.UPD
 md5 build/release/XDJRX.UPD               # Linux: md5sum
@@ -270,6 +272,34 @@ VERSION No.**; a **factory reset restores their defaults**.
   unchanged at 60 but run on another clock (they don't slow down at stock's 52 ms frames either);
   CPU headroom and `ALSA: Resolve xrun` with audio; the real unit last.
 
+## 5a. SCREEN SYNC — against tearing 🔬 (opt-in; needs a real unit)
+
+`sync.c` (module `sync`, built with the `fps` mod), UTILITY → **SCREEN SYNC = OFF (default) /
+1.5 MS / 3.0 MS / 4.5 MS / 6.0 MS**. The idea is JaNeinHub/XDJ-RX-Mod's (their measurement on a
+unit: lead 4.5 ms, refresh 16.80 ms); this is our own implementation.
+
+- **Why:** rbp draws into a front-only framebuffer. DirectFB's flip waits for the panel's end of
+  frame (`ioctl(fb, FBIO_WAITFORVSYNC = 0x40044620)` from gui_task) and then copies the frame in
+  (~2 ms on a unit); the panel reads top to bottom over each 16.8 ms refresh, and the copy -
+  started just after a refresh began - overtakes that readout near row 93: a tear through the
+  waveform. More frames per second, more tears.
+- **How:** an `ioctl` interposer turns gui_task's wait into a sleep until *lead* before the next
+  refresh. A thread of ours (SCHED_FIFO 30) does the real waits on `/dev/fb0` - entering the
+  driver only 3 ms before each expected refresh, since the kernel holds the framebuffer lock
+  during a wait - and tracks period and phase (seqlock-published model, 8 good refreshes before
+  use). No model, a failing or non-waiting driver, or OFF → Pioneer's own wait. Raw syscalls
+  for the clocks (glibc 2.13: librt), no TLS. Every 10 s: `sync: on, lead .., period .. ms, gui
+  waits .. (synced ..), driver waits .., resets ..`.
+- **Emulator (works, can't judge the lead):** the thread finds the emulated panel's 16.81 ms and
+  syncs ~97 % of waits. But the tear meter (`docs/emulator-status.md`, 25 s, a track playing,
+  60 fps) reads OFF 0.6 torn refreshes/s, 1 inside the waveform; 4.5 MS 27.8/s, ~9/s inside the
+  waveform. The emulated guest wakes and copies far earlier after the interrupt than a unit (so
+  OFF barely tears there), and a lead tuned to the unit's copy lands on the emulator's readout.
+  Hence opt-in, with the lead selectable, until a real unit shows which lead removes the tear.
+- **On a unit:** play a track at UI FRAME RATE 60 and watch the scrolling waveform for a
+  horizontal break; try each lead; note CPU (`ALSA: Resolve xrun`) - JaNeinHub also cap at 30
+  fps (a frame costs ~17 ms there, so 60 can't be reached).
+
 ## 6. `wav` — WAV float, 32-bit, up to 192 kHz ✅ (emulator)
 
 - Readers are chosen by filename suffix only (`PcmReader::open` `0x3dac8`; `.WAV` → `FileReadWav`,
@@ -379,13 +409,24 @@ VERSION No.**; a **factory reset restores their defaults**.
   by whiteness. Overview: `0x1f8518` (called at `0x1fb3e8`), 300 columns, palette `0x41cf20`.
 - `waveform.c` (module `waveform`), UTILITY → **WAVEFORM COLOR** = BLUE (STOCK) / RGB /
   **3-BAND (default)**:
-  - **Data:** `fopen`/`fopen64`/`open`/`open64` interposers see rbp open a track's `ANLZ*.EXT`
-    and parse it and its `.2EX` (≤ 8 tracks cached, keyed by path/size/mtime): PWV3 (to recognise
-    the track), PWV5 → RGB565 per entry, PWV7 → 3-band bar rows per entry (low/mid/high bytes, `band_rows()`, below). Inert outside rbp.
+  - **Data:** `fopen`/`fopen64`/`open`/`open64` interposers see rbp open a track's `ANLZ*.DAT`
+    (the first file it reads on LOAD) or `.EXT` and cache the track from its `.EXT`, `.2EX` and
+    `.DAT` (≤ 8 tracks, keyed by path/size/mtime): PWV3 (to recognise the track), PWV5 → RGB565
+    per entry, PWV7 → 3-band bar rows per entry (low/mid/high bytes, `band_rows()`, below), PCO2
+    hot cues, and the `.DAT`'s PWAV overview (to recognise it early). Inert outside rbp.
   - **Decks:** deck d's block is `**(0x10f020c + d*32)` (count at `+0`, entries `+0x2ee18` = rbp's
     `{(b & 31) * 46 / 31, b >> 5}` per PWV3 byte, marker flags `+0x2ee10`); rbp's array runs ~20
-    entries past the file's PWV3. A deck matches a cached track when 48 sampled entries agree;
-    re-checked every 0.5 s. Unmatched decks (no colour data) draw stock.
+    entries past the file's PWV3. A deck matches a cached track when 48 sampled entries agree.
+    rbp fills that array last - at the end of a load (seconds on a unit, ~20 s in the emulator) -
+    but loads the **overview** first: deck d's `0x018a2ee4 + d*900` holds the `.DAT`'s 400 PWAV
+    entries as `{(b & 31) * 35 / 31, b >> 5}` (heights scaled, rounded down; whiteness as is)
+    within ~0.2 s of LOAD (track length `0x18a4510[d]` too). Until the detail matches, a deck
+    matches the cached track whose PWAV gives that array (all 400 entries, heights ±1; most
+    recently cached first), and a detail match is refused only when the overview identifies
+    another cached track (an array left over from the previous track can't win). So the chosen colours and hot cues A–H show from the
+    first frame of a load - no stock blue / green A–D first. Re-checked at once when the deck's
+    length, overview or detail array changes, else every 0.5 s. Unmatched decks (no colour data)
+    draw stock.
   - **Detail:** `0x1caf58` (zoom in `s0`; first instruction `ldr ip, [pc, #0x19c]`, relocated by
     `xm_detour`) is detoured through an assembly shim. BLUE or unmatched: the original runs. RGB:
     rbp's bar height and markers, colour of the tallest entry in the column. 3-BAND: layered from
@@ -473,9 +514,13 @@ UTILITY → **WAVEFORM SCROLL** = ORIGINAL / **SMOOTH (default)**. `tools/fw/mod
 - **Cost (emulator, both decks playing, waveform view):** ~36 fps vs ~39 fps with ORIGINAL, xruns
   about the same (4 vs 3 a minute). A first, unoptimised version (blending all 124 rows) cost
   8 xruns a minute.
-- Not done: tearing (the canvas is blitted to a front-only framebuffer, `0x13d884` →
-  `0x140ef8`; a vsync-timed blit via `FBIO_WAITFORVSYNC` could fix it) — not observable in the
-  emulator, needs the real unit.
+- Tearing: SCREEN SYNC (§5a, opt-in) is the attempt. The canvas is copied into a front-only framebuffer (`0x13d884` →
+  `0x140ef8`) right after the wait for the panel's end of frame; on a real unit that copy
+  overtakes the panel's readout near row 93, through the waveform, on most frames (measured by
+  JaNeinHub/XDJ-RX-Mod, who time the copy 4.5 ms before the refresh with a thread that tracks
+  the refresh phase). More frames per second = more chances to tear. The emulator models the
+  readout (raster, `xdj-tears`; `docs/emulator-status.md`) and shows ~1 torn refresh/s at 60 fps,
+  mostly below the waveform - its copy timing is TCG's, not the hardware's.
 
 ## 10a. `beatjump` — BEAT JUMP on the pads ✅ (emulator)
 
@@ -525,28 +570,40 @@ implementation.
   D jumped to E (0:09.4) / H (2:24.8) while playing; with SHIFT held the pad LEDs read `0xf4`
   (four E–H cues + the HOT CUE LED).
 
-## 10c. `keys` — Camelot key display 🔬 (partial; not in 3.00)
+## 10c. `keys` — Camelot key display (since 3.01)
 
-UTILITY → **KEY DISPLAY** = **CLASSIC (default)** / CAMELOT ("8A" instead of "Am").
+UTILITY → **KEY DISPLAY** = **CLASSIC (default)** / CAMELOT ("8A" instead of "Am"). Nothing on
+the stick changes; real exports store classic names ("Am") in `export.pdb`.
 - rbp's key index (1..24) is already in Camelot order: n → number (n + 1) / 2, A for odd n, B
   for even (1 = 1A = Abm … 24 = 12B = E); `0x10687c` (the harmonic query builder) computes the
   same codes.
-- Displayed key text comes from: the index → UTF-16 name table `0x462dd8` (24 pointers in
-  `.data`; the track-info builder `0x1e0df8`, the harmonic "matching keys" labels `0x1065a8`) —
-  CAMELOT points it at our strings, CLASSIC restores rbp's; and the library's key names, fetched
-  by `0x139c4c(category, id, u16 **out, flag)` (category 10 = djdbKey; browser KEY lists and key
-  columns) — detoured: the name goes through rbp's own parser (`0x105e84` → `0x106e68`, every
-  spelling it knows) and is replaced by the Camelot string (the pool free `0x1158f8` ignores
-  non-pool pointers). Its 16-entry name cache (`0x1080f2c`, stride `0x110`) is cleared on change.
-- The parsers (`0xdec0c`, `0x106e68`), harmonic matching, the sort tables and anything written
-  back use the names directly and stay classic; nothing on the stick changes.
-- **Not covered (open):** the deck panel's key on the main screen (next to the key icon) — no
-  string path found: neither name table feeds it at render time, possibly key glyph images
-  chosen by index (needs a live trace of the element setters `0x12890c` / text widgets
-  `0x13d484`); track lists with a KEY column read the name straight from the library
-  (`0x1134bc` case 0xC, `0x31a538(row, 1)` at `0x113d24`); the KEY breadcrumb `0x105590`
-  (request 0x3603). These stay classic.
-- **Verified (emulator):** the browser's KEY category lists 1A, 1B, 2A, …
+- **Index → UTF-16 name table** `0x462dd8` (24 pointers in `.data`; the track-info builder
+  `0x1e0df8`, the harmonic "matching keys" labels `0x1065a8`): CAMELOT points it at our strings,
+  CLASSIC restores rbp's.
+- **Library key names** `0x139c4c(category, id, u16 **out, flag)` (category 10 = djdbKey; browser
+  KEY lists and key columns): detoured, the name goes through rbp's own parser (`0x105e84` →
+  `0x106e68`, every spelling it knows, Camelot included) and is replaced by the Camelot string
+  (the pool free `0x1158f8` ignores non-pool pointers). Its 16-entry name cache (`0x1080f2c`,
+  stride `0x110`) is cleared on change.
+- **Database reads** of a djdbKey row's name `0x31a538(row, 1)` (track lists' KEY column
+  `0x1134bc` case 0xC / `0x113d24`, the KEY breadcrumb, the sort builder): cursors opened on
+  djdbKey (`0x319b8c`, `0x319e1c`) and the rows they fetch (`0x31a4a0`) are tagged, closing
+  (`0x31a24c`) untags; a tagged row's name comes back as the Camelot string, which rbp's parser
+  turns back into the same index (harmonic matching keeps working).
+- **Sorting by KEY**: the sort builder `0x1128c8` (mode & 0x7f = 12) sorts by the name; while it
+  runs, names come back zero-padded ("08A") so 1A, 1B, 2A … 12B sort in Camelot order.
+- **The deck panel's key is an image**, not text: imagedata.dat records `0x28e`–`0x2df` (72 × 24)
+  hold every key name, one group per Camelot key in Camelot order — "1A", "01A", then the classic
+  spelling(s) ("Abm", "G#m"), "2A", "02A", "Ebm", "D#m", … "12B", "12B", "E" (group starts in
+  `keys.c` `KEY_IMG`; rbp's image list `0x41d45c` has them in this order). With CAMELOT the image
+  lookup `0x1694bc` answers a classic spelling with its group's first image ("Am" `0x2a8` → "8A"
+  `0x2a6`) through the framework's `xm_img_remap` (the `waveform` mod owns that detour and applies
+  the remap; without it `keys` detours the lookup itself). Neither the text renderer `0x13d0f0`
+  (it draws few texts) nor DirectFB's string drawing is involved.
+- **Verified (emulator, 3.01):** browser KEY category 1A, 1B, 2A, …; the deck panel shows "8A" for
+  an Am track. To check: the KEY column of track lists and SORT by KEY.
+- GUI images can be dumped to PNG (and one replaced) with `tools/fw/gui-images.py` (§2 of
+  docs/custom-firmware.md).
 
 ## 10b. Large libraries (1000+ tracks) 🔬
 
@@ -630,14 +687,14 @@ xdjrx-patcher  ORIGINAL.UPD  PATCH.xdjpatch  [--key KEY]  [-o OUT.UPD]
 
 - **ORIGINAL**: the official `XDJRX.UPD` 2.21, or the zip Pioneer distributes it in; checked by
   MD5 (`e1facfb82de17b2544e958ca544e00c4`, zip `c1ee67884f120e4cd8d4ffd6b9ad73eb`).
-- **PATCH** (`xdjrx-3.00.xdjpatch`, ~310 KB): an uncompressed tar of `manifest.json` +
+- **PATCH** (`xdjrx-<release>.xdjpatch`, ~310 KB): an uncompressed tar of `manifest.json` +
   `files/<part>/<path>`. Made by `tools/fw/make-patch.py` from `build/release` (after
   `tools/fw/build-release.sh`): the release's new files as they are (ours: `libxdjmod.so`,
   `mount.exfat-fuse`, `xdj_is_exfat`, with their modes) and, for the two Pioneer files the mods
   edit (`apl_start`, the USB mount rules), **line edits that carry only our text** — whole lines
   inserted, or text inserted inside a line — with the SHA-256 of the original and of the result;
   a change that isn't an insertion is refused, so no Pioneer text ends up in the patch. The
-  manifest also has the release (3.00), `SOURCE_DATE_EPOCH`, the input MD5s and the expected
+  manifest also has the release (3.01), `SOURCE_DATE_EPOCH`, the input MD5s and the expected
   output MD5.
 - **KEY** (optional): 64 hex characters, or a key file. Without it the patcher downloads
   Pioneer's public GPL source release for the XDJ-RX (two deflate64 ZIPs, ~280 MB) and derives
@@ -648,7 +705,7 @@ xdjrx-patcher  ORIGINAL.UPD  PATCH.xdjpatch  [--key KEY]  [-o OUT.UPD]
   modes in each part's `.xdj-modes`, so Windows builds the same bytes as macOS/Linux), sets
   `SOURCE_DATE_EPOCH` and rebuilds with `xdj_fw::fwbuild::build` + `firmware::pack` — the same
   code as `build-release.sh`. The result is written only if its MD5 is the manifest's
-  (`5492b333f6eb4b853cb7cfa113c48659` for 3.00); default output `XDJ-RX 3.00/XDJRX.UPD` next
+  (`42c92c706e8bd870c84199659212c052` for 3.01); default output `XDJ-RX 3.01/XDJRX.UPD` next
   to the original. Run without arguments, it asks for the two files (drag and drop) and waits
   for Enter at the end (double-click use on Windows).
 - **Code / builds:** `crates/xdjrx-patcher` (Rust): the library `src/lib.rs` does the work
@@ -690,9 +747,8 @@ xdjrx-patcher  ORIGINAL.UPD  PATCH.xdjpatch  [--key KEY]  [-o OUT.UPD]
 5. ✅ FLAC, with Vorbis-comment tags.
 6. ✅ WAVEFORM SCROLL (SMOOTH), BEAT JUMP (opt-in), [FOLDER] lists Contents, hot cues A–H in
    colour, HOT CUE E-H on SHIFT + pads (opt-in), safe start.
-   Later: KEY DISPLAY Camelot — the browser part works (`tools/fw/mods/keys`); the deck panel's
-   key needs a live trace first (§10c).
-7. ✅ Release 3.00, reproducible (§1).
+   3.01: KEY DISPLAY Camelot (§10c), SCREEN SYNC (§5a), colours from the first frame of a load.
+7. ✅ Releases 3.00 and 3.01, reproducible (§1).
 9. Open: smooth scroll checked by eye; pre-reading `export.pdb` at mount for big libraries (§10b).
 10. On the real unit (after the emulator): CPU of SMOOTH and FLAC decode, tearing, big libraries.
 11. OneLibrary — nice to have; not now.
