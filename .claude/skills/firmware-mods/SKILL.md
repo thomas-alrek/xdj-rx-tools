@@ -112,6 +112,10 @@ FLAC and WAV folders, `--big` a 10,000-track library; ~1 min, ~4 with `--big`). 
   share it inside one module, or call between modules (`wf_detail_icons`, `wf_hot_cue`, weak).
 
 ## Gotchas
+- **Size budget**: boot loads only 3 MiB of pioneer.tar.gz (libxdjmod + every mod file; 3.01 uses
+  2.08) and 20 MiB of the rootfs into a 60 MiB RAM disk (3.01 leaves ~4.4 MiB). The build refuses
+  more; `xdj fw check` prints it (docs/custom-firmware.md §2b). Symptom of a too-big pioneer:
+  `libxdjmod.so … cannot be preloaded`, no mod rows. Large data → rootfs or a UBI volume.
 - Stock rbp is never patched on disk; everything is in memory, gated, from libxdjmod.
 - [FOLDER] FLAC is classified as WAV (11): type 5 empties the folder.
 - The folder info panel never draws embedded art (stock MP3 APIC neither) — not a FLAC bug.

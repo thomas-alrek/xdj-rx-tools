@@ -130,6 +130,13 @@ $X fw stick build/release/XDJRX.UPD build/release/stick.img
 tools/fw/build-custom-upd.sh REL exfat,fps   # any release number / mod set -> build/custom-upd/
 ```
 
+- **Size budget.** The unit loads only 3 MiB of `pioneer.tar.gz` and 20 MiB of the rootfs at
+  boot, into a 60 MiB RAM disk ([custom-firmware.md §2b](custom-firmware.md)); the build refuses
+  an image that doesn't fit and `xdj fw check XDJRX.UPD` prints the budget. `libxdjmod.so` and
+  everything a mod adds to pioneer share the 3 MiB (3.01 uses 2.08 MiB); large data goes in the
+  rootfs (mind the RAM disk: 3.01 leaves about 4.4 MiB) or a UBI volume. Past the pioneer limit the
+  end of the tarball is never unpacked; the symptom is `ld.so: object '/root/pioneer/libxdjmod.so'
+  … cannot be preloaded` on the console and no mod rows.
 - Install: the app's *File → Install Firmware Update…* → `XDJRX.UPD`. The release must be above
   the installed one.
 - To test without touching the app's unit, run a private `xdj-host` on a copy of the unit's

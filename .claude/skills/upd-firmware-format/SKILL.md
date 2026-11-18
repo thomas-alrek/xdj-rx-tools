@@ -41,6 +41,8 @@ Ships inside Pioneer's own **GPL/LGPL source release**:
 ## Commands
 ```
 xdj fw info    XDJRX.UPD                       # model, size, CRC, key check, release.txt
+xdj fw check   XDJRX.UPD                       # fits what the unit loads at boot? (3 MiB pioneer,
+                                               # 20 MiB rootfs, 5 MiB uImage, 60 MiB RAM disk)
 xdj fw decrypt XDJRX.UPD -o build/x.iso        # -> decrypted ISO9660
 xdj fw unpack  XDJRX.UPD build/unpacked        # ISO tree + rootfs/pioneer/gui/data/user payloads
 xdj fw diff    XDJRX.UPD build/unpacked        # what an edited unpack tree changes
@@ -87,7 +89,8 @@ untouched entries keep their exact owners/modes/device nodes/symlinks) and appli
 `iso/images/uImage`). A file replaces (keeping mode/owner) or adds (host mode, root:root); a
 `.xdj-delete` file in a part lists paths to remove. `--release` sets `images/release.txt` (installed
 as the u-boot env `release`, shown by UTILITY → VERSION No. and test mode) and the footer model
-`XDJAERO<release>`. Codecs: `crates/xdj-fw/src/{iso,cramfs,tarball}.rs` (round-trip tests:
+`XDJAERO<release>`. The build refuses an image the unit can't load at boot (fixed read lengths
+smaller than the partitions + the 60 MiB RAM disk: docs/custom-firmware.md §2b). Codecs: `crates/xdj-fw/src/{iso,cramfs,tarball}.rs` (round-trip tests:
 `cargo test --release`, against `build/XDJRX.iso`).
 
 End-to-end check: **`tools/fw/make-test-upd.sh`** builds `build/test-upd/TEST.UPD` (its own test release number, console
