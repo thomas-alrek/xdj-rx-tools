@@ -43,8 +43,11 @@ window. Architecture: **`docs/standalone-app.md`**. **Never patches `rbp`/kernel
    with `XDJ_UPDATE_TYPE=20` (ALL), stick on USB1 after `### USB update mount.` → the firmware's own
    updater installs everything. **"Installed" = `release=` in the NAND env** (`xdj nand info`; the
    console success line never prints — the updater's last `umount /mnt/usb` stays busy).
-   `provision_watch` sees it, waits 10 s, cuts power, writes `provisioned.stamp` → boots **Normal**. Normal/Update power-ons run `nand::boot` first
-   (kernel_bank → `nand-boot/` blobs). Always `XDJ_BOOT_MEDIA=nand
+   `provision_watch` sees it, waits 10 s, cuts power, writes `provisioned.stamp` → boots **Normal**. Normal/Update power-ons
+   boot through the unit's own chain: `XDJ_BOOT_ROM=1`, no kernel loaders — the emulated boot ROM
+   loads u-boot from mtd0, u-boot boots `kernel_bank` (`qemu/xdj/xdj-bootrom.c`). Provisioning (no
+   u-boot yet), `XDJ_DIRECT_BOOT=1` or a missing FCB use `nand::boot` (kernel_bank → `nand-boot/`
+   blobs) instead. Always `XDJ_BOOT_MEDIA=nand
    XDJ_NAND_IMG=<dir>/nand-flash.img XDJ_PANELCOM_IMG=<dir>/panelcom-flash.bin`.
    The SD image (`qemu/build-nand.py`) is dev-only (watch.sh / relaunch.sh / root shell).
 

@@ -9,6 +9,12 @@ QEMU=build/qemu-src/qemu-11.1.0/build/qemu-system-arm
 # Boot blobs (vmlinux/atags/tramp): XDJ_BOOT_DIR overrides build/qemu -- e.g. the output of
 # `xdj nand boot <nand-flash.img> <dir>` for a NAND boot (docs/firmware-update-and-nand.md).
 B="${XDJ_BOOT_DIR:-$Q}"
+BOOT_ARGS=(-device loader,file="$B/vmlinux.bin",addr=0x10008000,force-raw=on
+           -device loader,file="$B/atags.bin",addr=0x10000100,force-raw=on
+           -device loader,file="$B/tramp.bin",addr=0x10000000,cpu-num=0)
+# XDJ_BOOT_ROM=1 (an installed NAND unit): no loaders -- the emulated boot ROM boots the
+# unit's own u-boot from the NAND, which boots the kernel.
+[ "${XDJ_BOOT_ROM:-0}" != "0" ] && BOOT_ARGS=()
 # SD card: build/qemu/nand.img (the dev SD test bed) unless XDJ_SD=none (a NAND unit has none).
 SD_ARGS=(-drive if=none,id=xdjsd,file="$Q/nand.img",format=raw,snapshot=on)
 [ "${XDJ_SD:-}" = "none" ] && SD_ARGS=()
@@ -47,9 +53,7 @@ exec env XDJ_AUDIO_DEBUG=1 "$QEMU" \
   -audio coreaudio,timer-period=1451 \
   ${USB_ARGS[@]+"${USB_ARGS[@]}"} \
   -device usb-hub,bus=usb-bus.1,port=1,id=xdjhub \
-  -device loader,file="$B/vmlinux.bin",addr=0x10008000,force-raw=on \
-  -device loader,file="$B/atags.bin",addr=0x10000100,force-raw=on \
-  -device loader,file="$B/tramp.bin",addr=0x10000000,cpu-num=0 \
+  ${BOOT_ARGS[@]+"${BOOT_ARGS[@]}"} \
   ${SD_ARGS[@]+"${SD_ARGS[@]}"} \
   -nic user \
   ${CTRL_ARGS[@]+"${CTRL_ARGS[@]}"} \

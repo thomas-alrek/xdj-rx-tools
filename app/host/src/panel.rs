@@ -20,7 +20,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -483,13 +483,25 @@ async fn jog_idle_loop(p: Arc<Panel>) {
     }
 }
 
+/// Bumped by the host each time a power-on replaces console.log (main.rs spawn_qemu). The
+/// tail can't tell a new file by its inode: macOS reuses the deleted file's inode number,
+/// and once the new file outgrew the old read position its start (u-boot, the early
+/// kernel) would be skipped.
+pub static CONSOLE_GEN: AtomicU64 = AtomicU64::new(0);
+
 /// Tail the guest console into the "console" log (it appears late / restarts per power-on).
 async fn console_loop(p: Arc<Panel>) {
     use std::io::{Read, Seek, SeekFrom};
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
     let (mut pos, mut ino, mut part): (u64, u64, Vec<u8>) = (0, u64::MAX, Vec::new());
+    let mut gen = CONSOLE_GEN.load(Ordering::SeqCst);
     loop {
+        let g = CONSOLE_GEN.load(Ordering::SeqCst);
+        if g != gen {
+            gen = g;                              // a new boot: read its console from the start
+            ino = u64::MAX;
+        }
         if let Ok(md) = std::fs::metadata(&p.cfg.console) {
             #[cfg(unix)]
             let cur_ino = md.ino();

@@ -145,9 +145,13 @@ The app emulates the real unit: **no SD card**, everything lives in the emulated
   [firmware-update-and-nand.md](firmware-update-and-nand.md).
 - **Installed?** `provisioned.stamp`, else the NAND env has `release=` (written by the ALL update's
   last step; the factory env lacks it).
-- **Normal / Update**: each power-on runs `nand::boot` → `<dir>/nand-boot` (u-boot's
-  `bootcmd_nand` host-side: `kernel_bank` → that bank's uImage → blobs + bootargs), so a firmware
-  update done inside the emulator boots the new kernel. Update = `XDJ_BOOT_UPDATE=1`.
+- **Normal / Update**: the unit boots through its own chain — QEMU gets `XDJ_BOOT_ROM=1` and no
+  kernel loaders; the emulated boot ROM loads u-boot from mtd0 and u-boot boots `kernel_bank`
+  ([firmware-update-and-nand.md](firmware-update-and-nand.md) §4). So a firmware update done
+  inside the emulator boots its new u-boot env, kernel and bootargs as on the unit. Fallback
+  (`XDJ_DIRECT_BOOT=1`, or no FCB in mtd0): `nand::boot` → `<dir>/nand-boot`, the host-side
+  `bootcmd_nand`. Provisioning a blank unit always host-loads the kernel (no u-boot yet).
+  Update = `XDJ_BOOT_UPDATE=1`.
 - `power.sock` status: `on` (Normal), `on update` (Provision/Update), `off`.
 - **POWER off = the unit's standby handshake** while rbp runs: the panel presses the POWER key
   (`0x5d.0`, active-low), rbp prepares and sends TX `0x11='S'`, the panel cuts power; rbp's own AUTO
@@ -200,7 +204,7 @@ race. Per-instance channels live in the runtime dir:
 | `-chardev socket,id=xdjkey` | `key.sock` | MAIN-UCOM GPIO keys (panel) |
 | `-qmp unix:` | `qmp.sock` | lifecycle + USB `drive_add`/`device_add` (host and panel) |
 | `-vnc unix:` | `vnc.sock` | framebuffer → the WS bridge → noVNC |
-| `-serial file:` | `console.log` | kernel console |
+| `-serial file:` | `console.log` | serial console: u-boot, then the kernel |
 
 Audio backend is chosen by `pick_audio` (coreaudio on macOS, etc.; `XDJAUDIO`/`none` override).
 Packaged, `-L <qemu-bios>` points the relocated qemu at the bundled keymaps (else `-vnc` fails).
@@ -225,6 +229,8 @@ copyright-free design (no device photography). Full detail is in the
 - The window holds only the deck (aspect-locked 2110:1152); everything else is the **native menu
   bar** the page builds (File / Edit / Mixer / Deck 1 / Deck 2 / Color FX / FX / Master / View /
   Window), the pop-out screen (double-click) and the Sub uCom / System log windows (`logs.html`).
+  The System log tails `console.log` from the start of every boot (u-boot's first line on): a
+  power-on bumps `panel::CONSOLE_GEN`, since macOS reuses the replaced file's inode number.
 - **Power**: top-left POWER switch with a red LED; `POST /power` → host `power.sock`. USB images
   loaded while off are queued and inserted once the guest is ready; *Enter Firmware Update Mode*
   powers on with `XDJ_BOOT_UPDATE=1`.
@@ -336,6 +342,7 @@ noted; sensible defaults for both dev (repo) and packaged (`XDJ_RESOURCES`) layo
 | `XDJ_PANEL_PORT` / `XDJ_VNC_WS_PORT` | Default 8765 / 6080. |
 | `XDJ_USB` / `XDJ_USB_SLOT` / `XDJ_USB_DELAY` | Boot-time USB auto-insert (read/write): image or `/dev/diskN`, `usb1`/`usb2` (default `usb2`), settle seconds (default 6). |
 | `XDJAUDIO` / `XDJSMP` | Audio backend / vCPU count (default 2; a NAND boot needs ≥ 2). |
+| `XDJ_DIRECT_BOOT=1` | Boot an installed unit's kernel host-side (`nand::boot`) instead of through the boot ROM and u-boot. |
 | `XDJ_AUTOSTART` | `0` = start powered off (the shell sets this); default/other = power on at start. |
 | `XDJ_CAL_REF` | Dev-only: reference photo for the panel's `?cal` calibration overlay (served at `/cal-ref`; 404 if unset). |
 | `XDJ_FORCE_SETUP` | Shell: always show the drop screen (testing). |

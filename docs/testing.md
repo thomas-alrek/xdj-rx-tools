@@ -16,7 +16,7 @@ provisioning; `--keep` keeps the work dir; on failure it is kept anyway, with `h
 - **prep** — `xdj-host prep` of the firmware zip.
 - **provision** — a blank unit installs itself (ALL update): env `release=2.21`, then the host
   boots it from NAND by itself.
-- **boot** — normal NAND boot reaches the home screen.
+- **boot** — normal NAND boot (boot ROM → u-boot → kernel) reaches the home screen.
 - **panel** — MENU *held* 2 s opens UTILITY, a short MENU tap leaves it (a short tap on the home
   screen does nothing — not a bug); rbp's LED stream is live; MCP (`POST /mcp`): handshake, tool
   list, a held `press menu`, a PNG `screenshot`.

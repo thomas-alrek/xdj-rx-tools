@@ -87,7 +87,9 @@ preservation on owned hardware.
 - **Test mode** = MEMORY + TEMPO RANGE (`B 13 04` + `B 12 08`) held at rbp's first frame
   (*File → Power On in Test Mode*). Known open flake: ~1 boot in 8 comes up normal with correct frames.
 - **The app is a NAND unit**: a blank unit is provisioned by the firmware's own **ALL** update (stick
-  built by prep, inserted at `### USB update mount.`), then boots from NAND (`XDJ_BOOT_MEDIA=nand`).
+  built by prep, inserted at `### USB update mount.`), then boots from NAND (`XDJ_BOOT_MEDIA=nand`)
+  through its own chain: emulated **boot ROM → u-boot (mtd0) → kernel** (`XDJ_BOOT_ROM=1`,
+  `qemu/xdj/xdj-bootrom.c`; provisioning host-loads the kernel; `XDJ_DIRECT_BOOT=1` forces that).
   Installed = `release=` in the NAND env (the host sees it, then boots the unit from NAND).
   UTILITY → VERSION No. = that env `release`.
 - **No firmware signature**: `check_sig` = footer CRC32 + `XDJAERO` model prefix; the updater md5-checks
