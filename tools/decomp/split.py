@@ -387,6 +387,12 @@ class Splitter:
                     a += 1
                     continue
                 w = self.word(a)
+                # padding before an 8-aligned function (the next object's section alignment)
+                # gets its own section, so replacing the function before it keeps the padding
+                if s['name'] == '.text' and a + 4 in self.fset and (a + 4) % 8 == 0 and \
+                        a not in self.fset and w in (0, 0xe320f000, 0xe1a00000) and a not in self.refs and \
+                        a not in self.code_data:
+                    out.append(f'\t.section .rbp.text.{a:08x},"ax",%progbits\t@ alignment padding')
                 if a in self.refs:
                     t = self.refs[a]
                     if a in self.code_data:
