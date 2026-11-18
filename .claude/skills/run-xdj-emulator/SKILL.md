@@ -44,9 +44,11 @@ XDJ_BOOT_UPDATE=1 XDJ_UPDATE_TYPE=20 XDJ_BOOT_MEDIA=nand XDJ_SD=none \
   XDJ_NAND_IMG=/tmp/u/nand.img XDJ_PANELCOM_IMG=/tmp/u/panelcom.bin XDJUSB=/tmp/u/stick.img \
   ./tools/xdj-panel/debug/relaunch.sh
 $X nand info /tmp/u/nand.img                             # installed = env release=
-$X nand boot /tmp/u/nand.img /tmp/u/boot                 # u-boot's bootcmd_nand -> blobs
-XDJ_BOOT_DIR=/tmp/u/boot XDJ_BOOT_MEDIA=nand XDJ_SD=none XDJ_SMP=2 \
+# boot it like the unit: emulated boot ROM -> u-boot (mtd0) -> kernel_bank
+XDJ_BOOT_ROM=1 XDJ_BOOT_MEDIA=nand XDJ_SD=none XDJ_SMP=2 \
   XDJ_NAND_IMG=/tmp/u/nand.img XDJ_PANELCOM_IMG=/tmp/u/panelcom.bin ./tools/xdj-panel/debug/relaunch.sh
+# (host-side bootcmd_nand instead: $X nand boot /tmp/u/nand.img /tmp/u/boot, then
+#  XDJ_BOOT_DIR=/tmp/u/boot without XDJ_BOOT_ROM)
 ```
 Insert the stick on USB1 with `device_add usb-storage,bus=usb-bus.1,port=1.2,drive=usbstick,…`.
 A NAND boot **needs ≥ 2 CPUs** (single-core makes `apl_start` run `rbp_solo`, absent on a stock

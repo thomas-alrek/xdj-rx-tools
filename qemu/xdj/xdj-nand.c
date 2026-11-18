@@ -7,8 +7,8 @@
  * writes it with flash_erase / nandwrite / kobs-ng / ubiformat. Stock QEMU has none
  * of these blocks, so the drivers' probes fail and /dev/mtd* never appear.
  *
- * Modelled to the extent the 3.0.35 drivers use the hardware (GPL source,
- * drivers/dma/mxs-dma.c, drivers/mtd/nand/gpmi-nand/):
+ * Modelled to the extent the 3.0.35 drivers (GPL source, drivers/dma/mxs-dma.c,
+ * drivers/mtd/nand/gpmi-nand/) and the unit's u-boot 2009.08 use the hardware:
  *  - APBH-DMA (0x00110000, SPI 13): 16 channels of CCW chains -- PIO words into the GPMI
  *    registers, CMD_READ (memory -> device) / CMD_WRITE (device -> memory) data phases,
  *    CHAIN / DEC_SEM / IRQ, SEMA kick, CTRL1 completion IRQs. Runs synchronously in the
@@ -19,11 +19,12 @@
  *  - BCH (0x00114000, SPI 15): FLASH0LAYOUT page layout [meta][data0][ecc0][data1]..
  *    (bit-packed, LSB first, like the hardware -- gpmi-nand's block-mark swap relies on
  *    it), PAYLOAD/AUXILIARY buffers, per-chunk status 0x00 good / 0xff erased,
- *    COMPLETE_IRQ. Parity bits are written as 0: the kernel never sees them (we report
- *    no bit errors); only the boot ROM would check them.
+ *    COMPLETE_IRQ. Parity bits are written as 0: the kernel and u-boot never see them
+ *    (we report no bit errors); the emulated boot ROM (xdj-bootrom.c) doesn't check them.
  *  - The chip: Samsung K9F2G08U0C-style, ID EC DA 10 95 44 (non-ONFI): 2048+64-byte
  *    pages, 64 pages/block, 2048 blocks = 256 MiB; reset, read ID, read (00/30),
- *    random data out (05/E0), program (80/85/10), erase (60/D0), status (70).
+ *    cache read (31 sequential / 3F end, u-boot's reads), random data out (05/E0),
+ *    program (80/85/10), erase (60/D0), status (70).
  *    Program ANDs into the array, erase sets 0xff.
  *  Backing store: $XDJ_NAND_IMG, raw pages with OOB (2112 bytes each, page-major),
  *  created erased (0xff) if missing. Without it no chip answers (like an empty socket).
@@ -90,6 +91,8 @@ typedef struct {
     uint8_t ab[5];
     int nab;
     uint32_t col, row;
+    uint32_t cache_row;                  /* page the data register holds (cache read) */
+    bool cache_ok;
     int idx;
     uint8_t status;
     qemu_irq apbh_irq, bch_irq, gpmi_irq;
@@ -122,8 +125,24 @@ static void nand_cle(XdjNand *s, uint8_t c)
         if (s->pend == N_READ && s->array && s->row < NAND_PAGES) {
             memcpy(s->reg, s->array + (size_t)s->row * NAND_RAW, NAND_RAW);
             s->out = O_PAGE;
+            s->cache_row = s->row;               /* page N is in the data register */
+            s->cache_ok = true;
         }
         s->pend = N_IDLE;
+        break;
+    case 0x31:                                   /* read cache sequential */
+    case 0x3f:                                   /* read cache end */
+        /* The data register's page moves to the cache register (output from column 0,
+         * or the 2 column bytes that follow); 31h also starts loading the next page,
+         * 3Fh ends the sequence. u-boot reads this way, the kernel doesn't. */
+        if (s->cache_ok && s->array && s->cache_row < NAND_PAGES) {
+            memcpy(s->reg, s->array + (size_t)s->cache_row * NAND_RAW, NAND_RAW);
+            s->out = O_PAGE;
+            s->col = 0;
+            s->cache_row++;
+            s->cache_ok = c == 0x31;
+        }
+        s->pend = N_RNDOUT;                      /* optional column address */
         break;
     case 0x05:
         s->pend = N_RNDOUT;
@@ -672,6 +691,13 @@ static void nand_open_image(XdjNand *s)
     }
     s->array = m;
     fprintf(stderr, "xdj-nand: %s (256 MiB, 2048+64 x 64 x 2048)\n", path);
+}
+
+/* A raw page (data + OOB, as stored) for the boot ROM, NULL if there is no chip. */
+const uint8_t *xdj_nand_raw_page(uint32_t page)
+{
+    XdjNand *s = &g_nand;
+    return (s->array && page < NAND_PAGES) ? s->array + (size_t)page * NAND_RAW : NULL;
 }
 
 void xdj_nand_realize(DeviceState *dev, DeviceState *gic)
