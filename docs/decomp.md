@@ -34,14 +34,16 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   `-O2 -mcpu=cortex-a8 -marm`. A JUCE function (368 bytes) recompiles to the identical bytes.
   A scan of 115 JUCE source files finds about 700 of their functions in rbp at `-O2`, against
   500 at `-O3`.
-- A second compiler, Freescale's Linaro 2011.07 GCC 4.6.2, appears to have built zlib and
-  supplied the runtime libraries rbp was linked with. It is no longer downloadable.
+- A second compiler, Freescale's Linaro 2011.07 GCC 4.6.2, is named in `.comment`. It probably
+  built the C runtime objects rbp was linked with (rbp has no Thumb code, but the 2012.01
+  `libgcc.a` is Thumb-2). The binary isn't downloadable any more; see Status for building it.
+- zlib 1.2.3 is the copy bundled in JUCE, compiled with it.
 
 | Part | Approx. functions | Size | Plan |
 |---|---|---|---|
 | Pioneer's application (plus template code) | ~10,350 | 2.8 MB | decompile |
 | JUCE 1.51.16 (commit `27506c2`) | ~1,470 | 238 KB | upstream source |
-| zlib 1.2.3 | 35 | 27 KB | upstream source |
+| zlib 1.2.3 (bundled in JUCE) | 35 | 27 KB | upstream source |
 | embedded database engine (likely McObject eXtremeDB) | ~830 | 149 KB | binary blob, or replace |
 | iPod / iAP / MFi stack | ~290 | 116 KB | decompile or drop |
 | AAC decoder (built with ARM's armcc) | 59 | 23 KB | binary blob, or replace |
@@ -53,6 +55,25 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
 - **Relocation works.** Moving one function to a different address (test: a JUCE function moved
   into the free gap between the two segments) retargets its callers, and the moved copy still
   calls the same functions.
+- **C++ functions build into the binary.** 642 JUCE functions are compiled from the upstream
+  JUCE source and grafted in place of their assembly, and the rebuilt binary is still
+  byte-identical. A graft's external references (other functions, string literals, statics) are
+  resolved from the original bytes at the same offsets. Each matching graft reveals the addresses
+  of the functions it calls, which names more functions for the next round.
+- **Pioneer patched JUCE's atomics.** The JUCE block's atomic operations are inline
+  `ldrex`/`strex` loops without memory barriers. Pioneer's application code uses GCC's
+  `__sync` builtins, which come with `dmb`. The asm block is reconstructed exactly (a C loop around
+  one `ldrex; add; strex` statement with register-pinned outputs). The register allocation around
+  it doesn't match yet, so about 90 JUCE functions with atomics (`String`, `StringArray`, …) are
+  still assembly. zlib is JUCE's bundled copy and comes in with JUCE.
+- The binary's `.comment` also names Freescale's Linaro 2011.07 GCC 4.6.2. It can be built from
+  Linaro's source release (only `all-gcc`, with the 2012.01 toolchain's headers). For the code
+  tested so far it produces the same output as 2012.01.
+- **Class map.** RTTI gives 497 classes in Pioneer namespaces (`mixerengine::`, `dsp::`,
+  `common::` file readers, `ui::`, `network::`, `playengine::`, `db::` …) with their vtables. 23
+  source paths in strings show the source tree layout (`Source/Engine/PlayEngine/…`,
+  `Source/Common/reader/…`, `Source/Allinone/Nexus/DB/…`). The large regions without classes are
+  C: the database task and mailbox code, GUI glue, and text conversion.
 - Not yet symbolic: the unwind tables (`.ARM.exidx` / `.ARM.extab`) and `.got`. Moved code has no
   unwind entries until those are generated too.
 - `bl` reaches ±32 MB. The 38 MB `.bss` sits between the code and any address beyond it, so code
@@ -66,7 +87,7 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
 - `tools/decomp/match.py TARGET OBJ.o [NAME=ADDR …]`: compares compiled functions with the
   binary, word by word. Relocated words and call offsets are masked.
 - `tools/decomp/findsig.py TARGET OBJ.o …`: finds each function of the objects in the binary
-  by masked signature. Use it to name library code and to test compiler flags.
+  by masked signature (prints address, name, object and size). Use it to name library code and to test compiler flags.
 - `tools/decomp/split.py TARGET FSTARTS OUTDIR [--names FILE]`: the splitter. It writes GNU as
   sources (one file per data section, 64 KB chunks of whole functions for `.text`) and a linker
   script that puts every section back at its original address. Code is emitted word by word as
@@ -78,6 +99,14 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   - It drops candidates that sit inside a literal pool or between an instruction and its literal.
   - It drops candidates evidenced only by a data pointer that don't follow a function end.
   - It adds `push {…, lr}` prologues that follow a function end.
+- `tools/decomp/graft.py prep|resolve`: grafts compiled functions into a split tree. `prep`
+  removes the function's assembly and extracts the function from the compiler's `-S` output into
+  the same section slot (unwind directives dropped; `C1`/`D1` aliases followed). `resolve`
+  infers the addresses of the graft's undefined references from the original bytes. It also
+  checks that they agree, reports MATCH or DIFF per function, and writes the linker script and
+  the names it learnt.
+- `tools/decomp/rtti.py TARGET FUNCTIONS OUTDIR`: recovers classes from RTTI (typeinfo objects,
+  base classes, vtables). Each virtual function is attributed to the most basic class that has it.
 - `tools/decomp/cmp.py ORIGINAL BUILT`: compares the relinked binary with the original section by
   section, at the original addresses, and names the nearest label for each difference.
 - The 2012.01 toolchain is 32-bit x86 Linux. On macOS it runs in Docker
