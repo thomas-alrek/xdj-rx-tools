@@ -96,10 +96,15 @@ def extract(asm, sym, addr):
     defined = {m.group(1) for ln in body for m in [re.match(r'^(\.L\w+):', ln)] if m}
     used = set(re.findall(r'\.L\w+', '\n'.join(body)))
 
+    # each external local reference (with its offset) becomes its own undefined symbol, so a
+    # section anchor shared by several objects resolves per object (rbp's data layout around
+    # the anchor need not match ours)
     def ext(m):
-        t = m.group(0)
-        return t if t in defined or t not in used else f'__g{addr:x}_{t[1:]}'
-    body = [re.sub(r'\.L\w+', ext, ln) for ln in body]
+        t, off = m.group(1), m.group(2)
+        if t in defined or t not in used:
+            return m.group(0)
+        return f'__g{addr:x}_{t[1:]}' + (f'_{"m" if int(off) < 0 else ""}{abs(int(off))}' if off else '')
+    body = [re.sub(r'(\.L\w+)(?:([+-]\d+))?', ext, ln) for ln in body]
     # static functions too: the rest of the tree refers to them by name
     return head + [f'\t.section .rbp.text.{addr:08x},"ax",%progbits', f'\t.global {sym}'] + body
 
