@@ -504,6 +504,24 @@ def main(argv):
             if bt and bt[1] == 'bl' and base + 4 * i not in sp.code_data:
                 evidence.add(bt[0])
     pro = sp.prologue_starts()
+    # tail-call targets: a branch from one function into another function's range that lands
+    # right after a function end (terminator or literal pool) starts a function of its own
+    for s_, base, words in sp.code_words():
+        for i, w in enumerate(words):
+            a = base + 4 * i
+            bt = branch_target(w, a)
+            if not bt or a in sp.code_data:
+                continue
+            t = bt[0]
+            ts = sp.code_sec(t)
+            if not ts or t in sp.fset or t <= ts['addr'] or t in sp.code_data:
+                continue
+            lo, hi = sp.func_of(a)
+            if lo <= t < hi:
+                continue
+            p_ = sp.word(t - 4)
+            if t - 4 in sp.code_data or ends_function(p_):
+                pro.add(t)
     found = len(pro - sp.fset)
     evidence |= pro
     sp.add_starts(pro)
@@ -517,7 +535,7 @@ def main(argv):
     sp.fset = set(sp.fstarts)
     dropped = sp.prune(evidence)
     dropped.update((a, 'inside a function of known size') for a in inside)
-    print(f'{found} functions found by prologue')
+    print(f'{found} functions found by prologue or as tail-call targets')
     sp.scan()
     target_rel = os.path.relpath(os.path.abspath(target), os.path.abspath(outdir))
     files = sp.emit(outdir, target_rel, chunk, disasm)
