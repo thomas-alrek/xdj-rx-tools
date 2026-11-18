@@ -13,6 +13,9 @@ index `docs/releases.md` (linked at the top of the README).
 ## Cutting a release
 1. `tools/fw/build-release.sh` (release number + mod list are in the script) → `build/release/`;
    run it twice: the MD5 must be identical (`SOURCE_DATE_EPOCH`, pinned Docker images).
+1a. `xdj fw check build/release/XDJRX.UPD`: the build already refuses an image the unit can't
+   load at boot (3 MiB pioneer, 20 MiB rootfs, 60 MiB RAM disk: docs/custom-firmware.md §2b);
+   note the headroom (3.01: pioneer 2.08 of 3 MiB, RAM-disk peak 54.6 of 59 MiB).
 2. Boot test on a **wiped** emulator unit (delete the test unit's `nand-flash.img` +
    `provisioned.stamp`, power on → stock 2.21 is provisioned, then install the release).
    Must show `### xdjmod: loaded into rbp … N module(s)` and UTILITY → VERSION No. = the release.

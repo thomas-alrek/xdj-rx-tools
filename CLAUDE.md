@@ -92,6 +92,11 @@ preservation on owned hardware.
   UTILITY → VERSION No. = that env `release`.
 - **No firmware signature**: `check_sig` = footer CRC32 + `XDJAERO` model prefix; the updater md5-checks
   each written partition against its own source. Rebuilt `.UPD`s install like official ones.
+- **Boot loads fixed lengths, not partitions**: u-boot reads 5 MiB of the kernel bank, the initramfs
+  20 MiB of the rootfs (mtd5) and **3 MiB of pioneer** (mtd7) into a **60 MiB RAM disk** (rootfs image +
+  unpacked copy at once), apl_start's first-boot 8 MiB of gui / 128 KiB of data. Past that, files are
+  silently missing (the updater still says complete). `xdj fw build`/`repack`/`pack` refuse it;
+  `xdj fw check <UPD>` shows the budget. `docs/custom-firmware.md` §2b.
 - **USB speed**: front slots enumerate at **480 Mbit/s** (`04-usb-chipidea-hub`); macOS QEMU timers need
   `05-macos-submillisecond-poll`.
 - **E-7206 AUTH CHIP ERROR** = the MFi coprocessor on **I2C4** (`0x021F8000`, slave 0x10) — `xdj-mfi.c`.

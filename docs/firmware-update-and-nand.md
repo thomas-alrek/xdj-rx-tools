@@ -141,8 +141,12 @@ hangs on the splash.
   u-boot's bare `video=mxcfb0` replaced by the emulator's LVDS mode line → `uImage`,
   `vmlinux.bin`, `atags.bin`, `tramp.bin` in `<dir>`. A firmware update done inside the emulator
   therefore boots its new kernel on the next power-on.
-- **Userland**: the initramfs takes `rootfs=nand` (nanddump mtd5/mtd7), apl_start sees
-  `BOOTMODE=NAND` and mounts UBI data/gui, `rbp` starts → home screen.
+- **Userland**: the initramfs takes `rootfs=nand`: into a 60 MiB tmpfs it `nanddump`s a fixed
+  20 MiB of mtd5 (`rootfs.cramfs`, copied out with `cpdir`, then deleted) and a fixed 3 MiB of
+  mtd7 (`pioneer.tar.gz`, unpacked into `/root/pioneer`), then `switch_root`s into it. apl_start
+  sees `BOOTMODE=NAND` and mounts UBI data/gui, `rbp` starts → home screen. Those fixed lengths
+  (and u-boot's 5 MiB kernel read) are smaller than the partitions: a custom firmware must fit
+  them ([custom-firmware.md §2b](custom-firmware.md); `xdj fw check`).
 - **Needs ≥ 2 CPUs** (`XDJ_SMP=2`): single-core makes apl_start run `rbp_solo`, which a stock
   install doesn't have.
 - **No SD card** (`XDJ_SD=none`): a NAND unit has none.

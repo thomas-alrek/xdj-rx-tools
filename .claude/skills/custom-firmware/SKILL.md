@@ -57,8 +57,8 @@ from the base). Verify: unpack the result and `fw diff` it against itself → 0 
 ## Best practices (full list: docs/custom-firmware.md §2a)
 Start from the official image every time · keep the change a small overlay **outside the repo**
 (never commit firmware files or patches containing them) · bump `--release` · put changes in parts a
-USER update flashes (rootfs/pioneer/gui; data/user need ALL) and within partition sizes (build
-enforces 30/8/10 MiB) · BusyBox ash, ARM glibc-2.13 binaries, LF, `chmod +x` new scripts · leave an
+USER update flashes (rootfs/pioneer/gui; data/user need ALL) and **within what boot loads** (below;
+build refuses more) · BusyBox ash, ARM glibc-2.13 binaries, LF, `chmod +x` new scripts · leave an
 `echo` marker on the console · verify with `fw info` + unpack/diff · install on a throwaway unit ·
 keep a way back (higher-release rebuild of stock, or reprovision).
 
@@ -69,7 +69,7 @@ $X fw unpack build/XDJ-RX_v221.zip build/unpacked       # iso/ rootfs/ pioneer/ 
 mkdir -p ~/fw-ov/rootfs/etc && cp build/unpacked/rootfs/etc/<file> ~/fw-ov/rootfs/etc/
 $EDITOR ~/fw-ov/rootfs/etc/<file>
 $X fw build build/XDJ-RX_v221.zip --overlay ~/fw-ov --release X.YY -o build/MY.UPD
-$X fw info build/MY.UPD && $X fw stick build/MY.UPD build/my-stick.img
+$X fw info build/MY.UPD && $X fw check build/MY.UPD && $X fw stick build/MY.UPD build/my-stick.img
 ```
 Overlay parts: `iso/` raw image files · `rootfs/` → rootfs.cramfs (mtd5) · `pioneer/` →
 pioneer.tar.gz (mtd7; paths start `pioneer/`, e.g. `pioneer/pioneer/rbp`) · `gui/` · `data/` ·
@@ -88,6 +88,15 @@ PANELCOM, a kernel bank, mtd5, mtd7, gui).
   OK!!`, then env `release=X`; after the power cycle your change; test mode Mode 1 SYSTEM Ver.X.
 
 ## Facts that matter
+- **Boot loads fixed lengths, smaller than the partitions** (docs/custom-firmware.md §2b): uImage
+  **5 MiB** (u-boot `nand read … 0x500000`), rootfs.cramfs **20 MiB** (`nanddump --length=0x1400000`),
+  pioneer.tar.gz **3 MiB** (`0x300000`), gui.tar.gz **8 MiB** / data.tar.gz **128 KiB** (apl_start's
+  first-boot UBI format). Both rootfs (20 MiB image + its unpacked copy) and pioneer unpack into a
+  **60 MiB tmpfs** that is also the running system: copy peak ≤ 59 MiB, ≥ 16 MiB free after boot
+  (stock: 54.4 / 21.1). Past a limit the update still installs "complete" and the files past it are
+  silently missing (oversized pioneer → `libxdjmod.so cannot be preloaded`). `fw build`, `repack`
+  and `pack` refuse it; **`xdj fw check <UPD>`** prints the budget. Big data → rootfs (watch the RAM
+  disk) or a UBI volume (`/root/gui`), not pioneer.
 - **No signature.** `check_sig` = footer CRC32 + `XDJAERO` model prefix; the updater's md5 only
   compares each written partition with its own source. `xdj fw build` sets the model to
   `XDJAERO<release>` itself.
