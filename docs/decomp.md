@@ -69,10 +69,15 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
 - The binary's `.comment` also names Freescale's Linaro 2011.07 GCC 4.6.2. It can be built from
   Linaro's source release (only `all-gcc`, with the 2012.01 toolchain's headers). For the code
   tested so far it produces the same output as 2012.01.
-- **Pioneer's own code from source.** The first class, `dsp::LagrangeSRC` (a 4-point Lagrange
-  stereo resampler written with NEON intrinsics), is reconstructed: 9 of its 10 functions and
-  its static constants initializer recompile byte-identically and are built into rbp. Pioneer's
-  DSP code needs `-mfpu=neon -mfloat-abi=softfp` on top of the base flags.
+- **Pioneer's own code from source.** 215 of Pioneer's functions, from 23 reconstructed source
+  files, recompile byte-identically and are built into rbp. They cover the DSP primitives
+  (`dsp::LagrangeSRC`, the IIR filters, time-stretch base classes) and much of `mixerengine::`:
+  output devices and channels, the input channels (mic, deck, USB), the master channel, the WAV
+  recorder, the compressor buffer and the beat/colour effect bases. With JUCE that makes 857
+  functions built from source. Pioneer's code needs Linaro 2011.07 GCC (built from source with
+  the cross binutils present, so it knows COMDAT groups and mergeable string sections) and
+  `-mfpu=neon -mfloat-abi=softfp`. Functions that don't match yet stay as assembly. The usual
+  reasons are register allocation, block order, or a source detail not yet recovered.
 - **Class map.** RTTI gives 497 classes in Pioneer namespaces (`mixerengine::`, `dsp::`,
   `common::` file readers, `ui::`, `network::`, `playengine::`, `db::` …) with their vtables. 23
   source paths in strings show the source tree layout (`Source/Engine/PlayEngine/…`,
