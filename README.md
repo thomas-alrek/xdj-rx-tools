@@ -197,6 +197,7 @@ Never commit firmware contents.
 | [docs/firmware-mods.md](docs/firmware-mods.md) | feature mods (exFAT, hook library, FPS, WAV/FLAC, waveforms, OneLibrary) and their research |
 | [docs/emulator-status.md](docs/emulator-status.md) | what works, what doesn't, open items |
 | [docs/subucom-frame-map.md](docs/subucom-frame-map.md) | the front-panel control map (every button, fader, knob, encoder) |
+| [docs/key-codes.md](docs/key-codes.md) | every panel key code with rbp's name, group, long-press time |
 | [docs/subucom-led-map.md](docs/subucom-led-map.md) | LEDs, level meters, jog rings |
 | [docs/service-modes.md](docs/service-modes.md) | test mode, factory reset, update mode, the power/standby handshake |
 | [docs/firmware-update-and-nand.md](docs/firmware-update-and-nand.md) | the updater, the panel MCU bootloader, NAND flash emulation |

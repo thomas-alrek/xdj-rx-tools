@@ -69,14 +69,17 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
 - The binary's `.comment` also names Freescale's Linaro 2011.07 GCC 4.6.2. It can be built from
   Linaro's source release (only `all-gcc`, with the 2012.01 toolchain's headers). For the code
   tested so far it produces the same output as 2012.01.
-- **Pioneer's own code from source.** 215 of Pioneer's functions, from 23 reconstructed source
+- **Pioneer's own code from source.** 295 of Pioneer's functions, from 32 reconstructed source
   files, recompile byte-identically and are built into rbp. They cover the DSP primitives
   (`dsp::LagrangeSRC`, the IIR filters, time-stretch base classes) and much of `mixerengine::`:
   output devices and channels, the input channels (mic, deck, USB), the master channel, the WAV
-  recorder, the compressor buffer and the beat/colour effect bases. With JUCE that makes 857
-  functions built from source. Pioneer's code needs Linaro 2011.07 GCC (built from source with
-  the cross binutils present, so it knows COMDAT groups and mergeable string sections) and
-  `-mfpu=neon -mfloat-abi=softfp`. Functions that don't match yet stay as assembly. The usual
+  recorder, the compressor buffer and the beat/colour effect bases. In the UI layer they cover
+  `uif::UiObject`/`UiTimer`, the panel TX path (`ui::PanelComController`), `ui::KeyInput`
+  (the key table in [key-codes.md](key-codes.md)) and `ui::JogSpeedGuesser`. Another 499 trivial
+  virtual functions (empty bodies, constant returns, field getters/setters) are generated from
+  rbp's vtables. With JUCE that makes about 1,440 functions built from source. Pioneer's code
+  needs Linaro 2011.07 GCC (built from source with the cross binutils present, so it knows COMDAT
+  groups and mergeable string sections) and `-mfpu=neon -mfloat-abi=softfp`. Functions that don't match yet stay as assembly. The usual
   reasons are register allocation, block order, or a source detail not yet recovered.
 - **Class map.** RTTI gives 497 classes in Pioneer namespaces (`mixerengine::`, `dsp::`,
   `common::` file readers, `ui::`, `network::`, `playengine::`, `db::` …) with their vtables. 23
