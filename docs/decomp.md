@@ -28,7 +28,7 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
 
 ## What rbp is made of
 
-- About 13,000 functions in 3.3 MB of ARM code (ARM mode only, no Thumb).
+- About 14,100 functions in 3.3 MB of ARM code (ARM mode only, no Thumb), plus 435 PLT stubs.
 - **Compiler and flags, confirmed by byte-identical matches:** Linaro GCC 2012.01 (4.6.3, the
   public binary `gcc-linaro-arm-linux-gnueabi-2012.01-20120125`) with
   `-O2 -mcpu=cortex-a8 -marm`. A JUCE function (368 bytes) recompiles to the identical bytes.
@@ -46,6 +46,19 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
 | iPod / iAP / MFi stack | ~290 | 116 KB | decompile or drop |
 | AAC decoder (built with ARM's armcc) | 59 | 23 KB | binary blob, or replace |
 
+## Status
+
+- **Byte-identical rebuild works.** `split.py` → assemble → link reproduces every loaded
+  section of `rbp` byte for byte, with about 180,000 symbolic references.
+- **Relocation works.** Moving one function to a different address (test: a JUCE function moved
+  into the free gap between the two segments) retargets its callers, and the moved copy still
+  calls the same functions.
+- Not yet symbolic: the unwind tables (`.ARM.exidx` / `.ARM.extab`) and `.got`. Moved code has no
+  unwind entries until those are generated too.
+- `bl` reaches ±32 MB. The 38 MB `.bss` sits between the code and any address beyond it, so code
+  placed past `.bss` gets linker veneers. The free gap before the data segment
+  (0x458e2c–0x461000, 33 KB) is in range.
+
 ## Tools
 
 - `tools/decomp/elfinfo.py`: a dependency-free ELF32 reader (sections, symbols, relocations,
@@ -54,5 +67,18 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   binary, word by word. Relocated words and call offsets are masked.
 - `tools/decomp/findsig.py TARGET OBJ.o …`: finds each function of the objects in the binary
   by masked signature. Use it to name library code and to test compiler flags.
+- `tools/decomp/split.py TARGET FSTARTS OUTDIR [--names FILE]`: the splitter. It writes GNU as
+  sources (one file per data section, 64 KB chunks of whole functions for `.text`) and a linker
+  script that puts every section back at its original address. Code is emitted word by word as
+  `.inst` with a disassembly comment. Calls and branches to other functions, literal-pool words
+  and switch-table entries that hold addresses, and pointers in the data sections become
+  labels. Every target gets its own global label (`f_`, `c_`, `d_`, `b_`, `p_<import>`, or a name
+  from `--names`). The dynamic-linking tables, unwind tables and `.got` stay raw (`.incbin` from
+  the original file). It also refines the function list:
+  - It drops candidates that sit inside a literal pool or between an instruction and its literal.
+  - It drops candidates evidenced only by a data pointer that don't follow a function end.
+  - It adds `push {…, lr}` prologues that follow a function end.
+- `tools/decomp/cmp.py ORIGINAL BUILT`: compares the relinked binary with the original section by
+  section, at the original addresses, and names the nearest label for each difference.
 - The 2012.01 toolchain is 32-bit x86 Linux. On macOS it runs in Docker
   (`--platform linux/386`, e.g. `i386/debian:bullseye-slim`).
