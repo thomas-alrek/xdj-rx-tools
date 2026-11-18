@@ -116,7 +116,8 @@ The patcher asks for two files. Drag each into its window and press Enter:
 
 It then checks that the firmware is Pioneer's official 2.21, downloads the firmware key from
 Pioneer's public source code (about 280 MB, a minute or two on most connections), builds 3.01
-and checks the result. When it says **Done**, the new firmware is in a new folder next to the
+and checks the result. The key is saved on your computer, so the download happens only the
+first time (the patcher app and the XDJ-RX emulator app share it). When it says **Done**, the new firmware is in a new folder next to the
 official one: **`XDJ-RX 3.01/XDJRX.UPD`**. If anything doesn't match, it stops with a message
 and writes nothing.
 

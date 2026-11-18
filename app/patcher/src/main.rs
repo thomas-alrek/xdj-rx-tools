@@ -3,7 +3,9 @@
 //!
 //! The work is crates/xdjrx-patcher's library (the CLI does the same): Pioneer's official
 //! firmware 2.21 + a patch file (.xdjpatch) -> the release's XDJRX.UPD, verified by MD5. The key
-//! comes from Pioneer's public GPL source code unless the user gives one.
+//! is the user's if given, else the saved one (shared with the emulator app) if it opens the
+//! firmware, else it comes from Pioneer's public GPL source code; a key that built the release
+//! is saved.
 //!
 //! Page <- Rust (window.eval): `render(state)` after every change, `progress(pct, step, detail)`
 //! while building, `done(result)`, `failed(message)`.
@@ -15,7 +17,7 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::{DragDropEvent, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
-use xdjrx_patcher::{key_from_arg, key_from_gpl, Job, Msg, DOWNLOAD_MB};
+use xdjrx_patcher::{key_from_arg, key_from_gpl, save_key, saved_key, Job, Msg, DOWNLOAD_MB};
 
 #[derive(Default)]
 struct State {
@@ -25,7 +27,7 @@ struct State {
     job: Option<Result<Arc<Job>, String>>,
     checking: bool,
     busy: bool,
-    key: Option<[u8; 32]>, // downloaded earlier in this session
+    key: Option<[u8; 32]>, // the saved key (shared with the emulator app), or one fetched this session
     result: Option<PathBuf>,
 }
 
@@ -226,7 +228,8 @@ fn build(app: tauri::AppHandle, key: String) -> Result<(), String> {
         let progress = |pct: f64, step: &str, detail: &str| {
             eval(&app, &format!("progress({pct:.3}, {}, {})", js_str(step), js_str(detail)));
         };
-        let key = given.or(cached);
+        // a saved key is used only if it opens this firmware (else it is fetched again)
+        let key = given.or(cached.filter(|k| job.key_opens(k)));
         // the download is most of the time: 0-70 %, the build 70-100 %
         let (base, span) = if key.is_some() { (0.0, 1.0) } else { (0.7, 0.3) };
         progress(0.0, "Starting…", "");
@@ -250,14 +253,12 @@ fn build(app: tauri::AppHandle, key: String) -> Result<(), String> {
                         }
                     }
                 })
-                .map(|k| {
-                    app.state::<Shared>().lock().unwrap().key = Some(k);
-                    k
-                })
+                
                 .map_err(|e| format!("Couldn't download the firmware key ({e}). Enter it under \"I have the key\" instead."))
             }
         };
         let steps = ["Opening the official firmware", "Applying the changes", "Building", "Encrypting and verifying"];
+        let key_used = key.clone();
         let result = key.and_then(|k| {
             job.build(&k, out.as_deref(), &mut |m| {
                 if let Msg::Step(s) = m {
@@ -272,6 +273,10 @@ fn build(app: tauri::AppHandle, key: String) -> Result<(), String> {
             s.busy = false;
             if let Ok(d) = &result {
                 s.result = Some(d.path.clone());
+            }
+            if let (Ok(_), Ok(k)) = (&result, &key_used) {
+                s.key = Some(*k);                // kept for this session and saved for the next
+                let _ = save_key(k);
             }
         }
         render(&app);
@@ -302,7 +307,7 @@ fn reveal(app: tauri::AppHandle) {
 }
 
 fn main() {
-    let shared: Shared = Arc::new(Mutex::new(State::default()));
+    let shared: Shared = Arc::new(Mutex::new(State { key: saved_key(), ..State::default() }));
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(shared)
