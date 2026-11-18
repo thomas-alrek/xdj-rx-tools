@@ -186,10 +186,19 @@ def normalize(path, addr, sym):
                 struct.pack_into('<I', d, o + 4, max(v - start, 0))
         rel = e.sections.get('.rel' + name)
         if rel:
+            symtab = e.sec('.symtab')
             for k in range(rel['size'] // 8):
                 o = rel['off'] + 8 * k
-                v, = struct.unpack_from('<I', d, o)
+                v, info = struct.unpack_from('<II', d, o)
                 struct.pack_into('<I', d, o, v - start)
+                # REL addends live in the section data: an R_ARM_ABS32 against this section's own
+                # symbol (a jump table entry) points into the section and loses the filler too
+                so = symtab['off'] + 16 * (info >> 8)
+                if info & 0xff == 2 and struct.unpack_from('<H', d, so + 14)[0] == idx \
+                        and d[so + 12] & 0xf == 3:
+                    w = secs[idx]['off'] + v
+                    a, = struct.unpack_from('<I', d, w)
+                    struct.pack_into('<I', d, w, a - start)
     open(path, 'wb').write(bytes(d))
 
 
