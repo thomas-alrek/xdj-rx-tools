@@ -9,7 +9,7 @@
 //!     SABRE-SD trampoline (tramp.bin) and the ATAG list (atags.bin).
 
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use aes::cipher::{BlockDecryptMut, KeyIvInit};
 
@@ -116,13 +116,56 @@ pub fn resolve_key(key_file: Option<&Path>, start: &Path) -> Result<[u8; 32], St
         }
         dir = d.parent();
     }
-    if let Some(home) = std::env::var_os("HOME") {
-        let k = Path::new(&home).join("Library/Application Support/XDJ-RX/key/aes256.key");
-        if k.exists() {
-            return key_from_file(&k);
-        }
+    if let Some(k) = stored_key_path().filter(|k| k.is_file()) {
+        return key_from_file(&k);
     }
     Err("no firmware key: pass --key-file, set XDJRX_AES_KEY, or run fetch_key (writes .env)".into())
+}
+
+/// The saved firmware key, shared by the XDJ-RX tools (the desktop app's key store; the
+/// patcher reads and fills it too): macOS `~/Library/Application Support/XDJ-RX/key/aes256.key`,
+/// Linux `$XDG_DATA_HOME/xdj-rx/key/aes256.key` (default `~/.local/share`), Windows
+/// `%APPDATA%\XDJ-RX\key\aes256.key`. The file holds 64 hex characters (or a losetup
+/// passphrase file, as `key_from_file` reads).
+pub fn stored_key_path() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    if cfg!(target_os = "macos") {
+        return home.map(|h| h.join("Library/Application Support/XDJ-RX/key/aes256.key"));
+    }
+    if cfg!(windows) {
+        return std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("XDJ-RX").join("key").join("aes256.key"));
+    }
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home.map(|h| h.join(".local/share")))?;
+    Some(base.join("xdj-rx").join("key").join("aes256.key"))
+}
+
+/// The saved key, if there is one and it reads.
+pub fn stored_key() -> Option<[u8; 32]> {
+    let p = stored_key_path()?;
+    if !p.is_file() {
+        return None;
+    }
+    key_from_file(&p).ok()
+}
+
+/// Save `key` (as 64 hex characters) where `stored_key` finds it; returns the file.
+pub fn store_key(key: &[u8; 32]) -> Result<PathBuf, String> {
+    let p = stored_key_path().ok_or("no place to save the key (no home directory)")?;
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+    }
+    let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
+    std::fs::write(&p, hex).map_err(|e| format!("{}: {e}", p.display()))?;
+    Ok(p)
+}
+
+/// Whether `key` opens this encrypted body: decrypts only the first 34 KB (the ISO9660
+/// descriptor at 0x8000), so it is a quick check before a full build.
+pub fn key_opens(body: &[u8], key: &[u8; 32]) -> bool {
+    let n = body.len().min(0x8800) / SECTOR * SECTOR;
+    decrypt_body(&body[..n], key).is_ok()
 }
 
 /// Decrypt the body and check it is an ISO9660 image (else: wrong key).

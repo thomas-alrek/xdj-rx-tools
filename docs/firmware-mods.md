@@ -713,10 +713,15 @@ xdjrx-patcher  ORIGINAL.UPD  PATCH.xdjpatch  [--key KEY]  [-o OUT.UPD]
   a change that isn't an insertion is refused, so no Pioneer text ends up in the patch. The
   manifest also has the release (3.01), `SOURCE_DATE_EPOCH`, the input MD5s and the expected
   output MD5.
-- **KEY** (optional): 64 hex characters, or a key file. Without it the patcher downloads
-  Pioneer's public GPL source release for the XDJ-RX (two deflate64 ZIPs, ~280 MB) and derives
-  the key from `initramfs/usr/local/pioneer/aes256.key` (`xdj_fw::gplkey`, also used by the
-  desktop app's key prompt; same result as `tools/fetch_key.py`), asking for it only if that fails. `$XDJRX_AES_KEY` also works.
+- **KEY** (optional): 64 hex characters, or a key file; `$XDJRX_AES_KEY` also works. Without
+  one the patcher uses the **saved key** (`xdj_fw::firmware::stored_key_path`: the emulator app's
+  key store, macOS `~/Library/Application Support/XDJ-RX/key/aes256.key`, Linux
+  `~/.local/share/xdj-rx/key/aes256.key`, Windows `%APPDATA%\XDJ-RX\key\aes256.key`) if it
+  opens the firmware (`firmware::key_opens`: the first 34 KB only), else it downloads Pioneer's
+  public GPL source release for the XDJ-RX (two deflate64 ZIPs, ~280 MB) and derives the key
+  from `initramfs/usr/local/pioneer/aes256.key` (`xdj_fw::gplkey`, also used by the desktop
+  app's key prompt; same result as `tools/fetch_key.py`), asking for it only if that fails. A
+  key that built the release is saved there (CLI and app), so the download happens once.
 - **What it does:** decrypts the original (the key is checked: ISO9660 must appear), unpacks the
   two edited files, applies the edits and checks their hashes, writes the overlay (new files'
   modes in each part's `.xdj-modes`, so Windows builds the same bytes as macOS/Linux), sets

@@ -3,7 +3,7 @@
 //! release (.UPD), rebuilt exactly as `tools/fw/build-release.sh` does and verified by MD5.
 //!
 //!   let job = Job::open(original, patch)?;      // reads the patch, checks the official MD5
-//!   let key = key_from_gpl(&mut on)?;            // or key_from_arg(hex or key file)
+//!   let key = key_from_gpl(&mut on)?;            // or saved_key(), key_from_arg(hex or key file)
 //!   let done = job.build(&key, out, &mut on)?;   // writes only on an MD5 match
 //!
 //! SPDX-License-Identifier: GPL-2.0-or-later
@@ -68,6 +68,11 @@ impl Job {
     /// Where the result goes by default: a folder "XDJ-RX <release>" next to the original.
     pub fn default_output(&self) -> PathBuf {
         default_output(&self.orig, self.release())
+    }
+
+    /// Whether `key` opens the official firmware (a quick check of its first sectors).
+    pub fn key_opens(&self, key: &[u8; 32]) -> bool {
+        firmware::split_container(&self.upd).map_or(false, |(body, _, _)| firmware::key_opens(body, key))
     }
 
     /// Build the release with `key` and write it to `out` (default: `default_output()`),
@@ -155,6 +160,25 @@ pub fn key_from_arg(k: &str) -> Result<[u8; 32], String> {
         return firmware::key_from_file(p);
     }
     Err("expected 64 hex characters or a key file".into())
+}
+
+/// The saved firmware key (shared with the XDJ-RX desktop app: `stored_key_path`), if any.
+pub fn saved_key() -> Option<[u8; 32]> {
+    firmware::stored_key()
+}
+
+/// Where the saved key lives (whether or not it exists yet).
+pub fn saved_key_path() -> Option<PathBuf> {
+    firmware::stored_key_path()
+}
+
+/// Save a key that opened the firmware, so the next run (and the desktop app) needn't fetch it
+/// again. Returns the file when it wrote one; an unchanged saved key is left alone.
+pub fn save_key(key: &[u8; 32]) -> Result<Option<PathBuf>, String> {
+    if firmware::stored_key().as_ref() == Some(key) {
+        return Ok(None);
+    }
+    firmware::store_key(key).map(Some)
 }
 
 /// The key, from Pioneer's public GPL source release (~280 MB download).
