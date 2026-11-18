@@ -6,7 +6,8 @@ TARGET   the original executable (also .incbin'd for the sections kept raw)
 FSTARTS  candidate function starts, one hex address per line
 OUTDIR   receives one .s per data section, text_<addr>.s chunks of whole functions,
          link.ld and objects.txt (link order)
---names  optional `ADDR NAME` lines (or findsig `FOUND ADDR NAME` lines) naming functions
+--names  optional `ADDR NAME` lines, or findsig `FOUND ADDR NAME OBJECT SIZE` lines: names, and
+         for known sizes the end is a function start and starts inside are dropped
 
 Code sections are emitted word by word as `.inst` (with a disassembly comment), except:
   - b/bl to another function, emitted as `b{cond} label`;
@@ -300,7 +301,7 @@ class Splitter:
                 for k in range(len(cuts) - 1):
                     lo, hi = cuts[k], cuts[k + 1]
                     fn = f'text_{lo:06x}.s'
-                    isec = f'.rbp.text.{lo:06x}'
+                    isec = f'.rbp.text.{lo:08x}'
                     ls = [a for a in labs if lo <= a < hi or (a == hi and k == len(cuts) - 2)]
                     self._write(outdir, fn, isec, s, lo, hi, ls, dis, target_rel)
                     files.append((fn, isec, s))
@@ -344,6 +345,8 @@ class Splitter:
                 n = self.labels[labs[li]]
                 if labs[li] in self.fset:
                     out.append('')
+                    if s['name'] == '.text':      # one section per function, sorted by address at link
+                        out.append(f'\t.section .rbp.text.{labs[li]:08x},"ax",%progbits')
                 out.append(f'\t.global {n}\n{n}:')
                 li += 1
 
@@ -428,6 +431,8 @@ class Splitter:
             else:
                 groups.append((s, [isec]))
         for s, isecs in groups:
+            if s['name'] == '.text':
+                isecs = ['SORT_BY_NAME(.rbp.text.*)']
             out.append(f'  .rbp{s["name"]} {s["addr"]:#x} : {{ ' +
                        ' '.join(f'*({i})' for i in isecs) + ' }')
         out.append(f'  _start_rbp = {struct.unpack_from("<I", self.e.d, 0x18)[0]:#x};')
@@ -440,7 +445,7 @@ class Splitter:
 
 
 def main(argv):
-    names, chunk, disasm, pos = {}, 0x10000, True, []
+    names, known, chunk, disasm, pos = {}, {}, 0x10000, True, []
     it = iter(argv)
     for x in it:
         if x == '--names':
@@ -450,6 +455,8 @@ def main(argv):
                     p = p[1:]
                 if len(p) >= 2 and p[0].startswith('0x'):
                     names.setdefault(int(p[0], 16), p[1])
+                    if len(p) >= 4 and p[-1].isdigit():
+                        known[int(p[0], 16)] = int(p[-1])
         elif x == '--chunk':
             chunk = int(next(it), 0)
         elif x == '--no-disasm':
@@ -470,7 +477,16 @@ def main(argv):
     found = len(pro - sp.fset)
     evidence |= pro
     sp.add_starts(pro)
+    # functions of known size (matched library code): the end is a start, nothing inside is
+    sp.add_starts(known)
+    evidence |= set(known)
+    inside = {a for a in sp.fstarts for k, n in known.items() if k < a < k + n}
+    ends = {k + n for k, n in known.items()}
+    sp.add_starts(e for e in ends if not any(k < e < k + n for k, n in known.items()))
+    sp.fstarts = [a for a in sp.fstarts if a not in inside]
+    sp.fset = set(sp.fstarts)
     dropped = sp.prune(evidence)
+    dropped.update((a, 'inside a function of known size') for a in inside)
     print(f'{found} functions found by prologue')
     sp.scan()
     target_rel = os.path.relpath(os.path.abspath(target), os.path.abspath(outdir))
@@ -482,6 +498,8 @@ def main(argv):
         f.write('\n'.join(sp.warnings) + '\n')
     with open(os.path.join(outdir, 'functions.txt'), 'w') as f:
         f.write(''.join(f'{a:#x} {sp.labels.get(a, "")}\n' for a in sp.fstarts))
+    with open(os.path.join(outdir, 'labels.txt'), 'w') as f:
+        f.write(''.join(f'{a:#x} {n}\n' for a, n in sorted(sp.labels.items())))
     with open(os.path.join(outdir, 'dropped.txt'), 'w') as f:
         f.write(''.join(f'{a:#x} {why}\n' for a, why in sorted(dropped.items())))
 

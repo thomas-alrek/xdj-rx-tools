@@ -84,6 +84,14 @@ class Elf:
         return [(o, i & 0xff) for o, i in
                 (struct.unpack_from('<II', self.d, s['off'] + j) for j in range(0, s['size'], 8))]
 
+    def rels(self, name):
+        """[(offset, type, symbol index)] for a REL section such as '.rel.text'."""
+        if name not in self.sections:
+            return []
+        s = self.sections[name]
+        return [(o, i & 0xff, i >> 8) for o, i in
+                (struct.unpack_from('<II', self.d, s['off'] + j) for j in range(0, s['size'], 8))]
+
     def dynsyms(self):
         s = self.sections['.dynsym']
         strs = self.sections['.dynstr']

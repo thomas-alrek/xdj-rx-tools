@@ -5,7 +5,7 @@ usage: findsig.py TARGET OBJ.o [OBJ.o ...]
 Each function in each object becomes a word pattern: words covered by a relocation are
 wildcards (data) or opcode-only (branches), and every bl is opcode-only (calls within
 a file carry no relocation). Patterns are searched at every word of TARGET's .text.
-Output, one line per function: FOUND <addr> <name> (unique hit), MULTI <n> <name>,
+Output, one line per function: FOUND <addr> <name> <object> <size> (unique hit), MULTI <n> <name>,
 or NONE <name>; then a summary. Functions shorter than --min words are skipped
 (too generic to place).
 """
@@ -79,7 +79,7 @@ def main(argv):
                     hits.append(t['addr'] + start * 4)
             if len(hits) == 1:
                 found += 1
-                print(f'FOUND {hits[0]:#x} {s["name"]}')
+                print(f'FOUND {hits[0]:#x} {s["name"]} {os.path.basename(path)} {s["size"]}')
             elif hits:
                 multi += 1
                 print(f'MULTI {len(hits)} {s["name"]} ' + ' '.join(f'{h:#x}' for h in hits[:4]))
