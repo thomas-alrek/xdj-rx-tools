@@ -11,6 +11,7 @@ OUTDIR   receives one .s per data section, text_<addr>.s chunks of whole functio
 
 Code sections are emitted word by word as `.inst` (with a disassembly comment), except:
   - b/bl to another function, emitted as `b{cond} label`;
+  - movw/movt pairs (same register) whose value is an address, emitted with :lower16:/:upper16:;
   - literal-pool words (targets of pc-relative ldr/ldrd/ldrh/vldr) and switch-table entries
     that hold an address, emitted as `.word label`.
 Data sections (.rodata, .data, ...) are emitted as bytes and strings; aligned words whose
@@ -90,6 +91,7 @@ class Splitter:
         self.used = set()
         self.code_data = set()     # code addresses (word aligned) holding data words
         self.refs = {}             # addr of word -> label target
+        self.movw = {}             # addr of movw/movt -> (target, 'lower16' | 'upper16')
         code = [s for s in self.secs if s['name'] in CODE]
         fs = set(fstarts)
         for s in code:
@@ -267,6 +269,22 @@ class Splitter:
                     lo, hi = self.func_of(a)
                     if not (lo <= t < hi) and self.code_sec(t):
                         self.refs[a] = t
+                elif w >> 28 != 0xf and w & 0x0ff00000 == 0x03000000:    # movw rd, #lo16
+                    rd = (w >> 12) & 0xf
+                    _, hi = self.func_of(a)
+                    for j in range(i + 1, min(i + 17, len(words))):
+                        b = base + 4 * j
+                        if b >= hi or b in self.code_data:
+                            break
+                        w2 = words[j]
+                        if w2 >> 28 == 0xf or (w2 >> 12) & 0xf != rd:
+                            continue
+                        if w2 & 0x0ff00000 == 0x03400000:                # movt rd, #hi16
+                            v = (w2 & 0xf0000) << 12 | (w2 & 0xfff) << 16 | (w & 0xf0000) >> 4 | (w & 0xfff)
+                            if self.pointer_ok(v, strict=True):
+                                self.movw[a] = (v, 'lower16')
+                                self.movw[b] = (v, 'upper16')
+                        break                                           # any other write to rd ends it
         for s in self.secs:
             if s['name'] in DATA:
                 base = s['addr']
@@ -274,6 +292,8 @@ class Splitter:
                     v = self.word(a)
                     if self.pointer_ok(v, strict=True):
                         self.refs[a] = v
+        for a, (t, _) in self.movw.items():
+            self.label(t)
         for a, t in self.refs.items():
             self.label(t)
         for a in self.fstarts:
@@ -374,6 +394,10 @@ class Splitter:
                     else:
                         _, op = branch_target(w, a)
                         out.append(f'\t{op}{COND[w >> 28]} {self.label(t)}\t@ {a:x}')
+                elif a in self.movw:
+                    t, half = self.movw[a]
+                    op = 'movw' if half == 'lower16' else 'movt'
+                    out.append(f'\t{op}{COND[w >> 28]} r{(w >> 12) & 0xf}, #:{half}:{self.label(t)}\t@ {a:x}')
                 elif a in self.code_data:
                     out.append(f'\t.word {w:#010x}\t@ {a:x}')
                 else:
@@ -493,7 +517,8 @@ def main(argv):
     files = sp.emit(outdir, target_rel, chunk, disasm)
     print(f'{len(files)} files, {len(sp.fstarts)} functions ({len(dropped)} candidates dropped), '
           f'{len(sp.labels)} labels, {len(sp.refs)} symbolic words, '
-          f'{len(sp.code_data)} data words in code, {len(sp.warnings)} warnings')
+          f'{len(sp.code_data)} data words in code, {len(sp.movw) // 2} movw/movt pairs, '
+          f'{len(sp.warnings)} warnings')
     with open(os.path.join(outdir, 'warnings.txt'), 'w') as f:
         f.write('\n'.join(sp.warnings) + '\n')
     with open(os.path.join(outdir, 'functions.txt'), 'w') as f:

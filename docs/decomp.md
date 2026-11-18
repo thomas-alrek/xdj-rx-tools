@@ -69,6 +69,10 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
 - The binary's `.comment` also names Freescale's Linaro 2011.07 GCC 4.6.2. It can be built from
   Linaro's source release (only `all-gcc`, with the 2012.01 toolchain's headers). For the code
   tested so far it produces the same output as 2012.01.
+- **Pioneer's own code from source.** The first class, `dsp::LagrangeSRC` (a 4-point Lagrange
+  stereo resampler written with NEON intrinsics), is reconstructed: 9 of its 10 functions and
+  its static constants initializer recompile byte-identically and are built into rbp. Pioneer's
+  DSP code needs `-mfpu=neon -mfloat-abi=softfp` on top of the base flags.
 - **Class map.** RTTI gives 497 classes in Pioneer namespaces (`mixerengine::`, `dsp::`,
   `common::` file readers, `ui::`, `network::`, `playengine::`, `db::` …) with their vtables. 23
   source paths in strings show the source tree layout (`Source/Engine/PlayEngine/…`,
