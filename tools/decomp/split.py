@@ -69,7 +69,7 @@ NORETURN = {'abort', 'exit', '_exit', '__cxa_throw', '__cxa_rethrow', '__cxa_end
 
 def ends_function(w):
     """Can execution not fall through past this instruction (unconditional)?"""
-    if w in (0, 0xe1a00000):                                  # padding
+    if w in (0, 0xe1a00000, 0xe320f000):                      # padding (incl. the ARMv7 NOP)
         return True
     if w >> 28 != 0xe:
         return False
