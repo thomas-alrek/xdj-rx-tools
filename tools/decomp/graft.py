@@ -105,8 +105,11 @@ def extract(asm, sym, addr):
             return m.group(0)
         return f'__g{addr:x}_{t[1:]}' + (f'_{"m" if int(off) < 0 else ""}{abs(int(off))}' if off else '')
     body = [re.sub(r'(\.L\w+)(?:([+-]\d+))?', ext, ln) for ln in body]
-    # static functions too: the rest of the tree refers to them by name
-    return head + [f'\t.section .rbp.text.{addr:08x},"ax",%progbits', f'\t.global {sym}'] + body
+    # static functions too: the rest of the tree refers to them by name. A function at 4 mod 8
+    # gets 4 bytes of filler first, so 8-byte pool alignment inside it is computed for its real
+    # address; normalize() removes the filler (and gas's end-of-section padding) before linking.
+    filler = ['\t.space 4'] if addr % 8 == 4 else []
+    return head + [f'\t.section .rbp.text.{addr:08x},"ax",%progbits'] + filler + [f'\t.global {sym}'] + body
 
 
 def prep(split, out, grafts_path):
@@ -152,6 +155,44 @@ def prep(split, out, grafts_path):
     print(f'{len(grafts)} grafts prepared, {len(aliases)} aliases')
 
 
+def normalize(path, addr, sym):
+    """Trim a graft object's section to the function: drop the leading filler (functions at
+    4 mod 8) and the padding gas adds at the end of an 8-aligned code section; lower the section
+    alignment to 4. Relocations and symbols are shifted to match. Rewrites the file in place."""
+    e = Elf(path)
+    d = bytearray(e.d)
+    shoff, = struct.unpack_from('<I', d, 0x20)
+    shentsize, = struct.unpack_from('<H', d, 0x2e)
+    secs = e.section_list()
+    name = f'.rbp.text.{addr:08x}'
+    idx = next(i for i, s in enumerate(secs) if s['name'] == name)
+    table = e.symbols()
+    f = next((t for t in table if t['name'] == sym and t['shndx'] == idx and t['size']), None)
+    if f is None:
+        return
+    start = 4 if addr % 8 == 4 else 0
+    end = max(f['value'] + f['size'], max((t['value'] + t['size'] for t in table
+                                           if t['shndx'] == idx and t['type'] == 2), default=0))
+    sh = shoff + idx * shentsize
+    struct.pack_into('<I', d, sh + 16, secs[idx]['off'] + start)
+    struct.pack_into('<I', d, sh + 20, end - start)
+    struct.pack_into('<I', d, sh + 32, 4)
+    if start:
+        symtab = e.sec('.symtab')
+        for k in range(symtab['size'] // 16):
+            o = symtab['off'] + 16 * k
+            if struct.unpack_from('<H', d, o + 14)[0] == idx:
+                v, = struct.unpack_from('<I', d, o + 4)
+                struct.pack_into('<I', d, o + 4, max(v - start, 0))
+        rel = e.sections.get('.rel' + name)
+        if rel:
+            for k in range(rel['size'] // 8):
+                o = rel['off'] + 8 * k
+                v, = struct.unpack_from('<I', d, o)
+                struct.pack_into('<I', d, o, v - start)
+    open(path, 'wb').write(bytes(d))
+
+
 def branch_dest(w, p):
     off = w & 0xffffff
     if off & 0x800000:
@@ -167,6 +208,7 @@ def resolve(out, original):
     gnames = {s for _, s in grafts}
     syms, problems, lines, good = {}, [], [], {}
     for addr, sym in grafts:
+        normalize(os.path.join(out, f'graft_{addr:x}.o'), addr, sym)
         obj = Elf(os.path.join(out, f'graft_{addr:x}.o'))
         sname = f'.rbp.text.{addr:08x}'
         sec = obj.sec(sname)
