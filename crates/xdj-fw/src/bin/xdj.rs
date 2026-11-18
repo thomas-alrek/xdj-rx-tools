@@ -10,6 +10,8 @@ xdj -- XDJ-RX firmware tool
 
 Firmware (.UPD, or a Pioneer .zip holding one):
   xdj fw info    <UPD>                          container, model, CRC, key check
+  xdj fw check   <UPD>                          fits what the unit loads at boot? (fixed read
+                                                lengths, the 60 MiB RAM disk; build enforces it)
   xdj fw decrypt <UPD> [-o OUT.iso]             decrypted ISO (default build/<name>.iso)
   xdj fw unpack  <UPD> <DIR>                    ISO tree + every payload, for reading
   xdj fw build   <BASE> -o OUT.UPD [--overlay DIR] [--release X.YY] [--model XDJAERO..]
@@ -124,6 +126,18 @@ fn run(argv: &[String]) -> Result<(), String> {
                 Err(e) => println!("key check   : {e}"),
             }
         }
+        ["fw", "check", ..] => {
+            let p = need(&a, 2, "<UPD>")?;
+            let iso_img = iso_of(&a, p)?;
+            let b = fwbuild::boot_budget(&iso::read_tree(&iso_img)?)?;
+            for l in &b.lines {
+                println!("  {l}");
+            }
+            if !b.errors.is_empty() {
+                return Err(format!("{p}: the unit couldn't load this firmware at boot:\n  {}", b.errors.join("\n  ")));
+            }
+            println!("{p}: fits what the unit loads at boot");
+        }
         ["fw", "decrypt", ..] => {
             let p = need(&a, 2, "<UPD>")?;
             let (iso_img, model) = firmware::decrypt_firmware(Path::new(p), &key(&a)?)?;
@@ -205,6 +219,13 @@ fn run(argv: &[String]) -> Result<(), String> {
             }
             let model = a.opts.get("model").cloned().unwrap_or("XDJAERO2.21".into());
             let out = PathBuf::from(a.opts.get("o").ok_or("fw pack needs -o OUT.UPD")?);
+            if model.starts_with("XDJAERO") {
+                // an XDJ-RX image: refuse what the unit couldn't load at boot (as fw build does)
+                let b = fwbuild::boot_budget(&iso::read_tree(&iso_img)?)?;
+                if !b.errors.is_empty() {
+                    return Err(format!("the unit couldn't load this firmware at boot:\n  {}", b.errors.join("\n  ")));
+                }
+            }
             let upd = firmware::pack(&iso_img, &key(&a)?, &model)?;
             wr(&out, &upd)?;
             println!("packed -> {} ({} bytes, model {model:?})", out.display(), upd.len());

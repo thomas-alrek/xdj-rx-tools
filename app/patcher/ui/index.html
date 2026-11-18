@@ -103,8 +103,9 @@
 
     <div class="box">
       <div id="key-auto">
-        <div class="lbl">The firmware key is downloaded automatically from Pioneer's public GPL
-          source code (<span id="mb">~280</span> MB). <span class="link" id="key-own-on">I have the key</span></div>
+        <div class="lbl"><span id="key-auto-msg">The firmware key is downloaded automatically from
+          Pioneer's public GPL source code (<span id="mb">~280</span> MB) and saved for next time.</span>
+          <span class="link" id="key-own-on">I have the key</span></div>
       </div>
       <div id="key-own" class="hidden">
         <div class="lbl">Your firmware key — drop your <b>aes256.key</b> file here, or paste the 64-hex key:</div>
@@ -167,7 +168,11 @@
     // Called from Rust with the whole state.
     function render(s) {
       st = s;
-      $('mb').textContent = '~' + s.downloadMb;
+      $('key-auto-msg').textContent = s.haveKey
+        ? 'Your saved firmware key is used: no download needed.'
+        : `The firmware key is downloaded automatically from Pioneer's public GPL source code (~${s.downloadMb} MB) and saved for next time.`;
+      $('key-own-on').textContent = s.haveKey ? 'Use another key' : 'I have the key';
+      $('key-own-off').textContent = s.haveKey ? 'Use the saved key' : 'Download instead';
       $('sub').textContent = s.ok
         ? `Turns Pioneer's official XDJ-RX firmware ${s.from} into custom firmware ${s.release}.`
         : "Turns Pioneer's official XDJ-RX firmware 2.21 into custom firmware.";
@@ -222,7 +227,7 @@
     $('go').addEventListener('click', async () => {
       const own = !$('key-own').classList.contains('hidden');
       const key = own ? $('keyhex').value.trim() : '';
-      if (own && !key) { show('Enter your key, or choose "Download instead".', true); return; }
+      if (own && !key) { show(`Enter your key, or choose "${$('key-own-off').textContent}".`, true); return; }
       clearStatus();
       try { await invoke('build', { key }); } catch (e) { show(String(e), true); }
     });

@@ -88,6 +88,34 @@ fn build_identity_and_overlay() {
     assert_eq!(file(&t, "images/uImage"), iso::read_file(&b, "images/uImage").unwrap());
 }
 
+/// Incompressible bytes (an LCG), so a payload grows by about `n`.
+fn noise(n: usize) -> Vec<u8> {
+    let mut x: u32 = 0x1234_5678;
+    (0..n).map(|_| { x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223); (x >> 24) as u8 }).collect()
+}
+
+#[test]
+fn boot_limits() {
+    let Some(b) = base() else { return };
+    // stock 2.21 fits what the unit loads at boot
+    let budget = fwbuild::boot_budget(&iso::read_tree(&b).unwrap()).unwrap();
+    assert!(budget.errors.is_empty(), "{:?}", budget.errors);
+    let build = |name: &str, part: &str, path: &str, n: usize| {
+        let ov = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&ov);
+        let f = ov.join(part).join(path);
+        std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+        std::fs::write(&f, noise(n)).unwrap();
+        fwbuild::build(&b, &fwbuild::BuildOptions { overlay: Some(&ov), release: Some("9.99"), model: None })
+    };
+    // pioneer.tar.gz past the 3 MiB the initramfs reads: refused
+    let e = build("xdj-test-big-pioneer", "pioneer", "pioneer/blob", 1536 << 10).err().expect("oversized pioneer built");
+    assert!(e.contains("pioneer.tar.gz") && e.contains("0x300000"), "{e}");
+    // rootfs past the 20 MiB read and the RAM disk: refused
+    let e = build("xdj-test-big-rootfs", "rootfs", "usr/share/blob", 6 << 20).err().expect("oversized rootfs built");
+    assert!(e.contains("0x1400000") && e.contains("RAM disk"), "{e}");
+}
+
 #[test]
 fn unpack_edit_repack() {
     let Some(b) = base() else { return };

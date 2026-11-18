@@ -19,6 +19,8 @@ void xdj_usbnc_realize(FslIMX6State *s, DeviceState *dev);
 void xdj_display_realize(FslIMX6State *s, DeviceState *dev, DeviceState *gic);
 void xdj_audio_realize(DeviceState *dev, DeviceState *gic);
 void xdj_nand_realize(DeviceState *dev, DeviceState *gic);   /* APBH/GPMI/BCH + NAND */
+const uint8_t *xdj_nand_raw_page(uint32_t page);              /* raw page + OOB, or NULL */
+void xdj_bootrom_realize(FslIMX6State *s);                    /* boot ROM + MMDC */
 
 /* panel harness state shared with the GPIO glue (xdj-panel.c) */
 extern DeviceState *g_xdj_usb_gpio[2];

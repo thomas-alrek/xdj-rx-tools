@@ -121,18 +121,12 @@ pub fn build(base: &[u8], o: &BuildOptions) -> Result<(Vec<u8>, String, Vec<Stri
             _ => String::new(),
         },
     };
-    // The partitions they're flashed to (images/fw_env.txt `partition=`): a payload that
-    // doesn't fit would make the updater fail half-way through on the unit.
-    for (path, max, part) in [
-        ("images/rootfs.cramfs", 30 << 20, "mtd5 rootfs"),
-        ("images/pioneer.tar.gz", 8 << 20, "mtd7 pioneer"),
-        ("images/uImage", 10 << 20, "kernel_a/kernel_b"),
-    ] {
-        if let Some(Kind::File(d)) = t.get(path).map(|n| &n.kind) {
-            if d.len() > max {
-                return Err(format!("{path} is {} bytes: doesn't fit {part} ({} bytes)", d.len(), max));
-            }
-        }
+    // What the unit can actually load at boot (BOOT_READS, the RAM disk): an image past
+    // these limits installs fine and then loses files, or fails to boot.
+    let budget = boot_budget(&t)?;
+    report.extend(budget.lines.iter().map(|l| format!("boot: {l}")));
+    if !budget.errors.is_empty() {
+        return Err(format!("the unit couldn't load this firmware at boot:\n  {}", budget.errors.join("\n  ")));
     }
     let model = o.model.map(String::from).unwrap_or_else(|| format!("XDJAERO{release}"));
     if !model.starts_with("XDJAERO") {
@@ -140,6 +134,108 @@ pub fn build(base: &[u8], o: &BuildOptions) -> Result<(Vec<u8>, String, Vec<Stri
     }
     let vol = String::from_utf8_lossy(&base[16 * 2048 + 40..16 * 2048 + 72]).trim_end().to_string();
     Ok((iso::write_tree(&t, &vol), model, report))
+}
+
+// ---- boot-time limits -------------------------------------------------------------
+//
+// The unit doesn't load a partition, it loads a fixed number of bytes from it. Those
+// lengths are hard-coded in Pioneer's boot path and are smaller than the partitions
+// (docs/custom-firmware.md section 2b): whatever lies past them is never read. The
+// updater writes and md5-verifies the whole payload either way, so an oversized image
+// installs "successfully" and then loses files (or doesn't boot).
+
+/// (path in the update image, bytes the unit reads, where the length comes from)
+pub const BOOT_READS: [(&str, usize, &str); 5] = [
+    ("images/uImage", 0x50_0000,
+     "u-boot `nand read ${loadaddr} <bank> 0x500000` (bootargs_nand_A/B), of a 10 MiB kernel bank"),
+    ("images/rootfs.cramfs", 0x140_0000,
+     "initramfs `nanddump --length=0x1400000 /dev/mtd5`, of a 30 MiB partition"),
+    ("images/pioneer.tar.gz", 0x30_0000,
+     "initramfs `nanddump --length=0x300000 /dev/mtd7`, of an 8 MiB partition"),
+    ("images/gui.tar.gz", 0x80_0000,
+     "apl_start first-boot `nanddump --length=0x800000 /dev/mtd9` (UBI format of gui)"),
+    ("images/data.tar.gz", 0x2_0000,
+     "apl_start first-boot `nanddump --length=0x20000 /dev/mtd8` (UBI format of data)"),
+];
+/// The initramfs RAM disk (`mount -t tmpfs -o size=60m`) the root fs and pioneer unpack into.
+pub const RAMDISK: usize = 60 << 20;
+/// Kept free while the rootfs is copied (the initramfs tools run in the same RAM disk).
+pub const RAMDISK_SPARE: usize = 1 << 20;
+/// Free RAM disk required after boot: the running system's /tmp, logs and work files
+/// live there. Stock 2.21 leaves 21 MiB; 16 MiB is our safety margin, not Pioneer's.
+pub const RUNTIME_FREE_MIN: usize = 16 << 20;
+
+pub struct Budget {
+    /// One line per limit: usage / limit.
+    pub lines: Vec<String>,
+    /// Every limit exceeded (empty = the unit can load it).
+    pub errors: Vec<String>,
+}
+
+/// RAM-disk bytes a tree takes once copied into tmpfs (whole 4 KiB pages per file).
+fn tmpfs_bytes(t: &tree::Tree) -> usize {
+    t.nodes
+        .iter()
+        .map(|n| match &n.kind {
+            Kind::File(d) => d.len().div_ceil(4096) * 4096,
+            _ => 0,
+        })
+        .sum()
+}
+
+fn mib(b: usize) -> String {
+    if b < 1 << 20 {
+        format!("{:.1} KiB", b as f64 / 1024.0)
+    } else {
+        format!("{:.2} MiB", b as f64 / (1 << 20) as f64)
+    }
+}
+
+/// Check an update image (ISO tree) against what the unit loads at boot.
+pub fn boot_budget(t: &tree::Tree) -> Result<Budget, String> {
+    let mut b = Budget { lines: Vec::new(), errors: Vec::new() };
+    let file = |p: &str| match t.get(p).map(|n| &n.kind) {
+        Some(Kind::File(d)) => Some(d.clone()),
+        _ => None,
+    };
+    for (path, max, why) in BOOT_READS {
+        let Some(d) = file(path) else { continue };
+        b.lines.push(format!("{path} {} of {}", mib(d.len()), mib(max)));
+        if d.len() > max {
+            b.errors.push(format!("{path} is {} ({} bytes): the unit reads only {} ({why})",
+                                  mib(d.len()), d.len(), mib(max)));
+        }
+    }
+    // The NAND boot: nanddump writes the full 20 MiB read into the RAM disk, the cramfs is
+    // copied out next to it (cpdir), then deleted; pioneer.tar.gz (3 MiB) is unpacked on top.
+    let rootfs = match file("images/rootfs.cramfs") {
+        Some(d) => tmpfs_bytes(&cramfs::read(&d)?),
+        None => return Ok(b),
+    };
+    let pioneer = match file("images/pioneer.tar.gz") {
+        Some(d) => tmpfs_bytes(&tarball::read(&d)?),
+        None => 0,
+    };
+    let rootfs_read = BOOT_READS[1].1;
+    let peak = rootfs_read + rootfs;
+    b.lines.push(format!("RAM disk while copying the rootfs {} of {} (20 MiB image + {} unpacked)",
+                         mib(peak), mib(RAMDISK - RAMDISK_SPARE), mib(rootfs)));
+    if peak > RAMDISK - RAMDISK_SPARE {
+        b.errors.push(format!(
+            "unpacked rootfs is {}: with the 20 MiB image it's copied from, that needs {} of the 60 MiB \
+             RAM disk (limit {}, keeping 1 MiB for the initramfs) - the copy would fail and the unit not boot",
+            mib(rootfs), mib(peak), mib(RAMDISK - RAMDISK_SPARE)));
+    }
+    let free = RAMDISK.saturating_sub(rootfs + pioneer);
+    b.lines.push(format!("RAM disk free after boot {} (rootfs {} + pioneer {}; at least {})",
+                         mib(free), mib(rootfs), mib(pioneer), mib(RUNTIME_FREE_MIN)));
+    if free < RUNTIME_FREE_MIN {
+        b.errors.push(format!(
+            "after boot only {} of the 60 MiB RAM disk would be free (rootfs {} + pioneer {} unpacked); \
+             the running system needs at least {} (stock 2.21 leaves 21 MiB)",
+            mib(free), mib(rootfs), mib(pioneer), mib(RUNTIME_FREE_MIN)));
+    }
+    Ok(b)
 }
 
 // ---- unpack -> edit -> repack ------------------------------------------------------

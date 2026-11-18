@@ -204,6 +204,19 @@ pub fn read_env(nand: &mut Nand) -> Result<Option<Vec<(String, String)>>, String
     Ok(Some(env))
 }
 
+/// Whether the boot ROM would find u-boot: a valid FCB (fingerprint "FCB " and
+/// checksum = !sum of FCB bytes 4..511, at raw byte 12 of page 0 of blocks 0..3, as
+/// kobs-ng writes it). The emulated ROM (qemu/xdj/xdj-bootrom.c) does the same search.
+pub fn has_boot_fcb(path: &Path) -> bool {
+    let Ok(mut nand) = Nand::open(path) else { return false };
+    (0..4).any(|b| {
+        let Ok(raw) = nand.raw_block(b) else { return false };
+        let f = &raw[12..12 + 512];
+        let sum = f[4..].iter().fold(0u32, |a, &x| a.wrapping_add(x as u32));
+        &f[4..8] == b"FCB " && u32::from_le_bytes(f[..4].try_into().unwrap()) == !sum
+    })
+}
+
 /// The u-boot env of a NAND image file (None = blank/corrupt env partition).
 pub fn env(path: &Path) -> Result<Option<Vec<(String, String)>>, String> {
     read_env(&mut Nand::open(path)?)

@@ -71,8 +71,9 @@ here or in a parent dir (written by `tools/fetch_key.py`), else the desktop app'
    use plain numbers). The footer model follows it automatically (`XDJAERO<release>`).
 4. **Put the change where it is flashed by the update you'll run.** A normal (USER) update writes
    the kernel bank, rootfs (mtd5), pioneer (mtd7) and gui; `data/`/`user/` only reach the unit with
-   an ALL update (provisioning). Respect the partition sizes — `build` refuses a rootfs > 30 MiB,
-   pioneer > 8 MiB or uImage > 10 MiB.
+   an ALL update (provisioning). **Stay within what the unit loads at boot** (§2b): far less
+   than the partition sizes. `build`, `repack` and `pack` refuse an image that doesn't fit;
+   `xdj fw check` shows the budget.
 5. **Write for the target.** BusyBox `ash` (no bash), ARM EABI5 binaries linked against the
    firmware's glibc 2.13 (`lib/`), LF line endings, a `#!/bin/sh` shebang and the exec bit on
    new scripts (`chmod +x` before `repack`; new files take the host mode). Replaced files keep
@@ -87,6 +88,67 @@ here or in a parent dir (written by `tools/fetch_key.py`), else the desktop app'
    bootable: the emulator's own workflow must never depend on a patched `rbp` or rootfs.
 9. **Keep a way back**: rebuild the official image with a higher `--release` (downgrade
    behaviour is unverified), or reprovision the unit.
+
+## 2b. What the unit loads at boot (size limits)
+
+**The partition sizes are not the limits.** Pioneer's boot path doesn't load a partition, it
+copies a **fixed number of bytes** from it, and those lengths are hard-coded and smaller than
+the partitions. Whatever a payload stores past that length is never read. The updater still
+writes and md5-verifies the whole payload, so an oversized image installs with "Firmware update
+is complete" and then boots with files missing, or doesn't boot at all. Nothing on the unit
+reports it.
+
+| Payload | Partition | The unit reads | Where the length is fixed |
+|---|---|---|---|
+| `images/uImage` | kernel bank, 10 MiB | **5 MiB** | u-boot env `bootargs_nand_A/B`: `nand read ${loadaddr} <bank> 0x500000` |
+| `images/rootfs.cramfs` | mtd5, 30 MiB | **20 MiB** | initramfs: `nanddump --length=0x1400000 … /dev/mtd5` |
+| `images/pioneer.tar.gz` | mtd7, 8 MiB | **3 MiB** | initramfs: `nanddump --length=0x300000 … /dev/mtd7` |
+| `images/gui.tar.gz` | mtd9, 10 MiB | **8 MiB** | `apl_start` first-boot UBI format: `nanddump --length=0x800000 … /dev/mtd9` |
+| `images/data.tar.gz` | mtd8 | **128 KiB** | `apl_start` first-boot UBI format: `nanddump --length=0x20000 … /dev/mtd8` |
+
+The u-boot env on an installed unit keeps its factory `bootargs_nand_A/B` (a USER update rewrites
+only `release`, `rev_*`, `kernel_bank`, `update_status`, `ubifs_formatted`), so the kernel limit
+is the 2.21 value whatever a new image's `fw_env.txt` says. The gui and data lengths apply when
+`apl_start` (re)formats the UBI volumes (`ubifs_formatted=false`); the updater itself ubiformats
+gui directly, but an image must survive both paths.
+
+**The RAM disk.** On a NAND boot the initramfs runs the system from a **60 MiB tmpfs**
+(`mount -t tmpfs -o size=60m`), in this order:
+
+1. `nanddump` the 20 MiB of mtd5 into it as `rootfs.cramfs` (always the full 20 MiB);
+2. loop-mount it and copy every file out (`cpdir`) — the image and the unpacked root fs are in
+   the RAM disk **together** at this point — then delete the image;
+3. `nanddump` the 3 MiB of mtd7 as `pioneer.tar.gz` and unpack it into `/root/pioneer`;
+4. `switch_root` into it. The RAM disk is the running system: `/tmp`, logs and every file `rbp`
+   or a mod writes outside the UBI volumes take its remaining space.
+
+So the unpacked root fs (tmpfs counts whole 4 KiB pages per file) must leave room for the
+20 MiB image next to it, and the system needs free space to run. The tool's rules:
+
+| Check | Limit | |
+|---|---|---|
+| 20 MiB + unpacked rootfs (step 2) | ≤ 59 MiB | 60 MiB, keeping 1 MiB for the initramfs tools |
+| free after boot: 60 MiB − unpacked rootfs − unpacked pioneer | ≥ 16 MiB | our safety margin; stock 2.21 leaves 21 MiB |
+
+Measured (`xdj fw check`): stock 2.21 peaks at 54.4 MiB during the copy and leaves 21.1 MiB
+free; the 3.01 release 54.6 / 20.8 MiB. The RAM disk, not the 20 MiB read, is the tight limit
+for anything added to the rootfs: it has about 4.4 MiB of room above 3.01.
+
+**Checking.** `xdj fw build`, `fw repack` and `fw pack` (for an `XDJAERO` image) refuse an image
+past any of these, naming the payload, its size and the boot-path line it exceeds. `xdj fw check
+<UPD>` prints the budget of any image:
+
+```
+images/pioneer.tar.gz 2.08 MiB of 3.00 MiB
+RAM disk while copying the rootfs 54.59 MiB of 59.00 MiB (20 MiB image + 34.59 MiB unpacked)
+RAM disk free after boot 20.82 MiB (rootfs 34.59 MiB + pioneer 4.59 MiB; at least 16.00 MiB)
+```
+
+**Where large files go.** pioneer (3 MiB, compressed) suits small binaries and scripts; the
+rootfs fits a few MiB more (watch the RAM disk); large read-only data (images, fonts, samples)
+belongs in a UBI volume (`gui`, mounted at `/root/gui`, 40 MiB). Code that needs more than the
+budget allows must load it from a USB stick at run time instead. The limits come from the
+initramfs (inside the kernel image) and u-boot's env, which these tools don't rebuild (§6).
 
 ## 2. The overlay
 
@@ -221,7 +283,13 @@ Open observation: the *first* test-mode boot right after an update can come up i
 
 ## 6. Not covered yet
 - **The kernel / initramfs** (`images/uImage`): replace it raw via `iso/images/uImage`, but
-  there is no uImage/initramfs rebuilder yet (mkimage header + CRCs, the embedded cpio).
+  there is no uImage/initramfs rebuilder yet (mkimage header + CRCs, the embedded cpio). The
+  boot read lengths of §2b live in that initramfs (and u-boot's env), which is why they are
+  limits to respect rather than settings to raise. Changing them is possible in principle but is
+  the riskiest edit there is: the update mode itself runs from the installed kernel's initramfs,
+  and u-boot boots `kernel_bank` with no fallback, so a kernel that doesn't boot also takes away
+  the USB update that would fix it — recovery then needs the board's serial console. The rebuilt
+  kernel must also stay within u-boot's own 5 MiB read.
 - **u-boot** (`u-boot.bin.nand`, mtd0, ALL update only) and the **panel MCU** (`PANELCOM.mot`,
   Motorola S-records) are carried over untouched.
 - **`rbp` patching** itself: possible through `pioneer/pioneer/rbp` in an overlay; no binary

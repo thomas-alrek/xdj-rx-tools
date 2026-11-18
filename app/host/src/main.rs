@@ -364,8 +364,9 @@ fn default_route_ifname() -> Option<String> {
         .find_map(|l| l.trim().strip_prefix("interface:").map(|s| s.trim().to_string()))
 }
 
-fn qemu_args(cfg: &Config, boot_dir: &Path) -> Vec<String> {
-    let q = boot_dir.to_path_buf();
+/// `boot_dir`: the host-loaded kernel blobs (direct boot), or None to boot through the
+/// boot ROM (CPU0 starts at the reset vector; xdj-bootrom.c).
+fn qemu_args(cfg: &Config, boot_dir: Option<&Path>) -> Vec<String> {
     let s = |p: PathBuf| p.to_string_lossy().into_owned();
     let mut a: Vec<String> = vec![
         "-M".into(), "sabrelite".into(),
@@ -394,10 +395,14 @@ fn qemu_args(cfg: &Config, boot_dir: &Path) -> Vec<String> {
         NetBackend::Vmnet(p) => eprintln!("[host] network: vmnet via {}", p.display()),
     }
     a.extend(net.qemu_args());
+    if let Some(q) = boot_dir {
+        a.extend([
+            "-device".into(), format!("loader,file={},addr=0x10008000,force-raw=on", s(q.join("vmlinux.bin"))),
+            "-device".into(), format!("loader,file={},addr=0x10000100,force-raw=on", s(q.join("atags.bin"))),
+            "-device".into(), format!("loader,file={},addr=0x10000000,cpu-num=0", s(q.join("tramp.bin"))),
+        ]);
+    }
     a.extend([
-        "-device".into(), format!("loader,file={},addr=0x10008000,force-raw=on", s(q.join("vmlinux.bin"))),
-        "-device".into(), format!("loader,file={},addr=0x10000100,force-raw=on", s(q.join("atags.bin"))),
-        "-device".into(), format!("loader,file={},addr=0x10000000,cpu-num=0", s(q.join("tramp.bin"))),
         // No SD card: like the real unit, everything lives in NAND (XDJ_NAND_IMG).
         // USB-2.0 hub on HOST1 (guest bus 2 = usb-bus.1), hub-only boot: the front
         // slots live behind this hub at devpaths 2-1.1 (USB2) / 2-1.2 (USB1). Storage
@@ -436,14 +441,22 @@ enum BootKind {
     /// kernel host-loaded in update mode with the MCU reporting ALL, insert the update
     /// stick -> the updater installs u-boot/kernel/rootfs/data/gui/PANELCOM + its env.
     Provision,
-    /// Normal boot of what is installed (u-boot's bootcmd_nand, done host-side).
+    /// Normal boot of what is installed: the boot ROM loads the unit's u-boot from NAND,
+    /// u-boot runs bootcmd_nand (XDJ_DIRECT_BOOT=1: done host-side instead).
     Normal,
     /// Firmware-update mode on an installed unit (File > Enter Firmware Update Mode).
     Update,
 }
 
-/// Prepare the flash + boot blobs for `kind` (blocking; well under a second).
-fn prepare_boot(cfg: &Config, kind: BootKind) -> Result<PathBuf, String> {
+/// Boot an installed unit through its own boot chain (boot ROM -> u-boot -> kernel), unless
+/// XDJ_DIRECT_BOOT=1 asks for the host-side bootcmd_nand.
+fn direct_boot_forced() -> bool {
+    std::env::var("XDJ_DIRECT_BOOT").map(|v| !v.is_empty() && v != "0").unwrap_or(false)
+}
+
+/// Prepare the flash + boot blobs for `kind` (blocking; well under a second). Returns the
+/// directory of host-loaded kernel blobs, or None when the boot ROM boots the unit.
+fn prepare_boot(cfg: &Config, kind: BootKind) -> Result<Option<PathBuf>, String> {
     match kind {
         BootKind::Provision => {
             // A factory-fresh unit: erased NAND with u-boot's default env, erased MCU flash.
@@ -453,14 +466,23 @@ fn prepare_boot(cfg: &Config, kind: BootKind) -> Result<PathBuf, String> {
             let fw_env = firmware::env_lines(&firmware::iso_read(&iso, "/images/fw_env.txt")?);
             nand::init(&cfg.nand(), &fw_env)?;
             eprintln!("[host] NAND erased, factory env ({} vars) written", fw_env.len());
-            Ok(cfg.fw_dir().clone())
+            // A blank unit has no u-boot: the firmware's kernel is host-loaded (the
+            // factory programming step), the ALL update then writes u-boot to mtd0.
+            Ok(Some(cfg.fw_dir().clone()))
         }
         BootKind::Normal | BootKind::Update => {
-            // Every power-on re-reads kernel_bank + that bank's uImage, so a firmware
-            // update done inside the emulator boots the new kernel, as on the unit.
+            if !direct_boot_forced() && nand::has_boot_fcb(&cfg.nand()) {
+                eprintln!("[host] boot: boot ROM -> u-boot (mtd0) -> kernel_bank");
+                return Ok(None);
+            }
+            if !direct_boot_forced() {
+                eprintln!("[host] boot: no FCB in mtd0 (no u-boot installed) - booting the kernel host-side");
+            }
+            // Host-side bootcmd_nand: every power-on re-reads kernel_bank + that bank's
+            // uImage, so a firmware update done inside the emulator boots the new kernel.
             let dir = cfg.fw_dir().join(FW_NAND_BOOT);
             nand::boot(&cfg.nand(), &dir)?;
-            Ok(dir)
+            Ok(Some(dir))
         }
     }
 }
@@ -469,13 +491,14 @@ fn prepare_boot(cfg: &Config, kind: BootKind) -> Result<PathBuf, String> {
 /// update-request line GPIO3_IO30 HIGH from reset (xdj-board.c).
 fn spawn_qemu(cfg: &Config, kind: BootKind) -> Result<Child, String> {
     let boot_dir = prepare_boot(cfg, kind)?;
-    let args = qemu_args(cfg, &boot_dir);
+    let args = qemu_args(cfg, boot_dir.as_deref());
     eprintln!("[host] qemu ({kind:?}): {} {}", cfg.qemu.display(), args.join(" "));
     // A fresh console.log per power-on (the sidecar's System log and the USB-insert
     // wait both read it), and no stale sockets from the previous run.
     for s in ["qmp.sock", "vnc.sock", "ctrl.sock", "key.sock", "console.log"] {
         let _ = std::fs::remove_file(cfg.rt(s));
     }
+    panel::CONSOLE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let (out, err) = log_stdio(cfg, "qemu.log");
     let mut c = Command::new(&cfg.qemu);
     c.args(&args).current_dir(&cfg.repo).stdout(out).stderr(err).kill_on_drop(true);
@@ -484,6 +507,11 @@ fn spawn_qemu(cfg: &Config, kind: BootKind) -> Result<Child, String> {
         .env("XDJ_PANELCOM_IMG", &cfg.panelcom())
         .env_remove("XDJ_BOOT_UPDATE")
         .env_remove("XDJ_UPDATE_TYPE");
+    if boot_dir.is_none() {
+        c.env("XDJ_BOOT_ROM", "1");
+    } else {
+        c.env_remove("XDJ_BOOT_ROM");
+    }
     match kind {
         BootKind::Provision => {
             // 0x20 = ALL: the factory install (writes u-boot and creates the data volume;

@@ -9,8 +9,9 @@ Firmware stays untouched; everything is QEMU- and host-side:
 - **SUB** — the panel MCU's flash bootloader, in `qemu/xdj/xdj-panel.c` (the GPIO handshake is
   wired in `qemu/xdj/xdj-board.c`).
 - **MAIN** — APBH-DMA + GPMI + BCH + a 256 MiB NAND chip, in `qemu/xdj/xdj-nand.c`.
-- **Boot** — the boot-media strap plus a host-side `bootcmd_nand` (`xdj nand boot`,
-  `crates/xdj-fw/src/nand.rs`).
+- **Boot** — the unit's own chain: an emulated i.MX6 boot ROM loads u-boot from mtd0, u-boot
+  boots the kernel (`qemu/xdj/xdj-bootrom.c`, §4). A blank unit's provisioning boot, and
+  `XDJ_DIRECT_BOOT=1`, host-load the kernel instead (`xdj nand boot`, `crates/xdj-fw/src/nand.rs`).
 
 The desktop app does all of this automatically ([standalone-app.md](standalone-app.md) §4a); the
 manual recipes are in §5.
@@ -97,8 +98,8 @@ The updater's `NandDownloader` / `UbootNandDownloader` / `UbifsNandDownloader` w
   SEMA kick; SPI 13).
 - **GPMI**: CTRL0 operations — CLE + ADDRESS_INCREMENT → ALE, raw data, wait-for-ready, ECC pages.
 - **BCH**: FLASH0LAYOUT bit-packed `[meta][data0][ecc0][data1]…`, status 0x00 / 0xff-erased,
-  COMPLETE_IRQ; SPI 15. Parity is written as zeros — the kernel never checks it (the boot ROM
-  would, which is why u-boot itself isn't executed, §4).
+  COMPLETE_IRQ; SPI 15. Parity is written as zeros — the kernel and u-boot never check it, and
+  the emulated boot ROM doesn't either (§4).
 - **Chip**: a non-ONFI Samsung K9F2G08U0C-style part, ID `EC DA 10 95 44`, 2048+64-byte pages,
   64 pages/block, 2048 blocks (256 MiB).
 - **Backing file** `$XDJ_NAND_IMG`: raw pages with OOB (2112 bytes each, page-major), created
@@ -134,15 +135,48 @@ hangs on the splash.
 - **Boot strap**: `XDJ_BOOT_MEDIA=nand` sets `SRC_SBMR1` BOOT_CFG1 = 0x80 (a weak hook in
   `qemu/patches/02-imx6-peripherals.patch` → `xdj_src_sbmr1()` in `xdj-board.c`). `fw_printenv`
   and `bootmod` read it via `/dev/mem` (≥ 8 = NAND), so the env is read from mtd2.
-- **Kernel**: u-boot (mtd0) is not executed — the boot ROM / u-boot path would need real BCH
-  parity. `xdj nand boot <img> <dir>` does u-boot's `bootcmd_nand` host-side: reads
+- **Boot ROM → u-boot → kernel** (`XDJ_BOOT_ROM=1`, what the app uses for every installed unit;
+  `qemu/xdj/xdj-bootrom.c`). CPU0 starts at the reset vector in the ROM region, as on the chip:
+  1. **FCB**: page 0 of blocks 0–3; valid = fingerprint `FCB ` + checksum (`~` byte sum of FCB
+     bytes 4–511). kobs-ng writes it at raw byte 12 of the page. It gives the page geometry, the
+     BCH layout (10 metadata bytes, 4 × 512-byte blocks, ECC type 4 = t8), the bad-block-marker
+     byte (1999) and `Firmware1/2_startingPage` (512 / 1024; the DBBT is in blocks 4–7).
+  2. **Firmware pages** are de-interleaved with that layout; data byte 1999 comes back from
+     metadata[0] (the marker swap). Both copies decode byte-identical to the firmware's
+     `u-boot.bin.nand`. Firmware2 is the fallback; an image read runs past
+     `PagesInFirmware` up to where the other copy starts (the plugin asks for 1 KiB more).
+  3. **IVT at image offset 0x400**: u-boot 2009.08's is a **plugin** (16 KiB to OCRAM
+     `0x907000`). The ROM calls `plugin(&start, &bytes, &ivt_offset)`; the plugin sets up the
+     DDR (with calibration) and calls the ROM's `pu_irom_hwcnfg_setup` (ROM API table at
+     `0xC0`, version word at `0x48`), then answers 0x37AF8 bytes → `0x17800000`, IVT at `+0x42C`.
+     The ROM loads that and jumps to u-boot (entry `0x178009A0`). A DCD, when an IVT has one,
+     is applied (write commands).
+  4. **The MMDC** (`0x021B0000`/`0x021B4000`) is a register file in which every calibration
+     completes without errors: `MDSCR.CON_ACK` follows `CON_REQ`, and the trigger bits the
+     calibration waits on read back clear. u-boot prints the calibration result
+     ("Write Leveling success / calibration success").
+  5. **u-boot** finds the NAND (`Boot Device: NAND`), reads its env from mtd2, runs
+     `bootcmd_nand`: `nand read` of `kernel_bank`'s 5 MiB with **cache reads** (31h/3Fh, which
+     the NAND model implements for it), checks the uImage CRC and boots it with its own ATAGs:
+     revision `0x63510` (`& 0xF00 = 0x500`) and the env's bootargs, including its bare
+     `video=mxcfb0` (the LVDS panel comes up at 800×480 with it). About 1 s from reset to
+     "Starting kernel".
+  The ROM program is a few ARM instructions in the ROM region; the loading is done in C behind a
+  small control register (`0x0001F000`). Not modelled: HAB/signature checks (the unit's images
+  aren't signed), the ROM's USB serial-download fallback, BCH parity checks.
+- **Host-side boot** (provisioning a blank unit, which has no u-boot yet; `XDJ_DIRECT_BOOT=1`;
+  a unit without an FCB): `xdj nand boot <img> <dir>` does `bootcmd_nand` on the host: reads
   `kernel_bank` from the env, reads that bank's uImage (`bootargs_nand_A/B`: `nand read
   ${loadaddr} <off> <len>`), and builds the bootargs from `bootargs_base` + `bootargs_nand`, with
   u-boot's bare `video=mxcfb0` replaced by the emulator's LVDS mode line → `uImage`,
-  `vmlinux.bin`, `atags.bin`, `tramp.bin` in `<dir>`. A firmware update done inside the emulator
-  therefore boots its new kernel on the next power-on.
-- **Userland**: the initramfs takes `rootfs=nand` (nanddump mtd5/mtd7), apl_start sees
-  `BOOTMODE=NAND` and mounts UBI data/gui, `rbp` starts → home screen.
+  `vmlinux.bin`, `atags.bin` (revision `0x500`), `tramp.bin` in `<dir>`. Either way a firmware
+  update done inside the emulator boots its new kernel on the next power-on.
+- **Userland**: the initramfs takes `rootfs=nand`: into a 60 MiB tmpfs it `nanddump`s a fixed
+  20 MiB of mtd5 (`rootfs.cramfs`, copied out with `cpdir`, then deleted) and a fixed 3 MiB of
+  mtd7 (`pioneer.tar.gz`, unpacked into `/root/pioneer`), then `switch_root`s into it. apl_start
+  sees `BOOTMODE=NAND` and mounts UBI data/gui, `rbp` starts → home screen. Those fixed lengths
+  (and u-boot's 5 MiB kernel read) are smaller than the partitions: a custom firmware must fit
+  them ([custom-firmware.md §2b](custom-firmware.md); `xdj fw check`).
 - **Needs ≥ 2 CPUs** (`XDJ_SMP=2`): single-core makes apl_start run `rbp_solo`, which a stock
   install doesn't have.
 - **No SD card** (`XDJ_SD=none`): a NAND unit has none.
@@ -179,7 +213,7 @@ XDJ_NAND_IMG=$PWD/nand.img XDJ_PANELCOM_IMG=$PWD/panelcom.bin XDJUSB=stick.img \
 ```sh
 $X nand info nand.img                         # rootfs, kernel_bank, release, ..., installed
 $X nand env  nand.img                         # the full u-boot env
-$X nand boot nand.img build/nand-boot         # bootcmd_nand -> blobs
+$X nand boot nand.img build/nand-boot         # host-side bootcmd_nand -> blobs (no XDJ_BOOT_ROM)
 XDJ_BOOT_DIR=build/nand-boot XDJ_BOOT_MEDIA=nand XDJ_SD=none XDJ_SMP=2 \
 XDJ_NAND_IMG=$PWD/nand.img XDJ_PANELCOM_IMG=$PWD/panelcom.bin \
   tools/xdj-panel/debug/relaunch.sh
@@ -200,6 +234,10 @@ A USER update of an installed unit is the same as provisioning without `XDJ_UPDA
 | `XDJ_NAND_IMG` | NAND backing file; unset = no NAND chip |
 | `XDJ_NAND_LOG=1` | log unhandled NAND commands |
 | `XDJ_BOOT_MEDIA=nand` | SBMR1 boot strap = NAND |
+| `XDJ_BOOT_ROM=1` | CPU0 starts in the emulated boot ROM, which boots u-boot from the NAND (no kernel loaders) |
+
+Host-side (the app): `XDJ_DIRECT_BOOT=1` boots an installed unit's kernel host-side instead of
+through the boot ROM.
 
 Launcher-side: `XDJ_BOOT_DIR`, `XDJ_SD=none`, `XDJ_SMP` (`relaunch.sh`).
 

@@ -6,14 +6,16 @@
 //! ORIGINAL is the official XDJRX.UPD (or the zip Pioneer distributes it in). The patch holds
 //! only the release's own files and line edits; the patcher rebuilds the release from the
 //! original exactly as `tools/fw/build-release.sh` does and refuses to write anything whose
-//! MD5 isn't the one the patch records. The firmware's AES key is derived from Pioneer's
-//! public GPL source release (downloaded) unless given with --key (64 hex characters, or a
-//! file: aes256.key or a file holding the hex key). The work is in lib.rs (shared with the GUI).
+//! MD5 isn't the one the patch records. The firmware's AES key: --key (64 hex characters, or a
+//! file: aes256.key or a file holding the hex key), else $XDJRX_AES_KEY, else the saved key
+//! (shared with the XDJ-RX desktop app, `saved_key_path`) if it opens the firmware, else derived
+//! from Pioneer's public GPL source release (downloaded). A key that built the release is saved
+//! there. The work is in lib.rs (shared with the GUI).
 //! SPDX-License-Identifier: GPL-2.0-or-later
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use xdjrx_patcher::{key_from_arg, key_from_gpl, Job, Msg, DOWNLOAD_MB};
+use xdjrx_patcher::{key_from_arg, key_from_gpl, save_key, saved_key, saved_key_path, Job, Msg, DOWNLOAD_MB};
 
 const USAGE: &str = "\
 xdjrx-patcher - make XDJ-RX custom firmware from Pioneer's official firmware
@@ -23,7 +25,8 @@ xdjrx-patcher - make XDJ-RX custom firmware from Pioneer's official firmware
   ORIGINAL.UPD    Pioneer's official XDJ-RX firmware 2.21 (XDJRX.UPD, or the downloaded .zip)
   PATCH.xdjpatch  the release's patch file
   --key KEY       optional: the firmware key (64 hex characters, or a key file). Without it,
-                  the key is taken from Pioneer's public GPL source download (~280 MB).
+                  the saved key is used (from an earlier run or the XDJ-RX emulator app), else
+                  it is taken from Pioneer's public GPL source download (~280 MB) and saved.
   -o OUT.UPD      where to write the result (default: a folder next to ORIGINAL)
 
 Run without arguments to be asked for the files.";
@@ -120,14 +123,22 @@ fn printer() -> impl FnMut(Msg) {
     }
 }
 
-fn get_key(given: Option<&str>) -> Result<[u8; 32], String> {
+fn get_key(given: Option<&str>, job: &Job) -> Result<[u8; 32], String> {
     if let Some(k) = given {
         return key_from_arg(k).map_err(|e| format!("--key: {e}"));
     }
     if let Ok(k) = std::env::var("XDJRX_AES_KEY") {
         return key_from_arg(k.trim()).map_err(|e| format!("$XDJRX_AES_KEY: {e}"));
     }
-    println!("(a one-time download of ~{DOWNLOAD_MB} MB)");
+    let path = saved_key_path().map(|p| p.display().to_string()).unwrap_or_default();
+    if let Some(k) = saved_key() {
+        if job.key_opens(&k) {
+            println!("Firmware key: the saved one ({path})");
+            return Ok(k);
+        }
+        println!("The saved key ({path}) doesn't open this firmware - getting it again.");
+    }
+    println!("(a one-time download of ~{DOWNLOAD_MB} MB; the key is saved for next time)");
     match key_from_gpl(&mut printer()) {
         Ok(k) => Ok(k),
         Err(e) => {
@@ -152,8 +163,13 @@ fn patch_firmware(orig: &Path, patch_path: &Path, key: Option<&str>, out: Option
     let job = Job::open(orig, patch_path)?;
     println!("Patch: custom firmware {} for the XDJ-RX (from official {})", job.release(), job.input_release());
     println!("Official firmware: OK ({})", orig.display());
-    let key = get_key(key)?;
+    let key = get_key(key, &job)?;
     let done = job.build(&key, out, &mut printer())?;
+    match save_key(&key) {
+        Ok(Some(p)) => println!("Saved the firmware key for next time: {}", p.display()),
+        Ok(None) => {}
+        Err(e) => println!("(couldn't save the firmware key: {e})"),
+    }
     println!("\nDone: {}", done.path.display());
     println!("  custom firmware {}, MD5 {} (verified)", done.release, done.md5);
     println!("Copy XDJRX.UPD to the root of a FAT32 USB stick and update the XDJ-RX as described in the release notes.");

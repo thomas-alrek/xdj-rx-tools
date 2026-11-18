@@ -87,11 +87,18 @@ preservation on owned hardware.
 - **Test mode** = MEMORY + TEMPO RANGE (`B 13 04` + `B 12 08`) held at rbp's first frame
   (*File → Power On in Test Mode*). Known open flake: ~1 boot in 8 comes up normal with correct frames.
 - **The app is a NAND unit**: a blank unit is provisioned by the firmware's own **ALL** update (stick
-  built by prep, inserted at `### USB update mount.`), then boots from NAND (`XDJ_BOOT_MEDIA=nand`).
+  built by prep, inserted at `### USB update mount.`), then boots from NAND (`XDJ_BOOT_MEDIA=nand`)
+  through its own chain: emulated **boot ROM → u-boot (mtd0) → kernel** (`XDJ_BOOT_ROM=1`,
+  `qemu/xdj/xdj-bootrom.c`; provisioning host-loads the kernel; `XDJ_DIRECT_BOOT=1` forces that).
   Installed = `release=` in the NAND env (the host sees it, then boots the unit from NAND).
   UTILITY → VERSION No. = that env `release`.
 - **No firmware signature**: `check_sig` = footer CRC32 + `XDJAERO` model prefix; the updater md5-checks
   each written partition against its own source. Rebuilt `.UPD`s install like official ones.
+- **Boot loads fixed lengths, not partitions**: u-boot reads 5 MiB of the kernel bank, the initramfs
+  20 MiB of the rootfs (mtd5) and **3 MiB of pioneer** (mtd7) into a **60 MiB RAM disk** (rootfs image +
+  unpacked copy at once), apl_start's first-boot 8 MiB of gui / 128 KiB of data. Past that, files are
+  silently missing (the updater still says complete). `xdj fw build`/`repack`/`pack` refuse it;
+  `xdj fw check <UPD>` shows the budget. `docs/custom-firmware.md` §2b.
 - **USB speed**: front slots enumerate at **480 Mbit/s** (`04-usb-chipidea-hub`); macOS QEMU timers need
   `05-macos-submillisecond-poll`.
 - **E-7206 AUTH CHIP ERROR** = the MFi coprocessor on **I2C4** (`0x021F8000`, slave 0x10) — `xdj-mfi.c`.

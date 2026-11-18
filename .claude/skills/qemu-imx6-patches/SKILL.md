@@ -39,7 +39,10 @@ qemu/xdj/            real source files -- EDIT THESE; synced to <qemu>/hw/arm/xd
                      GPIO1_IO18 REQ / GPIO1_IO16 ACK; docs/firmware-update-and-nand.md)
   xdj-mfi.c          I2C4 controller + MFi auth-coprocessor identity (fixes E-7206)
   xdj-usbnc.c        USBNC OWIR wakeup registers
-  xdj-nand.c         APBH-DMA + GPMI + BCH + 256 MiB NAND chip ($XDJ_NAND_IMG); docs/firmware-update-and-nand.md
+  xdj-nand.c         APBH-DMA + GPMI + BCH + 256 MiB NAND chip ($XDJ_NAND_IMG; reads incl. u-boot's
+                     cache reads 31h/3Fh); docs/firmware-update-and-nand.md
+  xdj-bootrom.c      i.MX6 boot ROM for NAND boot (XDJ_BOOT_ROM=1: FCB -> u-boot plugin/IVT/DCD ->
+                     u-boot) + the MMDC (DDR calibration completes); docs/firmware-update-and-nand.md §4
   meson.build
 qemu/patches/        edits to stock QEMU files (diffs against pristine 11.1.0)
 ```
@@ -89,6 +92,10 @@ New file group → new patch (keep one file in one patch).
 - Keep the **firmware untouched** — if a fix seems to need an rbp/kernel edit, find the qemu-side
   cause first (custom firmware is tested by booting it).
 - Two emulators at once contend for the host and can stall a boot — don't benchmark side by side.
+- **Boot ROM**: QEMU's sabrelite ignores unmapped accesses (reads 0), so missing hardware shows
+  up as code waiting forever for a status bit, not as an abort. The u-boot plugin's DDR
+  calibration was the case: the MMDC model in `xdj-bootrom.c` completes it. A device u-boot uses
+  but the kernel doesn't (e.g. NAND cache reads) needs the same care.
 
 ## References
 `qemu/build-qemu.sh`, `qemu/watch.sh`, `qemu/build-nand.sh`, `crates/xdj-fw` (`xdj prepare`),

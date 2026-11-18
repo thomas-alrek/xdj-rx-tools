@@ -154,9 +154,13 @@ from its emulated NAND — [firmware-update-and-nand.md](firmware-update-and-nan
   `XDJ_PANELCOM_IMG`; update type from `XDJ_UPDATE_TYPE`, hex: `10` normal, `20` ALL, `15`
   SERVICE; `XDJ_BL_LOG=1` traces it). `xdj-nand.c` emulates APBH-DMA/GPMI/BCH and a 256 MiB NAND
   (`XDJ_NAND_IMG`, `XDJ_NAND_LOG`).
+- **Boot chain**: an installed unit boots like the real one — emulated boot ROM (FCB, the u-boot
+  plugin, DDR calibration against the MMDC model) → the unit's u-boot 2009.08 from mtd0 →
+  `bootcmd_nand` → kernel (`xdj-bootrom.c`, `XDJ_BOOT_ROM=1`). Blank-unit provisioning host-loads
+  the firmware's kernel (the factory step); `XDJ_DIRECT_BOOT=1` forces the host-side boot.
 - **Provision + boot** with the `xdj` CLI: `xdj nand init` (blank NAND with the firmware's default
-  env) → an ALL update from USB → `xdj nand boot` (u-boot's `bootcmd_nand`: reads `kernel_bank`,
-  builds the boot blobs) → launch with `XDJ_BOOT_MEDIA=nand XDJ_SD=none XDJ_SMP=2`.
+  env) → an ALL update from USB → `XDJ_BOOT_ROM=1` (or `xdj nand boot` for the host-side
+  `bootcmd_nand`) → launch with `XDJ_BOOT_MEDIA=nand XDJ_SD=none XDJ_SMP=2`.
 - **Desktop app** ([standalone-app.md](standalone-app.md)): a dropped firmware provisions a blank
   NAND unit with its ALL update (stick inserted automatically), then boots from NAND. "Installed" =
   `release=` in the NAND env. The app starts powered off; the panel's POWER switch / File menu
@@ -203,8 +207,6 @@ handshake — [service-modes.md](service-modes.md).
   power-on (holding a key through the boot) must last until `#### Application Start!! ###`.
 - **NAND unit root shell**: the serial getty needs the stock root password (not recovered); use the
   SD test bed (same `rbp`/kernel) for shell-level debugging.
-- **u-boot is not executed**: boot blobs are built host-side (`xdj prepare`, `xdj nand boot`); the
-  boot ROM / u-boot path would need real BCH parity.
 - **Single-core** needs `rbp_solo`, which a stock install lacks (SD test bed only).
 - **Rear LINE/PHONO switch** (GPIO 119/120) and external audio inputs are not emulated.
 - **LED map**: a few status bits are unnamed and the jog ring's non-position values are undecoded

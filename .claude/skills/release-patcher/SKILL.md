@@ -13,6 +13,9 @@ index `docs/releases.md` (linked at the top of the README).
 ## Cutting a release
 1. `tools/fw/build-release.sh` (release number + mod list are in the script) → `build/release/`;
    run it twice: the MD5 must be identical (`SOURCE_DATE_EPOCH`, pinned Docker images).
+1a. `xdj fw check build/release/XDJRX.UPD`: the build already refuses an image the unit can't
+   load at boot (3 MiB pioneer, 20 MiB rootfs, 60 MiB RAM disk: docs/custom-firmware.md §2b);
+   note the headroom (3.01: pioneer 2.08 of 3 MiB, RAM-disk peak 54.6 of 59 MiB).
 2. Boot test on a **wiped** emulator unit (delete the test unit's `nand-flash.img` +
    `provisioned.stamp`, power on → stock 2.21 is provisioned, then install the release).
    Must show `### xdjmod: loaded into rbp … N module(s)` and UTILITY → VERSION No. = the release.
@@ -36,9 +39,14 @@ index `docs/releases.md` (linked at the top of the README).
   official MD5), `key_from_gpl(on)` / `key_from_arg`, `job.build(&key, out, on)`; progress as
   `Msg::Step` / `Msg::Download`. `src/main.rs` = the CLI (prints, prompts) on top.
 - Input `.UPD` or `.zip` (`firmware::read_upd_bytes`), MD5 vs manifest `input.upd_md5`.
-- Key: `--key` (hex or file) → `$XDJRX_AES_KEY` → GPL download (`xdj_fw::gplkey::fetch_key`,
-  crate feature `gpl-key`, shared with the desktop app: two deflate64 ZIPs → nested tar.gz →
-  `initramfs/usr/local/pioneer/aes256.key` → `key_from_passphrase`) → prompt.
+- Key: `--key` (hex or file) → `$XDJRX_AES_KEY` → the **saved key** (`saved_key()` =
+  `xdj_fw::firmware::stored_key()`, the emulator app's key store; used only if
+  `job.key_opens(&k)`) → GPL download (`xdj_fw::gplkey::fetch_key`, crate feature `gpl-key`,
+  shared with the desktop app: two deflate64 ZIPs → nested tar.gz →
+  `initramfs/usr/local/pioneer/aes256.key` → `key_from_passphrase`) → prompt. After a build
+  `save_key(&k)` stores the key that worked (CLI and app), so the 280 MB download is one-time.
+  Test without touching the real store: `HOME=<tmp> xdjrx-patcher ... --key build/aes256.key`
+  saves to `<tmp>/Library/...`, a second run without `--key` uses it.
 - Overlay in a temp dir: new files + `.xdj-modes` (portable modes; `tree.rs` reads it), edited
   Pioneer files from `fwbuild::unpack` + ops (lines split after `\n` only, latin-1), each
   checked by SHA-256; `SOURCE_DATE_EPOCH` from the manifest; `fwbuild::build` +
