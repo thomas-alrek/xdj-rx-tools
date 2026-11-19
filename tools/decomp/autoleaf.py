@@ -151,6 +151,28 @@ for a, s in sorted(size.items()):
             w[2] == 0x012fff1e and w[3] & 0xff000000 == 0xea000000 and branch(w[3], a + 12) in labels:
         fn = callee(branch(w[3], a + 12))
         sig, body = f'void {n} (S* p, int b, int c, int d)', f'{{ void* q = {field(w[0] & 0xfff, "void*")}; if (q) {fn} (q, b, c, d); }}'
+    # register moves (mov rd, rs | mov/mvn/movw rd, #imm) then b target: argument shuffles
+    if body is None and 8 <= s <= 24 and w[-1] & 0xff000000 == 0xea000000 and branch(w[-1], a + s - 4) in labels:
+        regs = {0: 'a', 1: 'b', 2: 'c', 3: 'd'}
+        ok = True
+        for x in w[:-1]:
+            rd = (x >> 12) & 0xf
+            if x & 0xfffff000 == 0xe3a00000 | (rd << 12) and rd in (0, 1, 2, 3, 12):
+                regs[rd] = str(rot_imm(x) - (1 << 32) if rot_imm(x) >= 0x80000000 else rot_imm(x))
+            elif x & 0xfffff000 == 0xe3e00000 | (rd << 12) and rd in (0, 1, 2, 3, 12):
+                v = ~rot_imm(x) & 0xffffffff
+                regs[rd] = str(v - (1 << 32) if v >= 0x80000000 else v)
+            elif x & 0xfff00000 == 0xe3000000 and rd in (0, 1, 2, 3, 12):
+                regs[rd] = str(((x >> 4) & 0xf000) | (x & 0xfff))
+            elif x & 0xffff0ff0 == 0xe1a00000 and rd in (0, 1, 2, 3, 12) and (x & 0xf) in regs:
+                regs[rd] = regs[x & 0xf]
+            else:
+                ok = False
+                break
+        if ok and all(k in regs for k in (0, 1, 2, 3)):
+            fn = callee(branch(w[-1], a + s - 4))
+            args = ', '.join([f'(void*) ({regs[0]})'] + [f'(int) ({regs[k]})' for k in (1, 2, 3)])
+            sig, body = f'void {n} (void* a, int b, int c, int d)', f'{{ {fn} ({args}); }}'
     if body:
         src.append(f'{sig} {body}')
         pairs.append((n, a))
