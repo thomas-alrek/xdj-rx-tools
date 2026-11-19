@@ -69,8 +69,8 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
 - Freescale's Linaro 2011.07 GCC 4.6.2 is built from Linaro's source release (only `all-gcc`,
   with the 2012.01 toolchain's headers and the cross binutils present, so it knows COMDAT groups
   and mergeable string sections).
-- **Pioneer's own code from source.** 600 of Pioneer's functions, from 80 reconstructed source
-  files, recompile byte-identically and are built into rbp. They cover the DSP primitives
+- **Pioneer's own code from source.** About 750 of Pioneer's functions, from 95 reconstructed
+  source files, recompile byte-identically and are built into rbp. They cover the DSP primitives
   (`dsp::LagrangeSRC`, the IIR filters, time-stretch base classes) and much of `mixerengine::`:
   output devices and channels, the input channels (mic, deck, USB), the master channel, the WAV
   recorder, the compressor buffer and the beat/colour effect bases. In the UI layer they cover
@@ -80,7 +80,8 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   `ui::Reception` (which route each event to the deck it belongs to), small parts of
   `ui::PlayerInnards` and `ui::Mixer`, about 35 of the UI's message handlers, and the
   destructors of the viewer and wizard class hierarchies (`uif::IViewer` → list/tree viewers,
-  wizards and their pages, the utility-menu items). In `common::` they cover the file input
+  wizards and their pages, the utility-menu items, timer classes, test modes, singletons), and
+  in C the GUI widget setters. In `common::` they cover the file input
   streams (local files, another player's media, and the page-buffered stream that reads ahead on a
   thread), the file-reader base, part of the PCM reader, the sample-rate converter, the message queue and small helpers
   (debug print, thread priority, the i.MX6 timer used as a clock); in `network::` the
