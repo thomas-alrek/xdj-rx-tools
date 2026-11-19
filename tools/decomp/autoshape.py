@@ -26,6 +26,7 @@ A4 = 'int a, int b, int c, int d'
 VT = ('struct VO { ' + ' '.join(f'virtual long long v{k}(int, int);' for k in range(64)) + ' };\n'
       'struct VB { ' + ' '.join(f'virtual bool v{k}(int, int);' for k in range(64)) + ' };\n'
       'struct VN { ' + ' '.join(f'virtual long long v{k}();' for k in range(64)) + ' };\n'
+      'struct VV { ' + ' '.join(f'virtual void v{k}();' for k in range(64)) + ' };\n'
       'struct V3 { ' + ' '.join(f'virtual long long v{k}(int, int, int);' for k in range(64)) + ' };\n'
       'typedef long long (*FnL)();\n'
       'typedef long long (*FnL3)(void*, int, int);\n'
@@ -33,6 +34,13 @@ VT = ('struct VO { ' + ' '.join(f'virtual long long v{k}(int, int);' for k in ra
 
 # shape -> [(signature, body), ...]; names are placeholders.
 TABLE = {
+    'cmp r0, #N ; bne #N ; b X ; b X': [
+        ('void f(int a)', 'if (a != {N0}) {F1}(); else {F0}();'),
+        ('int f(int a)', 'if (a != {N0}) return {F1}(); return {F0}();')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; mov r1, #N ; ldr r0, [r3] ; b X': [
+        ('int f(void)', 'return {F2}(*(int*) {D0}, {N0});')],
+    'push {r3, lr} ; mov r3, r0 ; ldr r3, [r3, #N] ; add r0, r0, #N ; ldr r3, [r3, #N] ; blx r3 ; pop {r3, pc}': [
+        ('void f(char* p)', 'reinterpret_cast<VV*> (p + {N0})->v{V2} ();')],
     'movw r3, #:lower16:X ; movt r3, #:upper16:X ; ldr r0, [r3] ; b X': [
         ('int f(void)', 'return {F2}(*(int*) {D0});')],
     'cmp r1, #N ; mov r0, #N ; moveq r1, #N ; movne r1, #N ; b X': [
@@ -88,7 +96,8 @@ TABLE = {
         (f'int f({P})', 'int* q = (int*) (p + {N0}); return {F0}(*(int*) (p + {N1}), q[0], q[1], q[2]);')],
     'push {r3, lr} ; ldr r3, [r0, #N]! ; ldr r3, [r3, #N] ; blx r3 ; pop {r3, pc}': [
         (f'int f({P}, int b, int c)', 'return (int) ((VO*) (p + {N0}))->v{V1}(b, c);'),
-        (f'bool f({P}, int b, int c)', 'return ((VB*) (p + {N0}))->v{V1}(b, c);')],
+        (f'bool f({P}, int b, int c)', 'return ((VB*) (p + {N0}))->v{V1}(b, c);'),
+        ('void f(char* p)', 'typedef void (*Fn) (void*); char* o = p + {N0}; (*(Fn*) (*(char**) o + {N1})) (o);')],
     # bounds-checked lookups in a pointer array (index checked against a global count)
     'ldr r3, =X ; ldr r3, [r3] ; cmp r1, r3 ; bhs #N ; ldr r3, [r0, #N] ; ldr r0, [r3, r1, lsl #N] ; cmp r0, #N ; bxeq lr ; b X ; mov r0, #N ; bx lr': [
         (f'int f({P}, int i)', 'if ((unsigned) i >= *(unsigned*) {D0}) return {N4}; char* q = (*(char***) (p + {N1}))[i]; if (!q) return 0; return {F1}(q);')],

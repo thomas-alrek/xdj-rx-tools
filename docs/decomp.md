@@ -101,7 +101,7 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   this-adjusting thunks, static initialisers and small leaf functions (getters, setters, constant
   returns, forwarding wrappers, `throw` helpers, C wrappers that call through a global object,
   bounds-checked array lookups); since they also cover the JUCE range, they pick up thunks and
-  leaves too short for the signature scan. With JUCE that makes about 5,800 functions built from
+  leaves too short for the signature scan. With JUCE that makes about 5,870 functions built from
   source, over a third of rbp's ~14,100 by count. By size it is far less: the generators take the
   small functions, and most of Pioneer's 2.9 MB is in large ones that need reconstructing by
   hand (about 4% of that code by bytes so far). Pioneer's code needs `-mfpu=neon -mfloat-abi=softfp`; a few
@@ -186,8 +186,8 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
     a vtable or callback table, with no unwind entry, ends up inside its predecessor. The tool
     looks for code after an unconditional return and its literal pool that nothing in the
     function branches to and that starts like a function (a push, or a short leaf), and writes
-    the starts to `split/hidden_starts.txt`. `autoleaf.py`, `autoshape.py`, `autoglobal.py` and
-    `autothunk.py` take them with `EXTRA_STARTS=split/hidden_starts.txt`; a graft that starts
+    the starts to `hidden_starts.txt` (outside `split/`, which `juce.py` regenerates). `autoleaf.py`, `autoshape.py`, `autoglobal.py` and
+    `autothunk.py` take them with `EXTRA_STARTS=hidden_starts.txt`; a graft that starts
     inside a split function becomes a function start of its own. `RELAXED=1` also accepts short
     blocks that end in `pop {.., pc}` or a tail call to a function. Repeated until nothing new
     matches, the passes added about 420 functions.

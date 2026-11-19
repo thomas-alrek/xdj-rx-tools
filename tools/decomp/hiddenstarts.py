@@ -7,7 +7,8 @@ unconditional return (bx lr, pop {.., pc}, b) and its literal pool, is not a bra
 jump-table target inside the function and has no case label, and starts like a function (a push,
 or a short leaf ending in bx lr; with RELAXED=1 also a short block ending in pop {.., pc} or a
 tail call to a function). Writes the starts, one per line (hex, then the containing
-function), to split/hidden_starts.txt. The generators take them with EXTRA_STARTS=that file.
+function), to hidden_starts.txt (outside split/, which juce.py regenerates). The generators
+take them with EXTRA_STARTS=hidden_starts.txt.
 Run from decomp/.
 """
 import os
@@ -40,7 +41,7 @@ def is_push(x):
 
 out = []
 for a, b in zip(starts, starts[1:]):
-    if not LO <= a < HI or b - a < 12:
+    if not LO <= a < HI or b - a < 8:
         continue
     n = (b - a) // 4
     w = struct.unpack('<%dI' % n, e.read_va(a, b - a))
@@ -82,5 +83,5 @@ for a, b in zip(starts, starts[1:]):
                     and (is_push(x) or (leaf and x >> 28 == 0xe))):
                 out.append((at, a))
         i = j
-open('split/hidden_starts.txt', 'w').write(''.join('%x %x\n' % t for t in out))
+open('hidden_starts.txt', 'w').write(''.join('%x %x\n' % t for t in out))
 print(len(out), 'hidden starts')
