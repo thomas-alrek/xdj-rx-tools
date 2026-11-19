@@ -68,7 +68,8 @@ TABLE = {
         (f'int f({P})', 'char* q = *(char**) (p + {N0}); if (q) return *(int*) (q + {N2}); return {N3};'),
         (f'float f({P})', 'char* q = *(char**) (p + {N0}); return q ? *(float*) (q + {N2}) : {N3};')],
     'ldr r2, [r0, #N] ; ldr r3, [r0, #N] ; strb r1, [r2, #N] ; strb r1, [r3, #N] ; bx lr': [
-        (f'void f({P}, bool v)', '(*(char**) (p + {N0}))[{N2}] = v; (*(char**) (p + {N1}))[{N3}] = v;')],
+        (f'void f({P}, bool v)', '(*(char**) (p + {N0}))[{N2}] = v; (*(char**) (p + {N1}))[{N3}] = v;'),
+        (f'void f({P}, bool v)', 'char* a = *(char**) (p + {N0}); char* b = *(char**) (p + {N1}); a[{N2}] = v; b[{N3}] = v;')],
     'ldr r0, [r0, #N] ; cmp r0, #N ; bxeq lr ; mov r1, #N ; mov r2, #N ; b X': [
         (f'int f({P})', 'char* q = *(char**) (p + {N0}); if (!q) return 0; return {F0}(q, {N2}, {N3});')],
     'push {r4, lr} ; mov r4, r0 ; bl X ; mov r0, r4 ; pop {r4, lr} ; b X': [
@@ -160,7 +161,8 @@ TABLE = {
     'ldr r0, =X ; bx lr': [
         ('void* f(void)', 'return {D0};')],
     'push {r3, lr} ; ldr r3, =X ; ldr r3, [r3, #N] ; cmp r3, #N ; popeq {r3, pc} ; blx r3 ; pop {r3, pc}': [
-        ('int f(void)', 'FnL fn = *(FnL*) ((char*) {D0} + {N0}); if (!fn) return 0; return (int) fn();')],
+        ('int f(void)', 'FnL fn = *(FnL*) ((char*) {D0} + {N0}); if (!fn) return 0; return (int) fn();'),
+        ('void f(void)', 'typedef void (*FnV) (); FnV fn = *(FnV*) ((char*) {D0} + {N0}); if (fn) fn();')],
     # UiTimer-derived destructors: stop a running timer, clear the id
     'ldr r3, [r0, #N] ; push {r4, lr} ; cmp r3, #N ; ldr r3, =X ; mov r4, r0 ; str r3, [r0] ; ble #N ; bl X ; mov r3, #N ; mov r0, r4 ; str r3, [r4, #N] ; pop {r4, pc}': [
         ('void* f(void** p)', 'p[0] = (void*) {D0}; if (*(int*) ((char*) p + {N0}) > {N1}) {F1}(p); *(int*) ((char*) p + {N4}) = {N3}; return p;')],
