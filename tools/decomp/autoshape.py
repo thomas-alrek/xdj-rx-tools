@@ -247,6 +247,9 @@ SYM = re.compile(r'\b(?:[fbdcp]_\w+|leaf_\w+|_Z\w+|[A-Za-z_]\w*_[0-9a-f]{4,})\b'
 NUM = re.compile(r'#(-?(?:0x[0-9a-f]+|\d+))')
 
 starts = sorted(int(l.split()[0], 16) for l in open('split/functions.txt') if l.startswith('0x'))
+# EXTRA_STARTS: a file of further function starts (hiddenstarts.py) inside split functions
+if __import__('os').environ.get('EXTRA_STARTS'):
+    starts = sorted(set(starts) | {int(l.split()[0], 16) for l in open(__import__('os').environ['EXTRA_STARTS']) if l.strip()})
 label_addr = {}
 for l in open('split/labels.txt'):
     q = l.split()

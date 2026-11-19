@@ -12,6 +12,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from elfinfo import Elf
 e = Elf('rbp.orig')
 starts = sorted(int(l.split()[0], 16) for l in open('split/functions.txt') if l.startswith('0x'))
+# EXTRA_STARTS: a file of further function starts (hiddenstarts.py) inside split functions
+if __import__('os').environ.get('EXTRA_STARTS'):
+    starts = sorted(set(starts) | {int(l.split()[0], 16) for l in open(__import__('os').environ['EXTRA_STARTS']) if l.strip()})
 size = {a: b - a for a, b in zip(starts, starts[1:])}
 grafted = {int(l.split()[0], 16) for l in open('grafts.txt') if l.strip() and l[0] != '#' and l.split()[2] != 'src/auto/auto_thunks.cpp'}   # own earlier output is regenerated
 labels = {}

@@ -76,8 +76,9 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   recorder, the compressor buffer, the beat/colour effect bases, the equalizers, the delay line
   and parts of the flanger, pitch, spiral and reverb effects. The test mode's display layer
   (DirectFB drawing, panels, text, the test patterns) and the cue cache's file-system wrappers are
-  rebuilt as whole files: their error reports carry `__FILE__`/`__LINE__`, which gives the
-  file boundaries and, through `#line`, the exact line numbers. In the UI layer they cover
+  rebuilt as whole files (with the GUI's DirectFB driver and the database test harness in part):
+  their error reports carry `__FILE__`/`__LINE__`, which gives the file boundaries and, through
+  `#line`, the exact line numbers. In the UI layer they cover
   `uif::UiObject`/`UiTimer`, the `uif::IDataSet` interface and several list/info/test-mode data
   sets, the panel TX path (`ui::PanelComController`), `ui::KeyInput` (the key table in
   [key-codes.md](key-codes.md)), `ui::JogSpeedGuesser`, the engine and database callbacks of
@@ -100,7 +101,7 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   this-adjusting thunks, static initialisers and small leaf functions (getters, setters, constant
   returns, forwarding wrappers, `throw` helpers, C wrappers that call through a global object,
   bounds-checked array lookups); since they also cover the JUCE range, they pick up thunks and
-  leaves too short for the signature scan. With JUCE that makes about 5,350 functions built from
+  leaves too short for the signature scan. With JUCE that makes about 5,700 functions built from
   source, over a third of rbp's ~14,100 by count. By size it is far less: the generators take the
   small functions, and most of Pioneer's 2.9 MB is in large ones that need reconstructing by
   hand (about 4% of that code by bytes so far). Pioneer's code needs `-mfpu=neon -mfloat-abi=softfp`; a few
@@ -180,5 +181,14 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
     abstracted) to one or more C templates, and the first template that matches is kept. Shapes
     that load addresses from a literal pool are also tried as cold functions, since GCC optimises
     those for size. `--survey` lists the most common shapes without a table entry.
+  - `hiddenstarts.py` finds functions the splitter merged into the function before them. The
+    split takes starts from call targets and the unwind index, so a function reached only through
+    a vtable or callback table, with no unwind entry, ends up inside its predecessor. The tool
+    looks for code after an unconditional return and its literal pool that nothing in the
+    function branches to and that starts like a function (a push, or a short leaf), and writes
+    the starts to `split/hidden_starts.txt`. `autoleaf.py`, `autoshape.py`, `autoglobal.py` and
+    `autothunk.py` take them with `EXTRA_STARTS=split/hidden_starts.txt`; a graft that starts
+    inside a split function becomes a function start of its own. The first pass added about 280
+    functions.
 - The 2012.01 toolchain is 32-bit x86 Linux. On macOS it runs in Docker
   (`--platform linux/386`, e.g. `i386/debian:bullseye-slim`).
