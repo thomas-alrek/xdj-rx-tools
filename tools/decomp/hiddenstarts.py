@@ -22,7 +22,7 @@ for l in open('split/labels.txt'):
     p = l.split()
     if len(p) == 2:
         labels.setdefault(int(p[0], 16), []).append(p[1])
-LO, HI = 0xeda0, 0x2d0000
+LO, HI = 0xeda0, 0x360000
 NOPS = (0, 0xe1a00000, 0xe320f000)
 
 
