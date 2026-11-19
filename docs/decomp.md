@@ -69,11 +69,12 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
 - Freescale's Linaro 2011.07 GCC 4.6.2 is built from Linaro's source release (only `all-gcc`,
   with the 2012.01 toolchain's headers and the cross binutils present, so it knows COMDAT groups
   and mergeable string sections).
-- **Pioneer's own code from source.** About 850 of Pioneer's functions, from 120 reconstructed
+- **Pioneer's own code from source.** About 850 of Pioneer's functions, from 130 reconstructed
   source files, recompile byte-identically and are built into rbp. They cover the DSP primitives
   (`dsp::LagrangeSRC`, the IIR filters, time-stretch base classes) and much of `mixerengine::`:
   output devices and channels, the input channels (mic, deck, USB), the master channel, the WAV
-  recorder, the compressor buffer and the beat/colour effect bases. In the UI layer they cover
+  recorder, the compressor buffer, the beat/colour effect bases, the equalizers, the delay line
+  and parts of the flanger, pitch and spiral effects. In the UI layer they cover
   `uif::UiObject`/`UiTimer`, the `uif::IDataSet` interface and several list/info/test-mode data
   sets, the panel TX path (`ui::PanelComController`), `ui::KeyInput` (the key table in
   [key-codes.md](key-codes.md)), `ui::JogSpeedGuesser`, the engine and database callbacks of
@@ -85,7 +86,9 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   layout: declaring the class with its members and inline destructor plus a placeholder
   out-of-line constructor makes GCC emit the vtable as COMDAT and the destructors with it, which
   reproduces rbp's code (a key function in the file would make GCC address the vtable through a
-  section anchor instead). In `common::` they cover the file input
+  section anchor instead). A destructor that loads a pointer member before storing its vptr
+  deletes it through a member object (`juce::ScopedPointer`), whose destructor runs after the vptr
+  store so the scheduler can hoist the load. In `common::` they cover the file input
   streams (local files, another player's media, and the page-buffered stream that reads ahead on a
   thread), the file-reader base, part of the PCM reader, the sample-rate converter, the message queue and small helpers
   (debug print, thread priority, the i.MX6 timer used as a clock); in `network::` the
@@ -94,8 +97,8 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   this-adjusting thunks, static initialisers and small leaf functions (getters, setters, constant
   returns, forwarding wrappers, `throw` helpers, C wrappers that call through a global object,
   bounds-checked array lookups); since they also cover the JUCE range, they pick up thunks and
-  leaves too short for the signature scan. With JUCE that makes about 4,800 functions built from
-  source, a third of rbp's ~14,100 by count. By size it is far less: the generators take the
+  leaves too short for the signature scan. With JUCE that makes about 5,300 functions built from
+  source, over a third of rbp's ~14,100 by count. By size it is far less: the generators take the
   small functions, and most of Pioneer's 2.9 MB is in large ones that need reconstructing by
   hand (about 4% of that code by bytes so far). Pioneer's code needs `-mfpu=neon -mfloat-abi=softfp`; a few
   directories were also built with `-ftree-vectorize` (Common/reader) or `-O3` (WavWriter), and
