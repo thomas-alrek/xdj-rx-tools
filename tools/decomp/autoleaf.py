@@ -53,7 +53,7 @@ def callee(target, extra=''):
     return fn
 
 for a, s in sorted(size.items()):
-    if a in grafted or a < 0xeda0 or a >= 0x2d0000 or s not in (4, 8, 12, 16, 20, 24, 28):
+    if a in grafted or a < 0xeda0 or a >= 0x2d0000 or s not in (4, 8, 12, 16, 20, 24, 28, 40):
         continue
     w = struct.unpack(f'<{s // 4}I', e.read_va(a, s))
     n = f'leaf_{a:x}'
@@ -151,6 +151,16 @@ for a, s in sorted(size.items()):
             w[2] == 0x012fff1e and w[3] & 0xff000000 == 0xea000000 and branch(w[3], a + 12) in labels:
         fn = callee(branch(w[3], a + 12))
         sig, body = f'void {n} (S* p, int b, int c, int d)', f'{{ void* q = {field(w[0] & 0xfff, "void*")}; if (q) {fn} (q, b, c, d); }}'
+    # push {r3,lr}; mov r0,#4; bl __cxa_allocate_exception; ldr r3,=text; ldr r1,=_ZTIPKc; mov r2,#0;
+    # str r3,[r0]; bl __cxa_throw; .word text; .word typeinfo  ->  throw "text"
+    if body is None and s == 40 and w[0] == 0xe92d4008 and w[1] == 0xe3a00004 and w[3] == 0xe59f300c and \
+            w[4] == 0xe59f100c and w[5] == 0xe3a02000 and w[6] == 0xe5803000:
+        text = e.read_va(w[8], 256).split(b'\0')[0]
+        if text and all(32 <= ch < 127 for ch in text):
+            lit = text.decode().replace('\\', '\\\\').replace('"', '\\"')
+            # cold, as GCC decided in rbp (callers only reach it on error paths): .text.unlikely and
+            # optimised for size, so the addresses come from a literal pool
+            sig, body = f'__attribute__ ((cold)) void {n} ()', f'{{ throw "{lit}"; }}'
     # register moves (mov rd, rs | mov/mvn/movw rd, #imm) then b target: argument shuffles
     if body is None and 8 <= s <= 24 and w[-1] & 0xff000000 == 0xea000000 and branch(w[-1], a + s - 4) in labels:
         regs = {0: 'a', 1: 'b', 2: 'c', 3: 'd'}
