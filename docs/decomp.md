@@ -69,7 +69,7 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
 - Freescale's Linaro 2011.07 GCC 4.6.2 is built from Linaro's source release (only `all-gcc`,
   with the 2012.01 toolchain's headers and the cross binutils present, so it knows COMDAT groups
   and mergeable string sections).
-- **Pioneer's own code from source.** About 750 of Pioneer's functions, from 95 reconstructed
+- **Pioneer's own code from source.** About 850 of Pioneer's functions, from 120 reconstructed
   source files, recompile byte-identically and are built into rbp. They cover the DSP primitives
   (`dsp::LagrangeSRC`, the IIR filters, time-stretch base classes) and much of `mixerengine::`:
   output devices and channels, the input channels (mic, deck, USB), the master channel, the WAV
