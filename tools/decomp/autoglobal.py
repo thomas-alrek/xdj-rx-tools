@@ -72,7 +72,7 @@ def candidate(a, s):
             target = labels[t]
             rets |= {'int'} if x & 0x01000000 == 0 else {'ll', 'const'}
         elif x & 0x0ff0f000 == 0x03700000:                              # cmn: a clamp
-            rets = {'clamp'}
+            rets = {'clamp', 'clamp2'}
         elif x & 0x0fff0ff0 == 0x06bf0070:                              # sxth
             rets.add('short')
         elif x & 0x0fe00000 == 0x03a00000 and x & 0xf000 in (0, 0x1000):   # mov r0/r1, #imm
@@ -90,7 +90,7 @@ def variants(consts, rets):
     """(nargs, arg transform, access, return form, null value, K) tuples, most likely first."""
     ks = consts or [1]
     out = []
-    for ret in [r for r in ('int', 'll', 'clamp', 'short', 'const') if r in rets]:
+    for ret in [r for r in ('int', 'll', 'clamp', 'clamp2', 'short', 'const') if r in rets]:
         for acc in ('local', 'global'):
             for nargs in (1, 0, 2, 3):
                 for xf in ('plain', 'ne0', 'neg1', 'constarg'):
@@ -127,6 +127,8 @@ def source(name, glob, off, target, v, alias):
     call = f'{alias} ({", ".join([obj] + args)})'
     if ret == 'clamp':
         tail = f'    unsigned r = {call}; if (r >= 0x7fffffffu) r = -1; return r;\n'
+    elif ret == 'clamp2':
+        tail = f'    int r = {call}; return (unsigned) r > 0x7ffffffeu ? -1 : r;\n'
     elif ret == 'const':
         tail = f'    {call}; return {k};\n'
     else:
