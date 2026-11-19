@@ -5,7 +5,8 @@ reached through a pointer (a vtable or callback table) and has no unwind entry o
 up inside the function before it. This scans each split function for code that follows an
 unconditional return (bx lr, pop {.., pc}, b) and its literal pool, is not a branch or
 jump-table target inside the function and has no case label, and starts like a function (a push,
-or a short leaf ending in bx lr). Writes the starts, one per line (hex, then the containing
+or a short leaf ending in bx lr; with RELAXED=1 also a short block ending in pop {.., pc} or a
+tail call to a function). Writes the starts, one per line (hex, then the containing
 function), to split/hidden_starts.txt. The generators take them with EXTRA_STARTS=that file.
 Run from decomp/.
 """
@@ -23,6 +24,8 @@ for l in open('split/labels.txt'):
     if len(p) == 2:
         labels.setdefault(int(p[0], 16), []).append(p[1])
 LO, HI = 0xeda0, 0x360000
+RELAXED = os.environ.get('RELAXED') == '1'
+start_set = set(starts)
 NOPS = (0, 0xe1a00000, 0xe320f000)
 
 
@@ -67,6 +70,14 @@ for a, b in zip(starts, starts[1:]):
         if j < n:
             at, x = a + 4 * j, w[j]
             leaf = 0xe12fff1e in w[j:j + 6]
+            if RELAXED:     # also short blocks that end in a return or a tail call to a function
+                for k in range(j, min(j + 8, n)):
+                    y = w[k]
+                    if y >> 28 == 0xe and ((y & 0x0fff8000) == 0x08bd8000 or (y & 0x0f000000) == 0x0a000000):
+                        off = y & 0xffffff
+                        t = a + 4 * k + 8 + ((off - 0x1000000) if off & 0x800000 else off) * 4
+                        leaf = leaf or (y & 0x0f000000) != 0x0a000000 or t in start_set
+                        break
             if (at not in targets and not any(l.startswith('c_') for l in labels.get(at, []))
                     and (is_push(x) or (leaf and x >> 28 == 0xe))):
                 out.append((at, a))
