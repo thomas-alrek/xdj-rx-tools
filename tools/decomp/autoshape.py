@@ -236,6 +236,11 @@ TABLE = {
                                    'switch (deck) {{ case 0: return (*(unsigned char*) (a + {N9}) >> {N10}) & 1; case 1: return (*(unsigned char*) (b + {N12}) >> {N13}) & 1; default: return 0; }}'),
         (f'bool f({P}, int deck)', 'char* a = *(char**) (p + {N0}); if (!a) return 0; char* b = *(char**) (p + {N2}); if (!b) return 0; '
                                    'if (deck == 0) return (*(unsigned char*) (a + {N9}) >> {N10}) & 1; if (deck == 1) return (*(unsigned char*) (b + {N12}) >> {N13}) & 1; return 0;')],
+    # store a new value if it is in range and changed, then notify
+    'push {r3, lr} ; ldr r3, [r0, #N] ; ldrh r1, [r0, #N] ; uxth r2, r3 ; cmp r1, r2 ; movls r0, #N ; popls {r3, pc} ; ldr r2, [r0, #N] ; cmp r3, r2 ; beq #N ; str r3, [r0, #N] ; mov r0, r3 ; bl X ; mov r0, #N ; pop {r3, pc} ; mov r0, #N ; pop {r3, pc}': [
+        (f'bool f({P})', 'int* next = (int*) (p + {N0}); int* cur = (int*) (p + {N3}); '
+                         'if ((unsigned short) *next >= *(unsigned short*) (p + {N1})) return false; '
+                         'if (*next == *cur) return false; *cur = *next; {F0}(*cur); return true;')],
 }
 
 SYM = re.compile(r'\b(?:[fbdcp]_\w+|leaf_\w+|_Z\w+|[A-Za-z_]\w*_[0-9a-f]{4,})\b')
