@@ -55,16 +55,17 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
 - **Relocation works.** Moving one function to a different address (test: a JUCE function moved
   into the free gap between the two segments) retargets its callers, and the moved copy still
   calls the same functions.
-- **C++ functions build into the binary.** About 820 JUCE functions are compiled from JUCE's
+- **C++ functions build into the binary.** About 1,000 JUCE functions are compiled from JUCE's
   source (with Pioneer's patches) and grafted in place of their assembly, and the rebuilt binary
   is still byte-identical. A graft's external references (other functions, string literals, statics) are
   resolved from the original bytes at the same offsets. Each matching graft reveals the addresses
   of the functions it calls, which names more functions for the next round.
-- **Pioneer patched JUCE.** The JUCE block's atomic operations are inline `ldrex`/`strex` loops
-  without memory barriers (Pioneer's application code uses GCC's `__sync` builtins, which come
-  with `dmb`); 32-bit byte swaps use ARM's `rev`; zlib differs from JUCE's copy in places. The
-  patched tree builds most of JUCE byte-identically; about 25 functions (mostly in `String`) are
-  still assembly.
+- **Pioneer patched JUCE.** The atomic add is an inline `ldrex`/`strex` loop without memory
+  barriers whose asm hard-codes r0/r1 and copies them out (Pioneer's application code uses GCC's
+  `__sync` builtins, which come with `dmb`); 32-bit byte swaps use ARM's `rev`; zlib differs from
+  JUCE's copy in places; the Linux native code is a trimmed unit without X11 (files, network,
+  system stats, threads, ALSA audio and MIDI). Rebuilt from the patched tree, JUCE matches
+  byte for byte except for about 30 functions Pioneer changed (messaging, timers, thread stop).
 - Freescale's Linaro 2011.07 GCC 4.6.2 is built from Linaro's source release (only `all-gcc`,
   with the 2012.01 toolchain's headers and the cross binutils present, so it knows COMDAT groups
   and mergeable string sections).
@@ -82,7 +83,7 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   daemon/config base and part of hostapd. Another 2,328 functions are generated from rbp's bytes,
   RTTI and vtables by the generators listed under Tools: trivial virtuals, destructors,
   this-adjusting thunks and tiny leaf functions (getters, setters, constant returns, forwarding
-  wrappers, `throw` helpers). With JUCE that makes about 3,640 functions built from source, a
+  wrappers, `throw` helpers). With JUCE that makes about 3,800 functions built from source, over a
   quarter of rbp's ~14,100. Pioneer's code needs `-mfpu=neon -mfloat-abi=softfp`; a few
   directories were also built with `-ftree-vectorize` (Common/reader) or `-O3` (WavWriter).
   Functions that don't match yet stay as assembly. The usual reasons are register allocation,
