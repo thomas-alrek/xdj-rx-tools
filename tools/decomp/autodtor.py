@@ -149,7 +149,9 @@ for d1 in sorted(next_word):
 # resolved to rbp's D1 by address)
 d0_only = []
 for a, sz in sorted(sizes_all.items()):
-    if a in grafted or a >= 0x360000 or a < 0xeda0 or sz != 28:
+    if a in grafted or a >= 0x360000 or a < 0xeda0 or sz not in (28, 32):
+        continue
+    if sz == 32 and words(a, 8)[7] != 0:        # 32: followed by an alignment word
         continue
     w = words(a, 7)
     if w[0] == 0xe92d4010 and w[1] == 0xe1a04000 and w[2] & 0xff000000 == 0xeb000000 and \
