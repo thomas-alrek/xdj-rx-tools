@@ -13,16 +13,16 @@ Status: ✅ built and verified in the emulator · 🔬 researched (static analys
 | `preload` — the xdjmod framework (`libxdjmod.so`) | ✅ | `LD_PRELOAD` in `apl_start` | done | — |
 | UTILITY menu rows for mods (framework) | ✅ | extended item table | done | — |
 | Safe start — hold MIDI at power-on: stock rbp, no mods | ✅ emulator | `apl_start` key check (§3) | done | — |
-| `fps` — UI frame rate 20 / 30 / 60 (default 60) | ✅ emulator | 2 immediates + timer detour | done (real unit: untested) | real-unit test |
+| `fps` — UI frame rate 20 / 30 / 60 (default 60) | ✅ emulator | 2 immediates + timer detour | done (real unit: works, 3.01) | CPU on the unit |
 | SCREEN SYNC — copy timed before the refresh (opt-in, for unit testing) | 🔬 built, emulator can't judge | own refresh thread + FBIO_WAITFORVSYNC interposer (§5a) | default OFF | real-unit test |
 | `wav` — WAV float / 32-bit / up to 192 kHz | ✅ emulator | reader vtable slots + tag-parser checks | done (AIFF: open) | AIFF |
-| `flac` — FLAC 16/24-bit ≤ 192 kHz, with tags | ✅ emulator | suffix + browser hooks, dr_flac via the wav reader | done (real unit: untested) | — |
-| `waveform` — RGB / 3-band waveforms (default 3-band) | ✅ emulator | `.EXT` interposer + detail/overview detours | done (real unit: untested) | tuning |
-| WAVEFORM SCROLL: ORIGINAL / SMOOTH (default SMOOTH) | ✅ emulator | playhead estimate + sub-pixel canvas shift (§10) | done (real unit: untested) | visual check, CPU |
-| Hot cues A–H on the waveforms, in rekordbox colours | ✅ emulator | PCO2 parse + marker bits + overview images (§8a) | done (real unit: untested) | — |
-| `beatjump` — BEAT JUMP on the pads (opt-in) | ✅ emulator | PlayerInnards onKey slot + LED detour (§10a) | done (real unit: untested) | — |
-| HOT CUE E-H on SHIFT + pads (opt-in) | ✅ emulator | getCue override around the stock hot-cue call (§10a) | done (real unit: untested) | — |
-| `keys` — Camelot key display (opt-in) | ✅ emulator (3.01) | name table swap, DB name detours, key-image remap (§10c) | done (real unit: untested) | — |
+| `flac` — FLAC 16/24-bit ≤ 192 kHz, with tags | ✅ emulator | suffix + browser hooks, dr_flac via the wav reader | done (real unit: works, 3.01) | — |
+| `waveform` — RGB / 3-band waveforms (default 3-band) | ✅ emulator | `.EXT` interposer + detail/overview detours | done (real unit: works, 3.01) | tuning |
+| WAVEFORM SCROLL: ORIGINAL / SMOOTH (default SMOOTH) | ✅ emulator | playhead estimate + sub-pixel canvas shift (§10) | done (real unit: works, 3.01) | visual check, CPU |
+| Hot cues A–H on the waveforms, in rekordbox colours | ✅ emulator | PCO2 parse + marker bits + overview images (§8a) | done (real unit: works, 3.01) | — |
+| `beatjump` — BEAT JUMP on the pads (opt-in) | ✅ emulator | PlayerInnards onKey slot + LED detour (§10a) | done (real unit: works, 3.01) | — |
+| HOT CUE E-H on SHIFT + pads (opt-in) | ✅ emulator | getCue override around the stock hot-cue call (§10a) | done (real unit: works, 3.01) | — |
+| `keys` — Camelot key display (opt-in) | ✅ emulator (3.01) | name table swap, DB name detours, key-image remap (§10c) | done (real unit: works, 3.01) | — |
 | `folders` — [FOLDER] lists Contents | ✅ emulator | one branch (§7a) | done | — |
 | Large libraries (1000+ tracks) | 🔬 measured (§10b) | — | no memory limit hit | — |
 | OneLibrary | 🔬 later (nice to have) | mount-time `export.pdb` synthesis | medium | 2–3 weeks |
