@@ -29,14 +29,14 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
 ## What rbp is made of
 
 - About 14,100 functions in 3.3 MB of ARM code (ARM mode only, no Thumb), plus 435 PLT stubs.
-- **Compiler and flags, confirmed by byte-identical matches:** Linaro GCC 2012.01 (4.6.3, the
-  public binary `gcc-linaro-arm-linux-gnueabi-2012.01-20120125`) with
-  `-O2 -mcpu=cortex-a8 -marm`. A JUCE function (368 bytes) recompiles to the identical bytes.
-  A scan of 115 JUCE source files finds about 700 of their functions in rbp at `-O2`, against
-  500 at `-O3`.
-- A second compiler, Freescale's Linaro 2011.07 GCC 4.6.2, is named in `.comment`. It probably
-  built the C runtime objects rbp was linked with (rbp has no Thumb code, but the 2012.01
-  `libgcc.a` is Thumb-2). The binary isn't downloadable any more; see Status for building it.
+- **Compiler and flags, confirmed by byte-identical matches:** Freescale's Linaro 2011.07 GCC
+  4.6.2 (named in `.comment`) with `-O2 -mcpu=cortex-a8 -marm`, plus `-mfpu=neon
+  -mfloat-abi=softfp` for Pioneer's code. The binary isn't downloadable any more; it builds from
+  Linaro's source release (see Status). Linaro 2012.01 (4.6.3, the public binary
+  `gcc-linaro-arm-linux-gnueabi-2012.01-20120125`) gives the same code for most functions, which is
+  how the first matches were found, but not for all: a scan of 115 JUCE source files finds 893 of
+  their functions in rbp with 2011.07 objects against 725 with 2012.01. The 2012.01 toolchain
+  still supplies the assembler, linker and headers. Its `libgcc.a` is Thumb-2 (rbp has none).
 - zlib 1.2.3 is the copy bundled in JUCE, compiled with it.
 
 | Part | Approx. functions | Size | Plan |
@@ -55,40 +55,38 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
 - **Relocation works.** Moving one function to a different address (test: a JUCE function moved
   into the free gap between the two segments) retargets its callers, and the moved copy still
   calls the same functions.
-- **C++ functions build into the binary.** 642 JUCE functions are compiled from the upstream
-  JUCE source and grafted in place of their assembly, and the rebuilt binary is still
-  byte-identical. A graft's external references (other functions, string literals, statics) are
+- **C++ functions build into the binary.** About 820 JUCE functions are compiled from JUCE's
+  source (with Pioneer's patches) and grafted in place of their assembly, and the rebuilt binary
+  is still byte-identical. A graft's external references (other functions, string literals, statics) are
   resolved from the original bytes at the same offsets. Each matching graft reveals the addresses
   of the functions it calls, which names more functions for the next round.
-- **Pioneer patched JUCE's atomics.** The JUCE block's atomic operations are inline
-  `ldrex`/`strex` loops without memory barriers. Pioneer's application code uses GCC's
-  `__sync` builtins, which come with `dmb`. The asm block is reconstructed exactly (a C loop around
-  one `ldrex; add; strex` statement with register-pinned outputs). The register allocation around
-  it doesn't match yet, so about 90 JUCE functions with atomics (`String`, `StringArray`, …) are
-  still assembly. zlib is JUCE's bundled copy and comes in with JUCE.
-- The binary's `.comment` also names Freescale's Linaro 2011.07 GCC 4.6.2. It can be built from
-  Linaro's source release (only `all-gcc`, with the 2012.01 toolchain's headers). For the code
-  tested so far it produces the same output as 2012.01.
-- **Pioneer's own code from source.** 466 of Pioneer's functions, from 52 reconstructed source
+- **Pioneer patched JUCE.** The JUCE block's atomic operations are inline `ldrex`/`strex` loops
+  without memory barriers (Pioneer's application code uses GCC's `__sync` builtins, which come
+  with `dmb`); 32-bit byte swaps use ARM's `rev`; zlib differs from JUCE's copy in places. The
+  patched tree builds most of JUCE byte-identically; about 25 functions (mostly in `String`) are
+  still assembly.
+- Freescale's Linaro 2011.07 GCC 4.6.2 is built from Linaro's source release (only `all-gcc`,
+  with the 2012.01 toolchain's headers and the cross binutils present, so it knows COMDAT groups
+  and mergeable string sections).
+- **Pioneer's own code from source.** 469 of Pioneer's functions, from 52 reconstructed source
   files, recompile byte-identically and are built into rbp. They cover the DSP primitives
   (`dsp::LagrangeSRC`, the IIR filters, time-stretch base classes) and much of `mixerengine::`:
   output devices and channels, the input channels (mic, deck, USB), the master channel, the WAV
   recorder, the compressor buffer and the beat/colour effect bases. In the UI layer they cover
   `uif::UiObject`/`UiTimer`, the `uif::IDataSet` interface and several list/info/test-mode data
-  sets, the panel TX path (`ui::PanelComController`), `ui::KeyInput` (the key table in [key-
-  codes.md](key-codes.md)) and `ui::JogSpeedGuesser`. In `common::` they cover the file input
+  sets, the panel TX path (`ui::PanelComController`), `ui::KeyInput` (the key table in
+  [key-codes.md](key-codes.md)) and `ui::JogSpeedGuesser`. In `common::` they cover the file input
   streams (local files, another player's media, and the page-buffered stream that reads ahead on a
   thread), the file-reader base, the sample-rate converter, the message queue and small helpers
   (debug print, thread priority, the i.MX6 timer used as a clock); in `network::` the
-  daemon/config base and part of hostapd. Another 597 functions are generated from rbp's RTTI and
-  vtables: trivial virtuals (empty bodies, constant returns, field getters/setters) and inline
-  destructors that only restore a base vtable or call the base destructor (`scripts/autodtor.py`).
-  With JUCE (including five files that need Pioneer's ARM byte-swap patch) that makes about 1,730
-  functions built from source. Pioneer's code needs Linaro 2011.07 GCC (built from source with the
-  cross binutils present, so it knows COMDAT groups and mergeable string sections) and `-mfpu=neon
-  -mfloat-abi=softfp`; a few directories were also built with `-ftree-vectorize` (Common/reader)
-  or `-O3` (WavWriter). Functions that don't match yet stay as assembly. The usual reasons are
-  register allocation, block order, or a source detail not yet recovered.
+  daemon/config base and part of hostapd. Another 2,328 functions are generated from rbp's bytes,
+  RTTI and vtables by the generators listed under Tools: trivial virtuals, destructors,
+  this-adjusting thunks and tiny leaf functions (getters, setters, constant returns, forwarding
+  wrappers, `throw` helpers). With JUCE that makes about 3,640 functions built from source, a
+  quarter of rbp's ~14,100. Pioneer's code needs `-mfpu=neon -mfloat-abi=softfp`; a few
+  directories were also built with `-ftree-vectorize` (Common/reader) or `-O3` (WavWriter).
+  Functions that don't match yet stay as assembly. The usual reasons are register allocation,
+  block order, or a source detail not yet recovered.
 - **Class map.** RTTI gives 497 classes in Pioneer namespaces (`mixerengine::`, `dsp::`,
   `common::` file readers, `ui::`, `network::`, `playengine::`, `db::` …) with their vtables. 23
   source paths in strings show the source tree layout (`Source/Engine/PlayEngine/…`,
