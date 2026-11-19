@@ -26,6 +26,7 @@ A4 = 'int a, int b, int c, int d'
 VT = ('struct VO { ' + ' '.join(f'virtual long long v{k}(int, int);' for k in range(64)) + ' };\n'
       'struct VB { ' + ' '.join(f'virtual bool v{k}(int, int);' for k in range(64)) + ' };\n'
       'struct VN { ' + ' '.join(f'virtual long long v{k}();' for k in range(64)) + ' };\n'
+      'struct P2 { int a, b; };\n'
       'struct VV { ' + ' '.join(f'virtual void v{k}();' for k in range(64)) + ' };\n'
       'struct V3 { ' + ' '.join(f'virtual long long v{k}(int, int, int);' for k in range(64)) + ' };\n'
       'typedef long long (*FnL)();\n'
@@ -34,6 +35,20 @@ VT = ('struct VO { ' + ' '.join(f'virtual long long v{k}(int, int);' for k in ra
 
 # shape -> [(signature, body), ...]; names are placeholders.
 TABLE = {
+    'movw r0, #:lower16:X ; movw r1, #:lower16:X ; movt r0, #:upper16:X ; movt r1, #:upper16:X ; b X': [
+        ('int f(void)', 'return {F4}({D0}, {D1});')],
+    'sub sp, sp, #N ; add r3, sp, #N ; stmdb r3, {r0, r1} ; mov r0, #N ; add sp, sp, #N ; bx lr': [
+        ('int f(P2 s)', 'return {N2};')],
+    'ldr r0, [r0, #N] ; cmp r0, #N ; ldrne r0, [r0, r1, lsl #N] ; bx lr': [
+        (f'int f({P}, int i)', 'int* a = *(int**) (p + {N0}); return a ? a[i] : 0;')],
+    'ldr r0, =X ; b X': [
+        ('int f(void)', 'return {F1}({D0});')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; mov r2, #N ; str r2, [r3, #N] ; str r2, [r3, #N] ; bx lr': [
+        ('void f(void)', '*(int*) ((char*) {D0} + {N1}) = {N0}; *(int*) ((char*) {D0} + {N2}) = {N0};')],
+    'ldr r3, [r0, #N] ; ldrb r2, [r1] ; strb r2, [r3, #N] ; bx lr': [
+        (f'void f({P}, const unsigned char* q)', '(*(char**) (p + {N0}))[{N1}] = *q;')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; ldr r3, [r3, #N] ; ldr r0, [r3, #N] ; bx lr': [
+        ('int f(void)', 'return ((int*) *(char**) ((char*) {D0} + {N0}))[{V1}];')],
     'cmp r0, #N ; bne #N ; b X ; b X': [
         ('void f(int a)', 'if (a != {N0}) {F1}(); else {F0}();'),
         ('int f(int a)', 'if (a != {N0}) return {F1}(); return {F0}();')],
