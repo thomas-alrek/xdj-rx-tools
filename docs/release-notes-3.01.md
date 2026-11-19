@@ -7,10 +7,10 @@ and **FLAC** playback, plus features from later Pioneer DJ players: a 60 fps scr
 waveforms, hot cues E–H, beat jump, Camelot keys and more. It is the official firmware 2.21, unchanged, plus a small add-on library. Pioneer's own
 software keeps running, and every add-on can be switched off with one button at power-on.
 
-> **Unofficial, and not yet tested on a real XDJ-RX.** Not affiliated with, endorsed by or
-> supported by Pioneer DJ or AlphaTheta. Everything below is verified in an emulator of the
-> unit, which runs the real firmware. Installing firmware always carries some risk; you do it
-> at your own risk.
+> **Unofficial. Tested on a real XDJ-RX:** 3.01 installs and runs on the unit, without any
+> instability so far. Not affiliated with, endorsed by or supported by Pioneer DJ or AlphaTheta.
+> Everything below is also verified in an emulator of the unit, which runs the real firmware.
+> Installing firmware always carries some risk; you do it at your own risk.
 
 ## What's new in 3.01
 | | What changed | Setting (UTILITY) | Default |
@@ -172,9 +172,9 @@ binaries from `tools/fw/build-patcher.sh`. Every step by hand: [firmware-mods.md
 §1 and §13.
 
 ## Known limitations
-- **Not yet tested on a real XDJ-RX.** CPU use of 60 fps, smooth scrolling and FLAC on the real
-  unit is unknown. If something feels sluggish, set UI FRAME RATE to 30 or WAVEFORM SCROLL to
-  ORIGINAL.
+- **Tested on one real XDJ-RX so far**: it installs and runs without instability. CPU use of
+  60 fps, smooth scrolling and FLAC hasn't been measured on the unit; if something feels
+  sluggish, set UI FRAME RATE to 30 or WAVEFORM SCROLL to ORIGINAL.
 - Colour waveforms and hot cue colours need tracks analysed and exported by rekordbox. Other
   tracks show the stock blue waveform.
 - **Firmware updates need a FAT32 stick**, also once 3.01 is installed (exFAT is for music only).
