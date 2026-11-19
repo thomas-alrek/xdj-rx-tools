@@ -38,6 +38,86 @@ VT = ('struct VO { ' + ' '.join(f'virtual long long v{k}(int, int);' for k in ra
 
 # shape -> [(signature, body), ...]; names are placeholders.
 TABLE = {
+    'ldr r0, [r0, #N] ; movw r3, #:lower16:X ; movt r3, #:upper16:X ; cmp r0, #N ; moveq r0, r3 ; bx lr': [
+        (f'char* f({P})', 'char* q = *(char**) (p + {N0}); return q ? q : (char*) {D0};')],
+    'ldr r3, [r0, #N] ; ldr r0, [r3] ; b X': [
+        (f'int f({P})', 'return {F0}(**(int**) (p + {N0}));')],
+    'ldr r0, [r0, #N] ; cmp r0, #N ; ldrne r3, [r0, #N] ; ldrbne r0, [r3, #N] ; bx lr': [
+        (f'int f({P})', 'char* q = *(char**) (p + {N0}); return q ? (*(unsigned char**) (q + {N2}))[{N3}] : 0;')],
+    'ldr r3, [r0, #N] ; ldr r0, [r3, #N] ; rsbs r0, r0, #N ; movlo r0, #N ; bx lr': [
+        (f'bool f({P})', 'return *(int*) (*(char**) (p + {N0}) + {N1}) == 0;')],
+    'ldr r0, [r0, #N] ; cmp r0, #N ; bxeq lr ; add r0, r0, #N ; b X': [
+        (f'int f({P})', 'char* q = *(char**) (p + {N0}); if (!q) return 0; return {F0}(q + {N2});')],
+    'mov r3, #N ; str r1, [r0, #N] ; strb r3, [r0, #N] ; bx lr': [
+        (f'void f({P}, int v)', '*(int*) (p + {N1}) = v; p[{N2}] = {N0};')],
+    'mov r3, #N ; str r3, [r0, #N] ; str r3, [r0, #N] ; bx lr': [
+        (f'void f({P})', '*(int*) (p + {N1}) = {N0}; *(int*) (p + {N2}) = {N0};')],
+    'ldr r0, [r0, #N] ; cmp r0, #N ; bxeq lr ; mov r1, #N ; mov r2, r1 ; b X': [
+        (f'int f({P})', 'void* q = *(void**) (p + {N0}); if (!q) return 0; return {F0}(q, {N2}, {N2});')],
+    'ldr r3, =X ; add r0, r3, r0, lsl #N ; bx lr': [
+        ('int* f(int i)', 'return &{D0}[i];')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; ldr r0, [r3, #N] ; sub r1, r0, #N ; rsbs r0, r1, #N ; adc r0, r0, r1 ; bx lr': [
+        ('bool f(void)', 'return {D0}[{V0}] == {N1};')],
+    'push {r3, lr} ; bl X ; sub r3, r0, #N ; rsbs r0, r3, #N ; adc r0, r0, r3 ; pop {r3, pc}': [
+        (f'bool f({A4})', 'return {F0}(a, b, c, d) == {N0};')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; mov r2, #N ; mla r0, r2, r0, r3 ; bx lr': [
+        ('void* f(int i)', 'struct S {{ char b[{N0}]; }}; return &((S*) {D0})[i];')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; mov r2, #N ; mla r3, r2, r0, r3 ; ldrh r0, [r3, #N] ; bx lr': [
+        ('int f(int i)', 'struct S {{ char pad[{N1}]; unsigned short x; char pad2[{N0} - {N1} - 2]; }}; return ((S*) {D0})[i].x;')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; ldr r0, [r3, #N] ; adds r0, r0, #N ; movne r0, #N ; bx lr': [
+        ('bool f(void)', 'return {D0}[{V0}] != 0;')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; ldrb r0, [r3, #N] ; ubfx r0, r0, #N, #N ; bx lr': [
+        ('int f(void)', 'return (((unsigned char*) {D0})[{N0}] >> {N1}) & ((1 << {N2}) - 1);')],
+    'mov r1, r0 ; movw r0, #:lower16:X ; movt r0, #:upper16:X ; b X': [
+        ('int f(int a)', 'return {F2}({D0}, a);')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; b X': [
+        ('int f(int a, int b, int c)', 'return {F2}(a, b, c, {D0});')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; strh r0, [r3, #N] ; bx lr': [
+        ('void f(short v)', '*(short*) ((char*) {D0} + {N0}) = v;')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; movw r2, #N ; ldrb r0, [r3, r2] ; bx lr': [
+        ('int f(void)', 'return ((unsigned char*) {D0})[{N0}];')],
+    'cmp r0, #N ; movhi r0, #N ; movls r0, #N ; bx lr': [
+        ('int f(unsigned a)', 'return a > {N0} ? {N1} : {N2};')],
+    'sub r0, r0, #N ; cmp r0, #N ; movhi r0, #N ; movls r0, #N ; bx lr': [
+        ('int f(int a)', 'return (unsigned) (a - {N0}) > {N1} ? {N2} : {N3};')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; str r0, [r3, #N] ; mov r0, #N ; bx lr': [
+        ('int f(int v)', '*(int*) ((char*) {D0} + {N0}) = v; return {N1};')],
+    'push {r3, lr} ; add r0, r0, #N ; bl X ; mov r0, #N ; pop {r3, pc}': [
+        (f'int f({P})', '{F0}(p + {N0}); return {N1};')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; ldr r0, [r3, #N] ; b X': [
+        ('int f(int x, int a, int b, int c)', 'return {F2}(*(int*) ((char*) {D0} + {N0}), a, b, c);')],
+    'ldmib r0, {r0, r1, r2} ; b X': [
+        ('int f(int* p)', 'return {F0}(p[1], p[2], p[3]);')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; str r3, [r0] ; bx lr': [
+        (f'void f({P})', '*(void**) p = (void*) {D0};')],
+    'push {r4, lr} ; mov r4, r0 ; add r0, r0, #N ; bl X ; mov r0, r4 ; bl X ; mov r0, r4 ; pop {r4, pc}': [
+        (f'char* f({P})', '{F0}(p + {N0}); {F1}(p); return p;')],
+    'push {r4, lr} ; mov r4, r0 ; movw r0, #:lower16:X ; movt r0, #:upper16:X ; bl X ; mov r0, r4 ; movw r1, #:lower16:X ; movt r1, #:upper16:X ; bl X ; mov r0, r4 ; pop {r4, pc}': [
+        (f'char* f({P})', '{F2}({D0}); {F5}(p, {D3}); return p;')],
+    'push {r4, lr} ; mov r4, r0 ; ldr r0, [r0, #N] ; cmp r0, #N ; beq #N ; bl X ; mov r3, #N ; str r3, [r4, #N] ; mov r0, r4 ; pop {r4, pc}': [
+        (f'char* f({P})', 'void* q = *(void**) (p + {N0}); if (q) {F0}(q); *(int*) (p + {N4}) = {N3}; return p;')],
+    'push {r4, lr} ; mov r4, r0 ; ldr r0, [r0, #N] ; cmp r0, #N ; beq #N ; bl X ; mov r3, #N ; str r3, [r4, #N] ; str r3, [r4, #N] ; str r3, [r4, #N] ; mov r0, r4 ; pop {r4, pc}': [
+        (f'char* f({P})', 'void* q = *(void**) (p + {N0}); if (q) {F0}(q); *(int*) (p + {N4}) = {N3}; *(int*) (p + {N5}) = {N3}; *(int*) (p + {N6}) = {N3}; return p;')],
+    'ldrb r3, [r0, #N] ; cmp r3, #N ; bne #N ; mov r0, r3 ; bx lr ; b X': [
+        (f'int f({P})', 'if (p[{N0}] == 0) return 0; return {F0}(p);')],
+    'push {r3, lr} ; bl X ; pop {r3, lr} ; b X': [
+        (f'int f({A4})', 'return {F1}({F0}(a, b, c, d));')],
+    'push {r3, lr} ; bl X ; bl X ; bl X ; mov r0, #N ; pop {r3, pc}': [
+        ('int f(void)', '{F0}(); {F1}(); {F2}(); return {N0};')],
+    'cmp r1, #N ; addls r1, r0, r1 ; movls r3, #N ; strbls r3, [r1, #N] ; bx lr': [
+        (f'void f({P}, unsigned i)', 'if (i <= {N0}) p[i + {N2}] = {N1};')],
+    'str lr, [sp, #N]! ; sub sp, sp, #N ; mov ip, #N ; str ip, [sp] ; bl X ; add sp, sp, #N ; ldm sp!, {pc}': [
+        (f'int f({A4})', 'return {F0}(a, b, c, d, {N2});')],
+    'str lr, [sp, #N]! ; sub sp, sp, #N ; mvn ip, #N ; str ip, [sp] ; bl X ; add sp, sp, #N ; ldm sp!, {pc}': [
+        (f'int f({A4})', 'return {F0}(a, b, c, d, ~{N2});')],
+    'str lr, [sp, #N]! ; sub sp, sp, #N ; mov r0, sp ; bl X ; ldr r0, [sp, #N] ; add sp, sp, #N ; ldm sp!, {pc}': [
+        ('int f(void)', 'int buf[{N1} / 4]; {F0}(buf); return buf[{V2}];')],
+    'push {r4, lr} ; mov r3, r0 ; ldr r0, [r0, #N] ; ldr r4, [r3, #N] ; bl X ; str r0, [r4] ; pop {r4, pc}': [
+        (f'void f({P})', 'int* out = *(int**) (p + {N1}); *out = {F0}(*(int*) (p + {N0}));')],
+    'mov r1, r0 ; ldr r0, [r0, #N] ; cmp r0, #N ; beq #N ; add r1, r1, #N ; b X ; mvn r0, #N ; bx lr': [
+        (f'int f({P})', 'void* q = *(void**) (p + {N0}); if (!q) return -1; return {F0}(q, p + {N3});')],
+    'mov r3, r0 ; ldr r0, [r0, #N] ; mov r2, r1 ; cmp r0, #N ; bxeq lr ; add r1, r3, #N ; b X': [
+        (f'int f({P}, int a)', 'void* q = *(void**) (p + {N0}); if (!q) return 0; return {F0}(q, p + {N2}, a);')],
     'movw r3, #:lower16:X ; movt r3, #:upper16:X ; ldr r0, [r3, r0, lsl #N] ; bx lr': [
         ('int f(int i)', 'return {D0}[i];')],
     'movw r3, #:lower16:X ; movt r3, #:upper16:X ; mov r2, #N ; mla r3, r2, r0, r3 ; ldr r0, [r3, #N] ; bx lr': [
