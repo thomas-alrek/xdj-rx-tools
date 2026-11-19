@@ -84,17 +84,23 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   streams (local files, another player's media, and the page-buffered stream that reads ahead on a
   thread), the file-reader base, part of the PCM reader, the sample-rate converter, the message queue and small helpers
   (debug print, thread priority, the i.MX6 timer used as a clock); in `network::` the
-  daemon/config base and part of hostapd. Another 2,760 functions are generated from rbp's bytes,
+  daemon/config base and part of hostapd. Another 3,200 functions are generated from rbp's bytes,
   RTTI and vtables by the generators listed under Tools: trivial virtuals, destructors,
   this-adjusting thunks, static initialisers and small leaf functions (getters, setters, constant
   returns, forwarding wrappers, `throw` helpers, C wrappers that call through a global object,
-  bounds-checked array lookups). With JUCE that makes about 4,400 functions built from source,
-  over a quarter of rbp's ~14,100. Pioneer's code needs `-mfpu=neon -mfloat-abi=softfp`; a few
+  bounds-checked array lookups); since they also cover the JUCE range, they pick up thunks and
+  leaves too short for the signature scan. With JUCE that makes about 4,800 functions built from
+  source, a third of rbp's ~14,100 by count. By size it is far less: the generators take the
+  small functions, and most of Pioneer's 2.9 MB is in large ones that need reconstructing by
+  hand (about 4% of that code by bytes so far). Pioneer's code needs `-mfpu=neon -mfloat-abi=softfp`; a few
   directories were also built with `-ftree-vectorize` (Common/reader) or `-O3` (WavWriter).
   Functions that don't match yet stay as assembly. The usual reasons are register allocation,
-  block order, or a source detail not yet recovered. Register choice can depend on a function's
-  position in its file (identical copies of one function get different registers), so some of
-  these should match once their neighbours are reconstructed in address order.
+  block order, or a source detail not yet recovered. Some register choices depend on a
+  function's position in its file: GCC 4.6's peephole2 pass looks for scratch registers starting
+  at an offset that advances after every use in the file, so identical functions get r3, ip,
+  lr, r3, … in turn. Such a function matches once the functions before it in its file are
+  reconstructed; until then `peep2pad.py` inserts unused padding functions that take the same
+  number of scratches.
 - **Class map.** RTTI gives 497 classes in Pioneer namespaces (`mixerengine::`, `dsp::`,
   `common::` file readers, `ui::`, `network::`, `playengine::`, `db::` …) with their vtables. 23
   source paths in strings show the source tree layout (`Source/Engine/PlayEngine/…`,
@@ -155,6 +161,8 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   - `autoglobal.py` writes C wrappers that forward to an object reached through a global pointer
     (`if (g && g->impl) return f(g->impl, …)`). The shape doesn't decide the exact source, so it
     compiles a set of variants for each function and keeps the first that matches.
+  - `peep2pad.py` adds the padding functions described under Status for functions that differ
+    only in a peephole2 scratch register.
   - `autoshape.py` is the general form: a table maps instruction shapes (immediates and symbols
     abstracted) to one or more C templates, and the first template that matches is kept. Shapes
     that load addresses from a literal pool are also tried as cold functions, since GCC optimises
