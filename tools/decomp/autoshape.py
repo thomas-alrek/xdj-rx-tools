@@ -5,7 +5,7 @@ immediate replaced by N and every symbol by X (N0, N1, … and X0, X1, … in or
 A table maps shapes to one or more C templates. Template holes:
   {N0}      the first immediate (as written, decimal or hex)
   {F0}      a callee named after symbol X0: `extern "C" int callee(...)` with X0 as assembler name
-  {L0}      the same callee returning long long
+  {L0}      the same callee returning long long ({B0}: returning bool)
   {D0}      a data object named after symbol X0: `extern "C" int data[]`
   Literal-pool loads appear as `ldr rX, =X` with the pool word's symbol as capture.
   {V0}      the first immediate divided by 4 (a vtable slot or int index)
@@ -25,6 +25,7 @@ A4 = 'int a, int b, int c, int d'
 VT = ('struct VO { ' + ' '.join(f'virtual long long v{k}(int, int);' for k in range(64)) + ' };\n'
       'struct VB { ' + ' '.join(f'virtual bool v{k}(int, int);' for k in range(64)) + ' };\n'
       'struct VN { ' + ' '.join(f'virtual long long v{k}();' for k in range(64)) + ' };\n'
+      'struct V3 { ' + ' '.join(f'virtual long long v{k}(int, int, int);' for k in range(64)) + ' };\n'
       'typedef long long (*FnL)();')
 
 # shape -> [(signature, body), ...]; names are placeholders.
@@ -148,6 +149,51 @@ TABLE = {
         ('void* f(void)', 'return {D0};')],
     'push {r3, lr} ; ldr r3, =X ; ldr r3, [r3, #N] ; cmp r3, #N ; popeq {r3, pc} ; blx r3 ; pop {r3, pc}': [
         ('int f(void)', 'FnL fn = *(FnL*) ((char*) {D0} + {N0}); if (!fn) return 0; return (int) fn();')],
+    # UiTimer-derived destructors: stop a running timer, clear the id
+    'ldr r3, [r0, #N] ; push {r4, lr} ; cmp r3, #N ; ldr r3, =X ; mov r4, r0 ; str r3, [r0] ; ble #N ; bl X ; mov r3, #N ; mov r0, r4 ; str r3, [r4, #N] ; pop {r4, pc}': [
+        ('void* f(void** p)', 'p[0] = (void*) {D0}; if (*(int*) ((char*) p + {N0}) > {N1}) {F1}(p); *(int*) ((char*) p + {N4}) = {N3}; return p;')],
+    'ldr r3, [r0, #N] ; push {r4, lr} ; cmp r3, #N ; ldr r3, =X ; mov r4, r0 ; str r3, [r0] ; ble #N ; bl X ; mov r0, r4 ; mov r3, #N ; str r3, [r4, #N] ; bl X ; mov r0, r4 ; pop {r4, pc}': [
+        ('void* f(void** p)', 'p[0] = (void*) {D0}; if (*(int*) ((char*) p + {N0}) > {N1}) {F1}(p); *(int*) ((char*) p + {N4}) = {N3}; {F2}(p); return p;')],
+    'push {r4, lr} ; ldr r4, =X ; ldr r3, [r4, #N] ; cmp r3, #N ; beq #N ; ldr r0, =X ; bl X ; mov r3, #N ; str r3, [r4, #N] ; ldr r0, =X ; pop {r4, pc}': [
+        ('void* f(void)', 'if (*(int*) ((char*) {D0} + {N0})) {{ {F2}({D1}); *(int*) ((char*) {D0} + {N4}) = {N3}; }} return {D3};')],
+    'str lr, [sp, #N]! ; sub sp, sp, #N ; mov lr, r1 ; mov ip, r2 ; str r3, [sp] ; movw r1, #N ; mov r2, lr ; mov r3, ip ; bl X ; add sp, sp, #N ; ldm sp!, {pc}': [
+        (f'int f({A4})', 'return {F0}(a, {N2}, b, c, d);')],
+    'mov r2, r1 ; ldr r1, =X ; push {r3, lr} ; mov r3, r0 ; ldr r0, [r1] ; cmp r0, #N ; popeq {r3, pc} ; ldr ip, [r0] ; adds r1, r3, #N ; movne r1, #N ; ldr r3, [ip, #N] ; blx r3 ; pop {r3, pc}': [
+        ('int f(int a, int b)', 'VO* g = *(VO**) {D0}; if (!g) return 0; return (int) g->v{V3}(a != -{N1}, b);')],
+    'push {r3, lr} ; cmp r0, #N ; ldr r3, =X ; moveq r1, #N ; movne r1, #N ; ldr r0, [r3] ; cmp r0, #N ; popeq {r3, pc} ; ldr r0, [r0, #N] ; cmp r0, #N ; popeq {r3, pc} ; bl X ; pop {r3, pc}': [
+        ('int f(int a)', 'char* g = *(char**) {D0}; if (!g) return 0; char* t = *(char**) (g + {N4}); if (!t) return 0; return (int) {L1}(t, a == {N0} ? {N1} : {N2});'),
+        ('int f(int a)', 'char* g = *(char**) {D0}; if (!g) return 0; char* t = *(char**) (g + {N4}); if (!t) return 0; return {B1}(t, a == {N0} ? {N1} : {N2});')],
+    'push {r3, lr} ; movw r3, #:lower16:X ; movt r3, #:upper16:X ; mov r2, #N ; mov r0, #N ; movw r1, #:lower16:X ; str r2, [r3] ; movt r1, #:upper16:X ; bl X ; mov r0, #N ; pop {r3, pc}': [
+        ('int f(void)', '{D0}[0] = {N0}; {F4}({N1}, (char*) {D2}); return {N2};')],
+    'add r0, r0, r0, lsl #N ; movw r3, #:lower16:X ; movt r3, #:upper16:X ; movw r2, #N ; add r3, r3, r0, lsl #N ; ldr r0, [r3, r2] ; bx lr': [
+        ('int f(int i)', 'return *(int*) ((char*) {D0} + i * (((1 << {N0}) + 1) << {N2}) + {N1});')],
+    'push {r4, r5, r6, lr} ; mov r4, r0 ; ldr r0, [r0, #N] ; mov r6, r1 ; bl X ; mov r1, r6 ; mov r5, r0 ; ldr r0, [r4, #N] ; bl X ; and r0, r0, r5 ; uxtb r0, r0 ; pop {r4, r5, r6, pc}': [
+        (f'bool f({P}, int b)', 'bool x = {B0}(*(char**) (p + {N0}), b); return x & {B1}(*(char**) (p + {N1}), b);')],
+    'mov r3, r2 ; ldr r2, =X ; push {r4, lr} ; mov r4, r0 ; ldr r0, [r2] ; mov ip, r1 ; cmp r0, #N ; popeq {r4, pc} ; ldr lr, [r0] ; adds r1, r4, #N ; mov r2, ip ; movne r1, #N ; ldr ip, [lr, #N] ; blx ip ; pop {r4, pc}': [
+        ('int f(int a, int b, int c)', 'V3* g = *(V3**) {D0}; if (!g) return 0; return (int) g->v{V3}(a != -{N1}, b, c);')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; ldr r0, [r3, #N] ; sub ip, r0, #N ; rsbs r0, ip, #N ; adc r0, r0, ip ; bx lr': [
+        ('bool f(void)', 'return *(int*) ((char*) {D0} + {N0}) == {N1};')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; ldr r0, [r3, #N] ; sub r3, r0, #N ; rsbs r0, r3, #N ; adc r0, r0, r3 ; bx lr': [
+        ('bool f(void)', 'return *(int*) ((char*) {D0} + {N0}) == {N1};')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; ldr r0, [r3, #N] ; sub r2, r0, #N ; rsbs r0, r2, #N ; adc r0, r0, r2 ; bx lr': [
+        ('bool f(void)', 'return *(int*) ((char*) {D0} + {N0}) == {N1};')],
+    'push {r3, lr} ; ldr r0, [r0, #N] ; bl X ; cmp r0, #N ; mvneq r0, #N ; movne r0, #N ; pop {r3, pc}': [
+        (f'int f({P})', 'return {F0}(*(char**) (p + {N0})) == {N1} ? ~{N2} : {N3};')],
+    'cmp r0, #N ; ldrls r3, =X ; ldrhi r0, =X ; ldrls r0, [r3, r0, lsl #N] ; bx lr': [
+        ('const char* f(unsigned i)', 'return i <= {N0} ? ((const char**) {D0})[i] : (const char*) {D1};')],
+    'push {r3, lr} ; ldr r3, [r0, #N] ; ldr r0, [r3, #N] ; cmp r0, #N ; popeq {r3, pc} ; ldr r3, [r0] ; ldr r3, [r3, #N] ; blx r3 ; pop {r3, pc}': [
+        (f'int f({P}, int b, int c)', 'VO* q = *(VO**) (*(char**) (p + {N0}) + {N1}); if (!q) return 0; return (int) q->v{V3}(b, c);'),
+        (f'bool f({P}, int b, int c)', 'VB* q = *(VB**) (*(char**) (p + {N0}) + {N1}); if (!q) return 0; return q->v{V3}(b, c);')],
+    'push {r4, lr} ; mov r4, r0 ; bl X ; ldr r3, =X ; mov r0, r4 ; str r3, [r4] ; pop {r4, pc}': [
+        ('void* f(void** p)', '{F0}(p); p[0] = (void*) {D1}; return p;')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; movw r1, #N ; ldr r2, [r3, #N] ; mla r3, r1, r2, r3 ; ldr r0, [r3, #N] ; bx lr': [
+        ('int f(void)', 'return *(int*) ((char*) {D0} + *(int*) ((char*) {D0} + {N1}) * {N0} + {N2});')],
+    'push {r3, r4, r5, lr} ; movw r4, #N ; mov r5, r0 ; ldr r0, [r0, r4] ; cmp r0, #N ; popeq {r3, r4, r5, pc} ; bl X ; mov r3, #N ; str r3, [r5, r4] ; pop {r3, r4, r5, pc}': [
+        (f'void f({P})', 'char* q = *(char**) (p + {N0}); if (!q) return; {F0}(q); *(char**) (p + {N0}) = 0;')],
+    'push {r4, lr} ; mov r4, r0 ; ldr r0, [r0, #N] ; cmp r0, #N ; beq #N ; bl X ; mov r3, #N ; str r3, [r4, #N] ; ldr r0, [r4, #N] ; cmp r0, #N ; popeq {r4, pc} ; bl X ; mov r3, #N ; str r3, [r4, #N] ; pop {r4, pc}': [
+        (f'void f({P})', 'if (*(char**) (p + {N0})) {{ {F0}(*(char**) (p + {N0})); *(char**) (p + {N4}) = 0; }} if (*(char**) (p + {N5})) {{ {F1}(*(char**) (p + {N5})); *(char**) (p + {N8}) = 0; }}')],
+    'push {r4, lr} ; mov r4, r0 ; ldr r0, [r0, #N] ; ldr r3, [r0] ; ldr r3, [r3, #N] ; blx r3 ; ldr r0, [r4, #N] ; ldr r3, [r0] ; ldr r3, [r3, #N] ; blx r3 ; ldr r0, [r4, #N] ; ldr r3, [r0] ; ldr r3, [r3, #N] ; blx r3 ; pop {r4, pc}': [
+        (f'int f({P})', '(*(VN**) (p + {N0}))->v{V1}(); (*(VN**) (p + {N2}))->v{V3}(); return (int) (*(VN**) (p + {N4}))->v{V5}();')],
 }
 
 SYM = re.compile(r'\b(?:[fbdcp]_\w+|leaf_\w+|_Z\w+|[A-Za-z_]\w*_[0-9a-f]{4,})\b')
@@ -200,11 +246,12 @@ def render(a, sig, body, nums, syms, decls):
     for i, s in enumerate(syms):
         fill[f'F{i}'] = f'fn_{a:x}_{i}'
         fill[f'L{i}'] = f'fnl_{a:x}_{i}'
+        fill[f'B{i}'] = f'fnb_{a:x}_{i}'
         fill[f'D{i}'] = f'data_{a:x}_{i}'
-    used = set(re.findall(r'\{([FLD]\d+)\}', body))
+    used = set(re.findall(r'\{([FLDB]\d+)\}', body))
     for u in sorted(used):
         s = syms[int(u[1:])]
-        kind = {'F': 'int {}(...)', 'L': 'long long {}(...)', 'D': 'int {}[]'}[u[0]]
+        kind = {'F': 'int {}(...)', 'L': 'long long {}(...)', 'D': 'int {}[]', 'B': 'bool {}(...)'}[u[0]]
         decls.append(f'extern {kind.format(fill[u])} __asm__ ("{s}");')
     name = f'shape_{a:x}'
     return f'{sig.replace(" f(", f" {name}(")}\n{{\n    {body.format(**fill)}\n}}\n'
