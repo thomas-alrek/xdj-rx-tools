@@ -93,7 +93,9 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   source, a third of rbp's ~14,100 by count. By size it is far less: the generators take the
   small functions, and most of Pioneer's 2.9 MB is in large ones that need reconstructing by
   hand (about 4% of that code by bytes so far). Pioneer's code needs `-mfpu=neon -mfloat-abi=softfp`; a few
-  directories were also built with `-ftree-vectorize` (Common/reader) or `-O3` (WavWriter).
+  directories were also built with `-ftree-vectorize` (Common/reader) or `-O3` (WavWriter), and
+  the GUI glue is C built with `-fno-strict-aliasing` (with strict aliasing GCC reorders its
+  stores).
   Functions that don't match yet stay as assembly. The usual reasons are register allocation,
   block order, or a source detail not yet recovered. Some register choices depend on a
   function's position in its file: GCC 4.6's peephole2 pass looks for scratch registers starting
