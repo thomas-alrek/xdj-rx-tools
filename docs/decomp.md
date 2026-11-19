@@ -69,26 +69,30 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
 - Freescale's Linaro 2011.07 GCC 4.6.2 is built from Linaro's source release (only `all-gcc`,
   with the 2012.01 toolchain's headers and the cross binutils present, so it knows COMDAT groups
   and mergeable string sections).
-- **Pioneer's own code from source.** 469 of Pioneer's functions, from 52 reconstructed source
+- **Pioneer's own code from source.** 514 of Pioneer's functions, from 56 reconstructed source
   files, recompile byte-identically and are built into rbp. They cover the DSP primitives
   (`dsp::LagrangeSRC`, the IIR filters, time-stretch base classes) and much of `mixerengine::`:
   output devices and channels, the input channels (mic, deck, USB), the master channel, the WAV
   recorder, the compressor buffer and the beat/colour effect bases. In the UI layer they cover
   `uif::UiObject`/`UiTimer`, the `uif::IDataSet` interface and several list/info/test-mode data
   sets, the panel TX path (`ui::PanelComController`), `ui::KeyInput` (the key table in
-  [key-codes.md](key-codes.md)) and `ui::JogSpeedGuesser`. In `common::` they cover the file input
+  [key-codes.md](key-codes.md)), `ui::JogSpeedGuesser`, the engine and database callbacks of
+  `ui::Reception` (which route each event to the deck it belongs to) and small parts of
+  `ui::PlayerInnards` and `ui::Mixer`. In `common::` they cover the file input
   streams (local files, another player's media, and the page-buffered stream that reads ahead on a
-  thread), the file-reader base, the sample-rate converter, the message queue and small helpers
+  thread), the file-reader base, part of the PCM reader, the sample-rate converter, the message queue and small helpers
   (debug print, thread priority, the i.MX6 timer used as a clock); in `network::` the
   daemon/config base and part of hostapd. Another 2,760 functions are generated from rbp's bytes,
   RTTI and vtables by the generators listed under Tools: trivial virtuals, destructors,
   this-adjusting thunks, static initialisers and small leaf functions (getters, setters, constant
   returns, forwarding wrappers, `throw` helpers, C wrappers that call through a global object,
-  bounds-checked array lookups). With JUCE that makes about 4,200 functions built from source,
+  bounds-checked array lookups). With JUCE that makes about 4,300 functions built from source,
   over a quarter of rbp's ~14,100. Pioneer's code needs `-mfpu=neon -mfloat-abi=softfp`; a few
   directories were also built with `-ftree-vectorize` (Common/reader) or `-O3` (WavWriter).
   Functions that don't match yet stay as assembly. The usual reasons are register allocation,
-  block order, or a source detail not yet recovered.
+  block order, or a source detail not yet recovered. Register choice can depend on a function's
+  position in its file (identical copies of one function get different registers), so some of
+  these should match once their neighbours are reconstructed in address order.
 - **Class map.** RTTI gives 497 classes in Pioneer namespaces (`mixerengine::`, `dsp::`,
   `common::` file readers, `ui::`, `network::`, `playengine::`, `db::` …) with their vtables. 23
   source paths in strings show the source tree layout (`Source/Engine/PlayEngine/…`,
