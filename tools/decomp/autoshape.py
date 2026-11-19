@@ -55,7 +55,7 @@ TABLE = {
     'ldr r0, [r0, #N] ; cmp r0, #N ; bxeq lr ; mov r1, #N ; mov r2, r1 ; b X': [
         (f'int f({P})', 'void* q = *(void**) (p + {N0}); if (!q) return 0; return {F0}(q, {N2}, {N2});')],
     'ldr r3, =X ; add r0, r3, r0, lsl #N ; bx lr': [
-        ('int* f(int i)', 'return &{D0}[i];')],
+        ('void* f(int i)', 'struct S {{ char b[1 << {N0}]; }}; return &((S*) {D0})[i];')],
     'movw r3, #:lower16:X ; movt r3, #:upper16:X ; ldr r0, [r3, #N] ; sub r1, r0, #N ; rsbs r0, r1, #N ; adc r0, r0, r1 ; bx lr': [
         ('bool f(void)', 'return {D0}[{V0}] == {N1};')],
     'push {r3, lr} ; bl X ; sub r3, r0, #N ; rsbs r0, r3, #N ; adc r0, r0, r3 ; pop {r3, pc}': [
@@ -85,7 +85,8 @@ TABLE = {
     'push {r3, lr} ; add r0, r0, #N ; bl X ; mov r0, #N ; pop {r3, pc}': [
         (f'int f({P})', '{F0}(p + {N0}); return {N1};')],
     'movw r3, #:lower16:X ; movt r3, #:upper16:X ; ldr r0, [r3, #N] ; b X': [
-        ('int f(int x, int a, int b, int c)', 'return {F2}(*(int*) ((char*) {D0} + {N0}), a, b, c);')],
+        ('int f(int x, int a, int b, int c)', 'return {F2}(*(int*) ((char*) {D0} + {N0}), a, b, c);'),
+        ('void f(void)', '{F2}(*(int*) ((char*) {D0} + {N0}));')],
     'ldmib r0, {r0, r1, r2} ; b X': [
         ('int f(int* p)', 'return {F0}(p[1], p[2], p[3]);')],
     'movw r3, #:lower16:X ; movt r3, #:upper16:X ; str r3, [r0] ; bx lr': [
@@ -111,7 +112,7 @@ TABLE = {
     'str lr, [sp, #N]! ; sub sp, sp, #N ; mvn ip, #N ; str ip, [sp] ; bl X ; add sp, sp, #N ; ldm sp!, {pc}': [
         (f'int f({A4})', 'return {F0}(a, b, c, d, ~{N2});')],
     'str lr, [sp, #N]! ; sub sp, sp, #N ; mov r0, sp ; bl X ; ldr r0, [sp, #N] ; add sp, sp, #N ; ldm sp!, {pc}': [
-        ('int f(void)', 'int buf[{N1} / 4]; {F0}(buf); return buf[{V2}];')],
+        ('int f(void)', 'int buf[({N1} - 4) / 4]; {F0}(buf); return buf[{V2}];')],
     'push {r4, lr} ; mov r3, r0 ; ldr r0, [r0, #N] ; ldr r4, [r3, #N] ; bl X ; str r0, [r4] ; pop {r4, pc}': [
         (f'void f({P})', 'int* out = *(int**) (p + {N1}); *out = {F0}(*(int*) (p + {N0}));')],
     'mov r1, r0 ; ldr r0, [r0, #N] ; cmp r0, #N ; beq #N ; add r1, r1, #N ; b X ; mvn r0, #N ; bx lr': [
