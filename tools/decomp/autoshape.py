@@ -1,0 +1,280 @@
+"""Generate small functions from a table of instruction shapes and C templates.
+
+Each ungrafted function up to 64 bytes is reduced to a shape: its instructions with every
+immediate replaced by N and every symbol by X (N0, N1, … and X0, X1, … in order of appearance).
+A table maps shapes to one or more C templates. Template holes:
+  {N0}      the first immediate (as written, decimal or hex)
+  {F0}      a callee named after symbol X0: `extern "C" int callee(...)` with X0 as assembler name
+  {L0}      the same callee returning long long
+  {D0}      a data object named after symbol X0: `extern "C" int data[]`
+  Literal-pool loads appear as `ldr rX, =X` with the pool word's symbol as capture.
+  {V0}      the first immediate divided by 4 (a vtable slot or int index)
+Shapes with literal-pool loads are also tried as cold functions (GCC optimises those for size
+and loads addresses from the pool instead of movw/movt). Every template of a shape is compiled; the first one matching byte for byte is kept, so a table
+entry can list guesses. Writes src/auto/auto_shape.cpp and obj/auto_shape.pairs. Run from decomp/.
+"""
+import os
+import re
+import subprocess
+import sys
+
+FLAGS = '-O2 -mcpu=cortex-a8 -marm -mfpu=neon -mfloat-abi=softfp'.split()
+OUT = 'src/auto/auto_shape.cpp'
+P = 'char* p'
+A4 = 'int a, int b, int c, int d'
+VT = ('struct VO { ' + ' '.join(f'virtual long long v{k}(int, int);' for k in range(64)) + ' };\n'
+      'struct VB { ' + ' '.join(f'virtual bool v{k}(int, int);' for k in range(64)) + ' };\n'
+      'struct VN { ' + ' '.join(f'virtual long long v{k}();' for k in range(64)) + ' };\n'
+      'typedef long long (*FnL)();')
+
+# shape -> [(signature, body), ...]; names are placeholders.
+TABLE = {
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; ldr r0, [r3] ; b X': [
+        ('int f(void)', 'return {F2}(*(int*) {D0});')],
+    'cmp r1, #N ; mov r0, #N ; moveq r1, #N ; movne r1, #N ; b X': [
+        ('int f(int a, int b)', 'return {F0}({N1}, b == {N0} ? {N2} : {N3});'),
+        ('int f(int a, int b)', 'return {F0}({N1}, b != {N0} ? {N3} : {N2});')],
+    'ldr r0, [r0, #N] ; cmp r0, #N ; ldrbne r0, [r0, #N] ; bx lr': [
+        (f'int f({P})', 'char* q = *(char**) (p + {N0}); return q ? *(unsigned char*) (q + {N2}) : 0;')],
+    'push {r3, lr} ; bl X ; mov r0, #N ; pop {r3, pc}': [
+        (f'int f({A4})', '{F0}(a, b, c, d); return {N0};')],
+    'cmp r1, #N ; mvngt r0, #N ; movle r0, #N ; bx lr': [
+        ('int f(int a, int b)', 'return b > {N0} ? ~{N1} : {N2};')],
+    'push {r3, lr} ; mov r0, #N ; bl X ; mov r0, #N ; pop {r3, pc}': [
+        ('int f(void)', '{F0}({N0}); return {N1};')],
+    'push {r3, lr} ; ldr r0, [r0, #N] ; bl X ; mov r0, #N ; pop {r3, pc}': [
+        (f'int f({P}, int b, int c, int d)', '{F0}(*(char**) (p + {N0}), b, c, d); return {N1};')],
+    'push {r3, lr} ; ldr r3, [r0] ; ldr r3, [r3, #N] ; blx r3 ; pop {r3, pc}': [
+        ('int f(VO* p, int b, int c)', 'return (int) p->v{V0}(b, c);'),
+        ('bool f(VB* p, int b, int c)', 'return p->v{V0}(b, c);')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; strb r1, [r3, #N] ; strb r2, [r3, #N] ; bx lr': [
+        ('void f(int a, int b, int c)', '((char*) {D0})[{N0}] = b; ((char*) {D0})[{N1}] = c;')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; movw r2, #N ; str r0, [r3, r2] ; bx lr': [
+        ('void f(int a)', '*(int*) ((char*) {D0} + {N0}) = a;')],
+    'ldr r3, [r0, #N] ; cmp r3, #N ; ldrne r0, [r3, #N] ; moveq r0, #N ; bx lr': [
+        (f'int f({P})', 'char* q = *(char**) (p + {N0}); return q ? *(int*) (q + {N2}) : {N3};'),
+        (f'int f({P})', 'char* q = *(char**) (p + {N0}); if (q) return *(int*) (q + {N2}); return {N3};'),
+        (f'float f({P})', 'char* q = *(char**) (p + {N0}); return q ? *(float*) (q + {N2}) : {N3};')],
+    'ldr r2, [r0, #N] ; ldr r3, [r0, #N] ; strb r1, [r2, #N] ; strb r1, [r3, #N] ; bx lr': [
+        (f'void f({P}, bool v)', '(*(char**) (p + {N0}))[{N2}] = v; (*(char**) (p + {N1}))[{N3}] = v;')],
+    'ldr r0, [r0, #N] ; cmp r0, #N ; bxeq lr ; mov r1, #N ; mov r2, #N ; b X': [
+        (f'int f({P})', 'char* q = *(char**) (p + {N0}); if (!q) return 0; return {F0}(q, {N2}, {N3});')],
+    'push {r4, lr} ; mov r4, r0 ; bl X ; mov r0, r4 ; pop {r4, lr} ; b X': [
+        ('int f(int a)', '{F0}(a); return {F1}(a);')],
+    'ldr r3, [r0, #N] ; cmp r3, #N ; bxle lr ; b X': [
+        (f'void f({P})', 'if (*(int*) (p + {N0}) > {N1}) {F0}(p);')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; ldrh r0, [r3, #N] ; bx lr': [
+        ('int f(void)', 'return *(unsigned short*) ((char*) {D0} + {N0});')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; movw r2, #N ; ldr r0, [r3, r2] ; bx lr': [
+        ('int f(void)', 'return *(int*) ((char*) {D0} + {N0});')],
+    'push {r3, lr} ; mov r0, r1 ; bl X ; cmp r0, #N ; ldrbne r0, [r0, #N] ; pop {r3, pc}': [
+        ('int f(int a, int b)', 'unsigned char* q = (unsigned char*) {F0}(b); return q ? q[{N1}] : 0;')],
+    'cmp r1, #N ; ldrbeq r0, [r0, #N] ; ldrbne r0, [r0, #N] ; bx lr': [
+        ('int f(unsigned char* p, int b)', 'return b == {N0} ? p[{N1}] : p[{N2}];')],
+    'mov r1, r0 ; ldr r0, [r0, #N] ; cmp r0, #N ; bxeq lr ; add r1, r1, #N ; b X': [
+        (f'int f({P})', 'char* q = *(char**) (p + {N0}); if (!q) return 0; return {F0}(q, p + {N2});')],
+    'ldr r3, [r0, #N] ; str r1, [r3, #N] ; ldr r3, [r0, #N] ; str r1, [r3, #N] ; bx lr': [
+        (f'void f({P}, void* v)', '*(void**) (*(char**) (p + {N0}) + {N1}) = v; *(void**) (*(char**) (p + {N2}) + {N3}) = v;')],
+    'movw r3, #:lower16:X ; movt r3, #:upper16:X ; add r3, r3, r0, lsl #N ; ldr r0, [r3, #N] ; bx lr': [
+        ('int f(int i)', 'return {D0}[i + {V1}];')],
+    'push {r4, lr} ; mov r4, r0 ; bl X ; mov r0, r4 ; pop {r4, pc}': [
+        ('int f(int a)', '{F0}(a); return a;'),
+        (f'int f({A4})', '{F0}(a, b, c, d); return a;')],
+    'add r3, r0, #N ; ldr r0, [r0, #N] ; ldm r3, {r1, r2, r3} ; b X': [
+        (f'int f({P})', 'int* q = (int*) (p + {N0}); return {F0}(*(int*) (p + {N1}), q[0], q[1], q[2]);')],
+    'push {r3, lr} ; ldr r3, [r0, #N]! ; ldr r3, [r3, #N] ; blx r3 ; pop {r3, pc}': [
+        (f'int f({P}, int b, int c)', 'return (int) ((VO*) (p + {N0}))->v{V1}(b, c);'),
+        (f'bool f({P}, int b, int c)', 'return ((VB*) (p + {N0}))->v{V1}(b, c);')],
+    # bounds-checked lookups in a pointer array (index checked against a global count)
+    'ldr r3, =X ; ldr r3, [r3] ; cmp r1, r3 ; bhs #N ; ldr r3, [r0, #N] ; ldr r0, [r3, r1, lsl #N] ; cmp r0, #N ; bxeq lr ; b X ; mov r0, #N ; bx lr': [
+        (f'int f({P}, int i)', 'if ((unsigned) i >= *(unsigned*) {D0}) return {N4}; char* q = (*(char***) (p + {N1}))[i]; if (!q) return 0; return {F1}(q);')],
+    'ldr r3, =X ; ldr r3, [r3] ; cmp r1, r3 ; bhs #N ; ldr r3, [r0, #N] ; ldr r0, [r3, r1, lsl #N] ; cmp r0, #N ; ldrbne r0, [r0, #N] ; bx lr ; mov r0, #N ; bx lr': [
+        (f'int f({P}, int i)', 'if ((unsigned) i >= *(unsigned*) {D0}) return {N5}; char* q = (*(char***) (p + {N1}))[i]; return q ? *(unsigned char*) (q + {N4}) : 0;')],
+    'ldr r3, =X ; ldr r3, [r3] ; cmp r1, r3 ; bhs #N ; ldr r3, [r0, #N] ; ldr r0, [r3, r1, lsl #N] ; cmp r0, #N ; bxeq lr ; mov r1, r2 ; b X ; mov r0, #N ; bx lr': [
+        (f'int f({P}, int i, int c)', 'if ((unsigned) i >= *(unsigned*) {D0}) return {N4}; char* q = (*(char***) (p + {N1}))[i]; if (!q) return 0; return {F1}(q, c);')],
+    'push {r3, lr} ; ldr r3, =X ; ldr r3, [r3] ; cmp r1, r3 ; bhs #N ; ldr r3, [r0, #N] ; ldr r0, [r3, r1, lsl #N] ; cmp r0, #N ; popeq {r3, pc} ; mov r1, r2 ; bl X ; mov r0, #N ; pop {r3, pc} ; mov r0, #N ; pop {r3, pc}': [
+        (f'int f({P}, int i, int c)', 'if ((unsigned) i >= *(unsigned*) {D0}) return {N5}; char* q = (*(char***) (p + {N1}))[i]; if (!q) return 0; {F1}(q, c); return {N4};')],
+    'ldr r3, =X ; mov r1, r0 ; ldr r3, [r3] ; cmp r3, #N ; bxeq lr ; ldr r0, [r3, #N] ; cmp r0, #N ; bxeq lr ; b X': [
+        ('void f(int a)', 'char* g = *(char**) {D0}; if (!g) return; char* t = *(char**) (g + {N1}); if (!t) return; {F1}(t, a);')],
+    'movw r0, #:lower16:X ; movt r0, #:upper16:X ; push {r3, lr} ; ldr r3, [r0] ; ldr r3, [r3, #N] ; blx r3 ; pop {r3, pc}': [
+        ('int f(void)', 'return (int) ((VN*) {D0})->v{V0}();'),
+        ('int f(int a, int b, int c)', 'return (int) ((VO*) {D0})->v{V0}(b, c);')],
+    # vtable stores (destructor fragments)
+    'ldr r3, =X ; push {r4, lr} ; mov r4, r0 ; str r3, [r0] ; bl X ; mov r0, r4 ; pop {r4, pc}': [
+        ('void* f(void** p)', 'p[0] = (void*) {D0}; {F1}(p); return p;')],
+    'push {r4, lr} ; mov r4, r0 ; bl X ; mov r0, r4 ; movw r3, #:lower16:X ; movt r3, #:upper16:X ; str r3, [r4] ; pop {r4, lr} ; b X': [
+        ('int f(void** p)', '{F0}(p); p[0] = (void*) {D1}; return {F3}(p);')],
+    'ldr r2, =X ; str r2, [r0, #N] ; ldr r2, =X ; str r2, [r0] ; bx lr': [
+        ('void f(void** p)', 'p[{V0}] = (void*) {D0}; p[0] = (void*) {D1};'),
+        ('void f(void** p)', 'p[0] = (void*) {D1}; p[{V0}] = (void*) {D0};')],
+    'ldr r2, =X ; str r2, [r0] ; ldr r2, =X ; str r2, [r0, #N] ; bx lr': [
+        ('void f(void** p)', 'p[0] = (void*) {D0}; p[{V0}] = (void*) {D1};'),
+        ('void f(void** p)', 'p[{V0}] = (void*) {D1}; p[0] = (void*) {D0};')],
+    'ldr r3, =X ; str r3, [r0] ; bx lr': [
+        ('void f(void** p)', 'p[0] = (void*) {D0};')],
+    'ldr r3, =X ; push {r4, lr} ; mov r4, r0 ; str r3, [r0, #N] ; ldr r3, =X ; str r3, [r0] ; bl X ; mov r0, r4 ; pop {r4, pc}': [
+        ('void* f(void** p)', 'p[{V0}] = (void*) {D0}; p[0] = (void*) {D1}; {F2}(p); return p;'),
+        ('void* f(void** p)', 'p[0] = (void*) {D1}; p[{V0}] = (void*) {D0}; {F2}(p); return p;')],
+    'ldr r3, =X ; push {r4, lr} ; mov r4, r0 ; str r3, [r0] ; ldr r3, =X ; str r3, [r0, #N] ; bl X ; mov r0, r4 ; pop {r4, pc}': [
+        ('void* f(void** p)', 'p[0] = (void*) {D0}; p[{V0}] = (void*) {D1}; {F2}(p); return p;'),
+        ('void* f(void** p)', 'p[{V0}] = (void*) {D1}; p[0] = (void*) {D0}; {F2}(p); return p;')],
+    # small helpers
+    'ldr r0, [r0, #N] ; push {r3, lr} ; cmp r0, #N ; beq #N ; bl X ; mov r0, #N ; pop {r3, pc}': [
+        (f'int f({P})', 'char* q = *(char**) (p + {N0}); if (q) {F0}(q); return {N3};')],
+    'mov r3, #N ; strb r3, [r0, #N] ; bx lr': [
+        (f'void f({P})', 'p[{N1}] = {N0};')],
+    'str r1, [r0, #N] ; mov r0, #N ; bx lr': [
+        (f'int f({P}, int v)', '*(int*) (p + {N0}) = v; return {N1};')],
+    'push {r3, lr} ; bl X ; movw r3, #:lower16:X ; movt r3, #:upper16:X ; ldr r3, [r3] ; subs r0, r0, r3 ; movne r0, #N ; pop {r3, pc}': [
+        (f'bool f({A4})', 'return {F0}(a, b, c, d) != {D1}[0];')],
+    'sub r0, r0, #N ; cmp r0, #N ; ldrls r3, =X ; movhi r0, #N ; addls r0, r3, r0, lsl #N ; ldrls r0, [r0, #N] ; bx lr': [
+        ('int f(unsigned i)', 'i -= {N0}; if (i > {N1}) return {N2}; return *(int*) ((char*) {D0} + (i << {N3}) + {N4});')],
+    'ldmib r0, {r0, r1} ; b X': [
+        ('int f(int* p)', 'return {F0}(p[1], p[2]);')],
+    'movw r0, #:lower16:X ; movt r0, #:upper16:X ; b X': [
+        ('int f(void)', 'return {F2}({D0});')],
+    'push {r3, lr} ; movw r0, #:lower16:X ; movt r0, #:upper16:X ; bl X ; mov r0, #N ; pop {r3, pc}': [
+        ('int f(void)', '{F2}({D0}); return {N0};')],
+    'ldrb r0, [r0, #N] ; ubfx r0, r0, #N, #N ; bx lr': [
+        ('int f(unsigned char* p)', 'return (p[{N0}] >> {N1}) & ((1 << {N2}) - 1);')],
+    'push {r4, lr} ; add r1, r1, #N ; mov r4, r0 ; bl X ; mov r0, r4 ; pop {r4, pc}': [
+        ('void* f(void* p, char* q)', '{F0}(p, q + {N0}); return p;')],
+    'push {r4, lr} ; movw r1, #:lower16:X ; mov r4, r0 ; movt r1, #:upper16:X ; bl X ; mov r0, r4 ; pop {r4, pc}': [
+        ('void* f(void* p)', '{F2}(p, {D0}); return p;')],
+    'ldr r0, [r0, #N] ; push {r3, lr} ; cmp r0, #N ; popeq {r3, pc} ; ldr r3, [r0] ; ldr r3, [r3, #N] ; blx r3 ; pop {r3, pc}': [
+        (f'int f({P}, int b, int c)', 'VO* q = *(VO**) (p + {N0}); if (!q) return 0; return (int) q->v{V2}(b, c);'),
+        (f'bool f({P}, int b, int c)', 'VB* q = *(VB**) (p + {N0}); if (!q) return 0; return q->v{V2}(b, c);')],
+    'ldr r0, =X ; bx lr': [
+        ('void* f(void)', 'return {D0};')],
+    'push {r3, lr} ; ldr r3, =X ; ldr r3, [r3, #N] ; cmp r3, #N ; popeq {r3, pc} ; blx r3 ; pop {r3, pc}': [
+        ('int f(void)', 'FnL fn = *(FnL*) ((char*) {D0} + {N0}); if (!fn) return 0; return (int) fn();')],
+}
+
+SYM = re.compile(r'\b(?:[fbdcp]_\w+|leaf_\w+|_Z\w+|[A-Za-z_]\w*_[0-9a-f]{4,})\b')
+NUM = re.compile(r'#(-?(?:0x[0-9a-f]+|\d+))')
+
+starts = sorted(int(l.split()[0], 16) for l in open('split/functions.txt') if l.startswith('0x'))
+size = {a: b - a for a, b in zip(starts, starts[1:])}
+grafted = {int(l.split()[0], 16) for l in open('grafts.txt') if l.strip() and l[0] != '#'
+           and l.split()[2] != OUT}
+
+# instructions per function from one listing of the whole range
+listing = subprocess.run(['.venv/bin/python', os.path.join(os.path.dirname(__file__), 'listing.py'),
+                          '0xeda0', '0x2d0000'], capture_output=True, text=True).stdout
+insns = {}
+for line in listing.split('\n'):
+    m = re.match(r'^  ([0-9a-f]+): (.*)$', line)
+    if m:
+        insns[int(m.group(1), 16)] = m.group(2).strip()
+        continue
+    m = re.match(r'^  (.*?)\s*@ ([0-9a-f]+)$', line)
+    if m:
+        insns[int(m.group(2), 16)] = m.group(1).strip()
+
+
+def shape(a):
+    ins = []
+    for x in range(a, a + size[a], 4):
+        t = insns.get(x, '')
+        if t.startswith('.word'):
+            break
+        m = re.search(r'\[pc(?:, #(0x[0-9a-f]+|\d+))?\]', t)
+        if m:   # a literal-pool load: name the pool word's symbol (ldr rX, =sym)
+            word = insns.get(x + 8 + int(m.group(1) or '0', 0), '')
+            if not word.startswith('.word ') or not SYM.fullmatch(word[6:].strip()):
+                return '', [], []
+            t = t[:m.start()] + '=' + word[6:].strip() + t[m.end():]
+        ins.append(t)
+    text = ' ; '.join(ins)
+    syms = SYM.findall(text)
+    nums = NUM.findall(SYM.sub('X', text))
+    norm = NUM.sub('#N', SYM.sub('X', text))
+    return norm, nums, syms
+
+
+def render(a, sig, body, nums, syms, decls):
+    fill = {}
+    for i, n in enumerate(nums):
+        fill[f'N{i}'] = n
+        fill[f'V{i}'] = int(n, 0) // 4
+    for i, s in enumerate(syms):
+        fill[f'F{i}'] = f'fn_{a:x}_{i}'
+        fill[f'L{i}'] = f'fnl_{a:x}_{i}'
+        fill[f'D{i}'] = f'data_{a:x}_{i}'
+    used = set(re.findall(r'\{([FLD]\d+)\}', body))
+    for u in sorted(used):
+        s = syms[int(u[1:])]
+        kind = {'F': 'int {}(...)', 'L': 'long long {}(...)', 'D': 'int {}[]'}[u[0]]
+        decls.append(f'extern {kind.format(fill[u])} __asm__ ("{s}");')
+    name = f'shape_{a:x}'
+    return f'{sig.replace(" f(", f" {name}(")}\n{{\n    {body.format(**fill)}\n}}\n'
+
+
+def build(path, items):
+    text = ['// Generated by autoshape.py: small functions rebuilt from instruction shapes.',
+            '// Names are placeholders.', '', VT, '', 'extern "C" {', '']
+    for decls, fn in items:
+        text += decls + [fn]
+    text.append('}')
+    open(path, 'w').write('\n'.join(text) + '\n')
+
+
+if '--survey' in sys.argv:   # the most common shapes without a table entry
+    from collections import Counter
+    count, example = Counter(), {}
+    for a in starts:
+        if a not in grafted and 0xeda0 <= a < 0x2d0000 and size[a] <= 64:
+            norm = shape(a)[0]
+            if norm not in TABLE and norm:
+                count[norm] += 1
+                example.setdefault(norm, a)
+    for norm, n in count.most_common(int(sys.argv[-1]) if sys.argv[-1].isdigit() else 40):
+        print(f'{n:3} {example[norm]:#x}  {norm}')
+    sys.exit()
+
+cands = {}
+for a in starts:
+    if a in grafted or not 0xeda0 <= a < 0x2d0000 or size[a] > 64:
+        continue
+    norm, nums, syms = shape(a)
+    if norm in TABLE:
+        temps = TABLE[norm]
+        if '=X' in norm:   # literal pools also come from code GCC optimised for size (cold)
+            temps = temps + [('__attribute__((cold)) ' + sig, body) for sig, body in temps]
+        cands[a] = (temps, nums, syms)
+print(len(cands), 'candidates')
+
+found = {}
+for i in range(max((len(c[0]) for c in cands.values()), default=0)):
+    todo = [a for a in cands if a not in found and i < len(cands[a][0])]
+    items = []
+    for a in todo:
+        decls = []
+        sig, body = cands[a][0][i]
+        items.append((decls, render(a, sig, body, cands[a][1], cands[a][2], decls)))
+    build('obj/_autoshape.cpp', items)
+    r = subprocess.run(['./cc11.sh', 'obj/_autoshape.cpp', 'obj/_autoshape.o'] + FLAGS,
+                       capture_output=True, text=True)
+    if r.returncode:
+        sys.exit(r.stderr[-3000:])
+    out = subprocess.run(['.venv/bin/python', '../tools/decomp/match.py', 'rbp.orig', 'obj/_autoshape.o']
+                         + [f'shape_{a:x}={a:#x}' for a in todo], capture_output=True, text=True).stdout
+    ok = {l.split()[1] for l in out.split('\n') if l.startswith('MATCH')}
+    for a in todo:
+        if f'shape_{a:x}' in ok:
+            found[a] = i
+    print(f'round {i}: {len(todo)} tried, {len(found)} found', flush=True)
+
+items = []
+for a in sorted(found):
+    decls = []
+    sig, body = cands[a][0][found[a]]
+    items.append((decls, render(a, sig, body, cands[a][1], cands[a][2], decls)))
+build(OUT, items)
+open('obj/auto_shape.pairs', 'w').write(''.join(f'shape_{a:x}={a:#x}\n' for a in sorted(found)))
+for norm in TABLE:   # report shapes that never match, to improve their templates
+    tried = [a for a in cands if cands[a][0][0] is TABLE[norm][0]]
+    miss = [a for a in tried if a not in found]
+    if miss:
+        print(f'{len(miss)}/{len(tried)} unmatched, e.g. {miss[0]:#x}: {norm}')
+print(len(found), 'functions')

@@ -80,11 +80,12 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   streams (local files, another player's media, and the page-buffered stream that reads ahead on a
   thread), the file-reader base, the sample-rate converter, the message queue and small helpers
   (debug print, thread priority, the i.MX6 timer used as a clock); in `network::` the
-  daemon/config base and part of hostapd. Another 2,328 functions are generated from rbp's bytes,
+  daemon/config base and part of hostapd. Another 2,760 functions are generated from rbp's bytes,
   RTTI and vtables by the generators listed under Tools: trivial virtuals, destructors,
-  this-adjusting thunks and tiny leaf functions (getters, setters, constant returns, forwarding
-  wrappers, `throw` helpers). With JUCE that makes about 3,800 functions built from source, over a
-  quarter of rbp's ~14,100. Pioneer's code needs `-mfpu=neon -mfloat-abi=softfp`; a few
+  this-adjusting thunks, static initialisers and small leaf functions (getters, setters, constant
+  returns, forwarding wrappers, `throw` helpers, C wrappers that call through a global object,
+  bounds-checked array lookups). With JUCE that makes about 4,200 functions built from source,
+  over a quarter of rbp's ~14,100. Pioneer's code needs `-mfpu=neon -mfloat-abi=softfp`; a few
   directories were also built with `-ftree-vectorize` (Common/reader) or `-O3` (WavWriter).
   Functions that don't match yet stay as assembly. The usual reasons are register allocation,
   block order, or a source detail not yet recovered.
@@ -143,5 +144,14 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   - `autoleaf.py` writes tiny functions outside the vtables: empty bodies, constant returns,
     field and global getters/setters, pass-through tail calls and forwards to a member's virtual
     method.
+  - `autoinit.py` writes the static initialisers of files whose only static initialisation is
+    `<iostream>`'s `ios_base::Init` object.
+  - `autoglobal.py` writes C wrappers that forward to an object reached through a global pointer
+    (`if (g && g->impl) return f(g->impl, …)`). The shape doesn't decide the exact source, so it
+    compiles a set of variants for each function and keeps the first that matches.
+  - `autoshape.py` is the general form: a table maps instruction shapes (immediates and symbols
+    abstracted) to one or more C templates, and the first template that matches is kept. Shapes
+    that load addresses from a literal pool are also tried as cold functions, since GCC optimises
+    those for size. `--survey` lists the most common shapes without a table entry.
 - The 2012.01 toolchain is 32-bit x86 Linux. On macOS it runs in Docker
   (`--platform linux/386`, e.g. `i386/debian:bullseye-slim`).
