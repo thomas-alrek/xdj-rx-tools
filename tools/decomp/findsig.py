@@ -6,7 +6,7 @@ Each function in each object becomes a word pattern: words covered by a relocati
 wildcards (data) or opcode-only (branches), and every bl is opcode-only (calls within
 a file carry no relocation). Patterns are searched at every word of TARGET's .text.
 Output, one line per function: FOUND <addr> <name> <object> <size> (unique hit), MULTI <n> <name>,
-or NONE <name>; then a summary. Functions shorter than --min words are skipped
+or NONE <name>; then a summary. FINDSIG_ALL=1 lists every hit of a MULTI. Functions shorter than --min words are skipped
 (too generic to place).
 """
 import os
@@ -82,7 +82,7 @@ def main(argv):
                 print(f'FOUND {hits[0]:#x} {s["name"]} {os.path.basename(path)} {s["size"]}')
             elif hits:
                 multi += 1
-                print(f'MULTI {len(hits)} {s["name"]} ' + ' '.join(f'{h:#x}' for h in hits[:4]))
+                print(f'MULTI {len(hits)} {s["name"]} ' + ' '.join(f'{h:#x}' for h in (hits if os.environ.get('FINDSIG_ALL') else hits[:4])))
             else:
                 none += 1
                 print(f'NONE  {s["name"]}')
