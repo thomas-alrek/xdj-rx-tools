@@ -1,6 +1,6 @@
 """Generate small functions from a table of instruction shapes and C templates.
 
-Each ungrafted function up to 64 bytes is reduced to a shape: its instructions with every
+Each ungrafted function up to 128 bytes (SHAPE_MAX) is reduced to a shape: its instructions with every
 immediate replaced by N and every symbol by X (N0, N1, … and X0, X1, … in order of appearance).
 A table maps shapes to one or more C templates. Template holes:
   {N0}      the first immediate (as written, decimal or hex)
@@ -225,6 +225,17 @@ TABLE = {
         ('int f(int a)', 'if (a == {N0}) return a; return {F0}(a);')],
     'ldr r3, =X ; mov r2, #N ; add r3, r0, r3 ; strb r2, [r3, #N] ; bx lr': [
         (f'void f({P})', 'p[{A0} + {N1}] = {N0};')],
+    # per-deck getters: an object with two deck pointers returns a field of deck 0 or 1
+    'ldr r3, [r0, #N] ; cmp r3, #N ; moveq r0, r3 ; bxeq lr ; ldr r0, [r0, #N] ; cmp r0, #N ; bxeq lr ; cmp r1, #N ; ldreq r0, [r3, #N] ; bxeq lr ; cmp r1, #N ; beq #N ; mov r0, #N ; bx lr ; ldr r0, [r0, #N] ; bx lr': [
+        (f'int f({P}, int deck)', 'char* a = *(char**) (p + {N0}); if (!a) return 0; char* b = *(char**) (p + {N2}); if (!b) return 0; '
+                                  'switch (deck) {{ case 0: return *(int*) (a + {N5}); case 1: return *(int*) (b + {N9}); default: return 0; }}'),
+        (f'int f({P}, int deck)', 'char* a = *(char**) (p + {N0}); if (!a) return 0; char* b = *(char**) (p + {N2}); if (!b) return 0; '
+                                  'if (deck == 0) return *(int*) (a + {N5}); if (deck == 1) return *(int*) (b + {N9}); return 0;')],
+    'ldr r3, [r0, #N] ; cmp r3, #N ; moveq r0, r3 ; bxeq lr ; ldr r0, [r0, #N] ; cmp r0, #N ; bxeq lr ; cmp r1, #N ; beq #N ; cmp r1, #N ; beq #N ; mov r0, #N ; bx lr ; ldrb r0, [r3, #N] ; ubfx r0, r0, #N, #N ; bx lr ; ldrb r0, [r0, #N] ; ubfx r0, r0, #N, #N ; bx lr': [
+        (f'bool f({P}, int deck)', 'char* a = *(char**) (p + {N0}); if (!a) return 0; char* b = *(char**) (p + {N2}); if (!b) return 0; '
+                                   'switch (deck) {{ case 0: return (*(unsigned char*) (a + {N9}) >> {N10}) & 1; case 1: return (*(unsigned char*) (b + {N12}) >> {N13}) & 1; default: return 0; }}'),
+        (f'bool f({P}, int deck)', 'char* a = *(char**) (p + {N0}); if (!a) return 0; char* b = *(char**) (p + {N2}); if (!b) return 0; '
+                                   'if (deck == 0) return (*(unsigned char*) (a + {N9}) >> {N10}) & 1; if (deck == 1) return (*(unsigned char*) (b + {N12}) >> {N13}) & 1; return 0;')],
 }
 
 SYM = re.compile(r'\b(?:[fbdcp]_\w+|leaf_\w+|_Z\w+|[A-Za-z_]\w*_[0-9a-f]{4,})\b')
@@ -307,7 +318,7 @@ if '--survey' in sys.argv:   # the most common shapes without a table entry
     from collections import Counter
     count, example = Counter(), {}
     for a in starts:
-        if a not in grafted and a in size and 0xeda0 <= a < 0x360000 and size[a] <= 64:
+        if a not in grafted and a in size and 0xeda0 <= a < 0x360000 and size[a] <= int(__import__("os").environ.get("SHAPE_MAX", "128")):
             norm = shape(a)[0]
             if norm not in TABLE and norm:
                 count[norm] += 1
@@ -318,7 +329,7 @@ if '--survey' in sys.argv:   # the most common shapes without a table entry
 
 cands = {}
 for a in starts:
-    if a in grafted or a not in size or not 0xeda0 <= a < 0x360000 or size[a] > 64:
+    if a in grafted or a not in size or not 0xeda0 <= a < 0x360000 or size[a] > int(__import__("os").environ.get("SHAPE_MAX", "128")):
         continue
     norm, nums, syms = shape(a)
     if norm in TABLE:
