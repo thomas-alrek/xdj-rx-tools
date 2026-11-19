@@ -8,6 +8,7 @@ A table maps shapes to one or more C templates. Template holes:
   {L0}      the same callee returning long long ({B0}: returning bool)
   {D0}      a data object named after symbol X0: `extern "C" int data[]`
   Literal-pool loads appear as `ldr rX, =X` with the pool word's symbol as capture.
+  {A0}      the address symbol X0 stands for, as a number (pool constants that are offsets)
   {V0}      the first immediate divided by 4 (a vtable slot or int index)
 Shapes with literal-pool loads are also tried as cold functions (GCC optimises those for size
 and loads addresses from the pool instead of movw/movt). Every template of a shape is compiled; the first one matching byte for byte is kept, so a table
@@ -26,7 +27,9 @@ VT = ('struct VO { ' + ' '.join(f'virtual long long v{k}(int, int);' for k in ra
       'struct VB { ' + ' '.join(f'virtual bool v{k}(int, int);' for k in range(64)) + ' };\n'
       'struct VN { ' + ' '.join(f'virtual long long v{k}();' for k in range(64)) + ' };\n'
       'struct V3 { ' + ' '.join(f'virtual long long v{k}(int, int, int);' for k in range(64)) + ' };\n'
-      'typedef long long (*FnL)();')
+      'typedef long long (*FnL)();\n'
+      'typedef long long (*FnL3)(void*, int, int);\n'
+      'typedef long long U64A4 __attribute__ ((aligned (4)));')
 
 # shape -> [(signature, body), ...]; names are placeholders.
 TABLE = {
@@ -194,12 +197,45 @@ TABLE = {
         (f'void f({P})', 'if (*(char**) (p + {N0})) {{ {F0}(*(char**) (p + {N0})); *(char**) (p + {N4}) = 0; }} if (*(char**) (p + {N5})) {{ {F1}(*(char**) (p + {N5})); *(char**) (p + {N8}) = 0; }}')],
     'push {r4, lr} ; mov r4, r0 ; ldr r0, [r0, #N] ; ldr r3, [r0] ; ldr r3, [r3, #N] ; blx r3 ; ldr r0, [r4, #N] ; ldr r3, [r0] ; ldr r3, [r3, #N] ; blx r3 ; ldr r0, [r4, #N] ; ldr r3, [r0] ; ldr r3, [r3, #N] ; blx r3 ; pop {r4, pc}': [
         (f'int f({P})', '(*(VN**) (p + {N0}))->v{V1}(); (*(VN**) (p + {N2}))->v{V3}(); return (int) (*(VN**) (p + {N4}))->v{V5}();')],
+    # results of calls turned into bools / compared
+    'push {r3, lr} ; bl X ; adds r0, r0, #N ; movne r0, #N ; pop {r3, pc}': [
+        (f'bool f({A4})', 'return {F0}(a, b, c, d) != -{N0};')],
+    'push {r3, lr} ; bl X ; rsbs r0, r0, #N ; movlo r0, #N ; pop {r3, pc}': [
+        (f'bool f({A4})', 'return {F0}(a, b, c, d) == {N0} - 1;'),
+        (f'bool f({A4})', 'return (unsigned) {F0}(a, b, c, d) < {N0};')],
+    'push {r3, lr} ; bl X ; mvn r0, r0 ; lsr r0, r0, #N ; pop {r3, pc}': [
+        (f'bool f({A4})', 'return {F0}(a, b, c, d) >= 0;')],
+    'push {r3, lr} ; bl X ; lsr r0, r0, #N ; pop {r3, pc}': [
+        (f'bool f({A4})', 'return {F0}(a, b, c, d) < 0;'),
+        (f'unsigned f({A4})', 'return (unsigned) {F0}(a, b, c, d) >> {N0};')],
+    'push {r3, lr} ; bl X ; cmp r0, #N ; movgt r0, #N ; movle r0, #N ; pop {r3, pc}': [
+        (f'int f({A4})', 'return {F0}(a, b, c, d) > {N0} ? {N1} : {N2};')],
+    'push {r3, lr} ; bl X ; cmp r0, #N ; movle r0, #N ; movgt r0, #N ; pop {r3, pc}': [
+        (f'int f({A4})', 'return {F0}(a, b, c, d) <= {N0} ? {N1} : {N2};'),
+        (f'int f({A4})', 'return {F0}(a, b, c, d) > {N0} ? {N2} : {N1};')],
+    # function-pointer members
+    'push {r3, lr} ; ldr r3, [r0, #N] ; ldr r0, [r0, #N] ; blx r3 ; pop {r3, pc}': [
+        (f'int f({P}, int b, int c)', 'return (int) (*(FnL3*) (p + {N0})) (*(void**) (p + {N1}), b, c);')],
+    'push {r3, lr} ; ldr r3, [r0, #N] ; blx r3 ; pop {r3, pc}': [
+        (f'int f({P}, int b, int c)', 'return (int) (*(FnL3*) (p + {N0})) (p, b, c);')],
+    'mov r3, r0 ; ldr r0, [r0, #N] ; ldr r1, [r3, #N] ; bx lr': [
+        ('long long f(void* p)', 'struct S {{ char pad[{N0}]; long long v; }}; return ((S*) p)->v;')],
+    'cmp r0, #N ; bxeq lr ; b X': [
+        ('void f(void* p)', 'if (p != 0) {F0}(p);'),
+        ('int f(int a)', 'if (a == {N0}) return a; return {F0}(a);')],
+    'ldr r3, =X ; mov r2, #N ; add r3, r0, r3 ; strb r2, [r3, #N] ; bx lr': [
+        (f'void f({P})', 'p[{A0} + {N1}] = {N0};')],
 }
 
 SYM = re.compile(r'\b(?:[fbdcp]_\w+|leaf_\w+|_Z\w+|[A-Za-z_]\w*_[0-9a-f]{4,})\b')
 NUM = re.compile(r'#(-?(?:0x[0-9a-f]+|\d+))')
 
 starts = sorted(int(l.split()[0], 16) for l in open('split/functions.txt') if l.startswith('0x'))
+label_addr = {}
+for l in open('split/labels.txt'):
+    q = l.split()
+    if len(q) == 2:
+        label_addr.setdefault(q[1], int(q[0], 16))
 size = {a: b - a for a, b in zip(starts, starts[1:])}
 grafted = {int(l.split()[0], 16) for l in open('grafts.txt') if l.strip() and l[0] != '#'
            and l.split()[2] != OUT}
@@ -247,6 +283,7 @@ def render(a, sig, body, nums, syms, decls):
         fill[f'F{i}'] = f'fn_{a:x}_{i}'
         fill[f'L{i}'] = f'fnl_{a:x}_{i}'
         fill[f'B{i}'] = f'fnb_{a:x}_{i}'
+        fill[f'A{i}'] = hex(label_addr.get(s, 0))
         fill[f'D{i}'] = f'data_{a:x}_{i}'
     used = set(re.findall(r'\{([FLDB]\d+)\}', body))
     for u in sorted(used):
