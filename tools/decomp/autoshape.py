@@ -473,7 +473,7 @@ def shape(a):
     return norm, nums, syms
 
 
-def render(a, sig, body, nums, syms, decls):
+def render(a, sig, body, nums, syms, decls, suffix=''):
     fill = {}
     for i, n in enumerate(nums):
         fill[f'N{i}'] = n
@@ -489,7 +489,7 @@ def render(a, sig, body, nums, syms, decls):
         s = syms[int(u[1:])]
         kind = {'F': 'int {}(...)', 'L': 'long long {}(...)', 'D': 'int {}[]', 'B': 'bool {}(...)'}[u[0]]
         decls.append(f'extern {kind.format(fill[u])} __asm__ ("{s}");')
-    name = f'shape_{a:x}'
+    name = f'shape_{a:x}{suffix}'
     return f'{sig.replace(" f(", f" {name}(")}\n{{\n    {body.format(**fill)}\n}}\n'
 
 
@@ -527,34 +527,53 @@ for a in starts:
         cands[a] = (temps, nums, syms)
 print(len(cands), 'candidates')
 
+# AUTOSHAPE_PHASES=4: a scratch register can depend on how many functions of the same shape
+# precede a function in the file (a cycle of 4); every candidate is then emitted as that many
+# consecutive copies (shape_ADDR_pN), in the trial rounds and in the output, and the copy that
+# matches is the one grafted.
+PHASES = int(__import__('os').environ.get('AUTOSHAPE_PHASES', '1'))
+SUFFIXES = [''] if PHASES == 1 else [f'_p{k}' for k in range(PHASES)]
+
+
+def compile_and_match(path, obj, items, names):
+    build(path, items)
+    r = subprocess.run(['./cc11.sh', path, obj] + FLAGS, capture_output=True, text=True)
+    if r.returncode:
+        sys.exit(r.stderr[-3000:])
+    out = subprocess.run(['.venv/bin/python', '../tools/decomp/match.py', 'rbp.orig', obj] + names,
+                         capture_output=True, text=True).stdout
+    return {l.split()[1] for l in out.split('\n') if l.startswith('MATCH')}
+
+
 found = {}
 for i in range(max((len(c[0]) for c in cands.values()), default=0)):
     todo = [a for a in cands if a not in found and i < len(cands[a][0])]
     items = []
     for a in todo:
-        decls = []
         sig, body = cands[a][0][i]
-        items.append((decls, render(a, sig, body, cands[a][1], cands[a][2], decls)))
-    build('obj/_autoshape.cpp', items)
-    r = subprocess.run(['./cc11.sh', 'obj/_autoshape.cpp', 'obj/_autoshape.o'] + FLAGS,
-                       capture_output=True, text=True)
-    if r.returncode:
-        sys.exit(r.stderr[-3000:])
-    out = subprocess.run(['.venv/bin/python', '../tools/decomp/match.py', 'rbp.orig', 'obj/_autoshape.o']
-                         + [f'shape_{a:x}={a:#x}' for a in todo], capture_output=True, text=True).stdout
-    ok = {l.split()[1] for l in out.split('\n') if l.startswith('MATCH')}
+        for sfx in SUFFIXES:
+            decls = []
+            items.append((decls, render(a, sig, body, cands[a][1], cands[a][2], decls, sfx)))
+    ok = compile_and_match('obj/_autoshape.cpp', 'obj/_autoshape.o', items,
+                           [f'shape_{a:x}{sfx}={a:#x}' for a in todo for sfx in SUFFIXES])
     for a in todo:
-        if f'shape_{a:x}' in ok:
+        if any(f'shape_{a:x}{sfx}' in ok for sfx in SUFFIXES):
             found[a] = i
     print(f'round {i}: {len(todo)} tried, {len(found)} found', flush=True)
 
 items = []
 for a in sorted(found):
-    decls = []
     sig, body = cands[a][0][found[a]]
-    items.append((decls, render(a, sig, body, cands[a][1], cands[a][2], decls)))
-build(OUT, items)
-open(OUT.replace('src/auto/', 'obj/').replace('.cpp', '.pairs'), 'w').write(''.join(f'shape_{a:x}={a:#x}\n' for a in sorted(found)))
+    for sfx in SUFFIXES:
+        decls = []
+        items.append((decls, render(a, sig, body, cands[a][1], cands[a][2], decls, sfx)))
+ok = compile_and_match(OUT, OUT.replace('src/auto/', 'obj/').replace('.cpp', '.o'), items,
+                       [f'shape_{a:x}{sfx}={a:#x}' for a in sorted(found) for sfx in SUFFIXES])
+pairs = []
+for a in sorted(found):
+    names = [f'shape_{a:x}{sfx}' for sfx in SUFFIXES if f'shape_{a:x}{sfx}' in ok]
+    pairs.append(f'{(names or [f"shape_{a:x}{SUFFIXES[0]}"])[0]}={a:#x}\n')
+open(OUT.replace('src/auto/', 'obj/').replace('.cpp', '.pairs'), 'w').write(''.join(pairs))
 for norm in TABLE:   # report shapes that never match, to improve their templates
     tried = [a for a in cands if cands[a][0][0] is TABLE[norm][0]]
     miss = [a for a in tried if a not in found]
