@@ -101,7 +101,7 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   this-adjusting thunks, static initialisers and small leaf functions (getters, setters, constant
   returns, forwarding wrappers, `throw` helpers, C wrappers that call through a global object,
   bounds-checked array lookups); since they also cover the JUCE range, they pick up thunks and
-  leaves too short for the signature scan. With JUCE that makes about 6,160 functions built from
+  leaves too short for the signature scan. With JUCE that makes about 6,230 functions built from
   source, over a third of rbp's ~14,100 by count. By size it is far less: the generators take the
   small functions, and most of Pioneer's 2.9 MB is in large ones that need reconstructing by
   hand (about 4% of that code by bytes so far). Pioneer's code needs `-mfpu=neon -mfloat-abi=softfp`; a few
@@ -133,7 +133,12 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
 - `tools/decomp/match.py TARGET OBJ.o [NAME=ADDR …]`: compares compiled functions with the
   binary, word by word. Relocated words and call offsets are masked.
 - `tools/decomp/findsig.py TARGET OBJ.o …`: finds each function of the objects in the binary
-  by masked signature (prints address, name, object and size). Use it to name library code and to test compiler flags.
+  by masked signature (prints address, name, object and size; `FINDSIG_ALL=1` lists every hit
+  of a multiple match). Use it to name library code and to test compiler flags.
+- `tools/decomp/autotemplate.py [--juce DIR]` (from `decomp/`): compiles one explicit
+  instantiation per std::/juce container member and element type, each in its own file (a
+  single-member instantiation reproduces the implicit instance; instantiating the whole class
+  changes the inlining), and prints the instances findsig.py finds that are not grafted yet.
 - `tools/decomp/split.py TARGET FSTARTS OUTDIR [--names FILE]`: the splitter. It writes GNU as
   sources (one file per data section, 64 KB chunks of whole functions for `.text`) and a linker
   script that puts every section back at its original address. Code is emitted word by word as
