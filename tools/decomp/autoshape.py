@@ -41,7 +41,7 @@ TABLE = {
     'movw r3, #:lower16:X ; movt r3, #:upper16:X ; ldr r0, [r3, r0, lsl #N] ; bx lr': [
         ('int f(int i)', 'return {D0}[i];')],
     'movw r3, #:lower16:X ; movt r3, #:upper16:X ; mov r2, #N ; mla r3, r2, r0, r3 ; ldr r0, [r3, #N] ; bx lr': [
-        ('int f(int i)', 'struct S {{ char b[{N0}]; }}; return *(int*) ((char*) &((S*) {D0})[i] + {N1});')],
+        ('int f(int i)', 'struct S {{ char pad[{N1}]; int x; char pad2[{N0} - {N1} - 4]; }}; return ((S*) {D0})[i].x;')],
     'sub r0, r0, #N ; cmp r0, #N ; ldrls r3, =X ; movhi r0, #N ; ldrls r0, [r3, r0, lsl #N] ; bx lr': [
         ('int f(unsigned i)', 'i -= {N0}; if (i > {N1}) return {N2}; return {D0}[i];')],
     'push {r3, lr} ; bl X ; movw r3, #:lower16:X ; movt r3, #:upper16:X ; str r0, [r3] ; pop {r3, pc}': [
@@ -78,7 +78,7 @@ TABLE = {
     'push {r3, lr} ; ldr r3, [r0, #N] ; cmp r3, #N ; beq #N ; ldr r0, [r0, #N] ; blx r3 ; pop {r3, pc} ; mov r0, #N ; pop {r3, pc}': [
         (f'int f({P})', 'typedef int (*Fn) (void*); Fn fn = *(Fn*) (p + {N0}); if (!fn) return {N4}; return fn (*(void**) (p + {N3}));')],
     'ldrb ip, [sp, #N] ; ldr r0, [r0, #N] ; str ip, [sp, #N] ; b X': [
-        (f'int f({P}, int a, int b, int c, unsigned char d)', 'return {F0}(*(void**) (p + {N1}), a, b, c, d);')],
+        (f'int f({P}, int a, int b, int c, int e, unsigned char d)', 'return {F0}(*(void**) (p + {N1}), a, b, c, e, d);')],
     'ldrb r3, [r0, #N] ; cmp r3, r1 ; strbne r1, [r0, #N] ; bx lr': [
         (f'void f({P}, unsigned char v)', 'if ((unsigned char) p[{N0}] != v) p[{N1}] = v;')],
     'push {r4, lr} ; mov r4, r0 ; bl X ; mov r1, r4 ; ldr r3, [r0] ; ldr r3, [r3, #N] ; blx r3 ; adds r0, r0, #N ; movne r0, #N ; pop {r4, pc}': [
