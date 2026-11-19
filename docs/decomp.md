@@ -129,5 +129,20 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   base classes, vtables). Each virtual function is attributed to the most basic class that has it.
 - `tools/decomp/cmp.py ORIGINAL BUILT`: compares the relinked binary with the original section by
   section, at the original addresses, and names the nearest label for each difference.
+- `tools/decomp/listing.py START END`: prints the split listing for an address range compactly.
+  `tools/decomp/emu_switch.py START END` runs a leaf `switch (code)` function for every 16-bit
+  input and prints the code → result table (this is how [key-codes.md](key-codes.md) was made).
+- Generators. These write C++ from rbp's bytes and RTTI for code whose shape decides everything,
+  so it doesn't have to be written by hand. Each writes `src/auto/*.cpp` and a pairs file for
+  `match.py`, and keeps its own earlier output when run again. They run from the private tree:
+  - `autoclass.py CLASS…` writes skeletons of trivial virtual functions from a vtable.
+  - `autodtor.py` writes destructors that only restore a base vtable, store their own and call
+    the base destructor, or (deleting form) call a D1 that has a body. Classes without RTTI are
+    found through the vtable words in `.rodata`.
+  - `autothunk.py` writes this-adjusting thunks (`sub r0, r0, #N; b target`). It makes a class
+    whose base sits at offset N, with the override carrying the target's label as assembler name.
+  - `autoleaf.py` writes tiny functions outside the vtables: empty bodies, constant returns,
+    field and global getters/setters, pass-through tail calls and forwards to a member's virtual
+    method.
 - The 2012.01 toolchain is 32-bit x86 Linux. On macOS it runs in Docker
   (`--platform linux/386`, e.g. `i386/debian:bullseye-slim`).
