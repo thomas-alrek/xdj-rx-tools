@@ -151,6 +151,28 @@ for a in d0_only:
     targets.append((f'anonymous::Deleting_{a:x}', None, None, a))
     deleting_only.add(f'anonymous::Deleting_{a:x}')
 
+# inline destructors of classes with a second vtable (multiple inheritance): store both own
+# vptrs (the secondary one at +OFF, vtable address point +K), then call the base's D2
+mi_classes = []
+for c, fs, va, kind in classes:
+    if len(fs) < 2 or fs[0] in grafted or fs[1] in grafted:
+        continue
+    d1, d0 = fs[0], fs[1]
+    w = words(d1, 10)
+    if not (w[0] & 0xfffff000 == 0xe59f3000 and w[1] == 0xe92d4010 and w[2] & 0xfffff000 == 0xe2832000 and
+            w[3] == 0xe1a04000 and w[4] & 0xfffff000 == 0xe5802000 and w[5] == 0xe5803000 and
+            w[6] & 0xff000000 == 0xeb000000 and w[7] == 0xe1a00004 and w[8] == 0xe8bd8010 and w[9] == va + 8):
+        continue
+    if bl_target(w[6], d1 + 24) not in slot0:
+        continue
+    d = words(d0, 12)
+    if not (d[6] & 0xff000000 == 0xeb000000 and d[8] & 0xff000000 == 0xeb000000 and d[11] == va + 8):
+        continue
+    k, off = w[2] & 0xfff, w[4] & 0xfff
+    if (k - 8) % 4 or off < 4:
+        continue
+    mi_classes.append((d1, d0, (k - 8) // 4, off))
+
 base_of = {c: b for c, b, _, _ in targets if b}
 classes = set()
 for name in [c for c, _, _, _ in targets] + list(base_of.values()):
@@ -200,11 +222,20 @@ for c in order:
     src += [''.join(f'namespace {n} {{ ' for n in ns)] + body + ['}' * len(ns)] if ns else body
 src += [''] + [f'{c}::~{c.split("::")[-1]}() {{}}' for c in sorted(out_of_line)]
 src += [f'{c}::~{c.split("::")[-1]}() {{}}' for c in sorted(deleting_only)]
+for d1, d0, nslots, off in mi_classes:
+    ns = f'mi_{d1:x}'
+    pad = f' char pad[{off - 4}];' if off > 4 else ''
+    methods = ' '.join(f'virtual void f{k}();' for k in range(nslots - 2))
+    src.append(f'namespace anonymous {{ namespace {ns} {{ struct P {{ virtual ~P(); {methods}{pad} }}; '
+               f'struct S {{ virtual void s(); }}; struct B : P, S {{ virtual ~B(); }}; '
+               f'struct C : B {{ virtual ~C() {{}} }}; void* make() {{ return new C(); }} }} }}')
 src += ['', 'void* instantiateAutoDtors (int i)', '{', '    switch (i)', '    {']
 src += [f'        case {i}: return new ::{c}();' for i, (c, _, _, _) in enumerate(targets) if c not in deleting_only]
 src += ['        default: return 0;', '    }', '}', '']
 open('src/auto/auto_dtors.cpp', 'w').write('\n'.join(src))
 with open('obj/auto_dtors.pairs', 'w') as f:
+    for d1, d0, _, _ in mi_classes:
+        f.write(f'_ZN9anonymous{len(f"mi_{d1:x}")}mi_{d1:x}1CD1Ev={d1:#x}\n_ZN9anonymous{len(f"mi_{d1:x}")}mi_{d1:x}1CD0Ev={d0:#x}\n')
     for c, _, d1, d0 in targets:
         if d1 is not None:
             f.write(f'_Z{mangled(c)}D1Ev={d1:#x}\n')
