@@ -69,22 +69,26 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
 - The binary's `.comment` also names Freescale's Linaro 2011.07 GCC 4.6.2. It can be built from
   Linaro's source release (only `all-gcc`, with the 2012.01 toolchain's headers). For the code
   tested so far it produces the same output as 2012.01.
-- **Pioneer's own code from source.** 376 of Pioneer's functions, from 42 reconstructed source
+- **Pioneer's own code from source.** 466 of Pioneer's functions, from 52 reconstructed source
   files, recompile byte-identically and are built into rbp. They cover the DSP primitives
   (`dsp::LagrangeSRC`, the IIR filters, time-stretch base classes) and much of `mixerengine::`:
   output devices and channels, the input channels (mic, deck, USB), the master channel, the WAV
   recorder, the compressor buffer and the beat/colour effect bases. In the UI layer they cover
-  `uif::UiObject`/`UiTimer`, the panel TX path (`ui::PanelComController`), `ui::KeyInput` (the key
-  table in [key-codes.md](key-codes.md)) and `ui::JogSpeedGuesser`. In `common::` they cover the
-  file input streams (local files, another player's media, and the page-buffered stream that reads
-  ahead on a thread), the file-reader base, the sample-rate converter, the message queue and small
-  helpers (debug print, thread priority, the i.MX6 timer used as a clock). Another 499 trivial
-  virtual functions (empty bodies, constant returns, field getters/setters) are generated from
-  rbp's vtables. With JUCE (including five files that need Pioneer's ARM byte-swap patch) that
-  makes about 1,540 functions built from source. Pioneer's code needs Linaro 2011.07 GCC (built
-  from source with the cross binutils present, so it knows COMDAT groups and mergeable string
-  sections) and `-mfpu=neon -mfloat-abi=softfp`. Functions that don't match yet stay as assembly.
-  The usual reasons are register allocation, block order, or a source detail not yet recovered.
+  `uif::UiObject`/`UiTimer`, the `uif::IDataSet` interface and several list/info/test-mode data
+  sets, the panel TX path (`ui::PanelComController`), `ui::KeyInput` (the key table in [key-
+  codes.md](key-codes.md)) and `ui::JogSpeedGuesser`. In `common::` they cover the file input
+  streams (local files, another player's media, and the page-buffered stream that reads ahead on a
+  thread), the file-reader base, the sample-rate converter, the message queue and small helpers
+  (debug print, thread priority, the i.MX6 timer used as a clock); in `network::` the
+  daemon/config base and part of hostapd. Another 597 functions are generated from rbp's RTTI and
+  vtables: trivial virtuals (empty bodies, constant returns, field getters/setters) and inline
+  destructors that only restore a base vtable or call the base destructor (`scripts/autodtor.py`).
+  With JUCE (including five files that need Pioneer's ARM byte-swap patch) that makes about 1,730
+  functions built from source. Pioneer's code needs Linaro 2011.07 GCC (built from source with the
+  cross binutils present, so it knows COMDAT groups and mergeable string sections) and `-mfpu=neon
+  -mfloat-abi=softfp`; a few directories were also built with `-ftree-vectorize` (Common/reader)
+  or `-O3` (WavWriter). Functions that don't match yet stay as assembly. The usual reasons are
+  register allocation, block order, or a source detail not yet recovered.
 - **Class map.** RTTI gives 497 classes in Pioneer namespaces (`mixerengine::`, `dsp::`,
   `common::` file readers, `ui::`, `network::`, `playengine::`, `db::` …) with their vtables. 23
   source paths in strings show the source tree layout (`Source/Engine/PlayEngine/…`,
