@@ -38,6 +38,16 @@ VT = ('struct VO { ' + ' '.join(f'virtual long long v{k}(int, int);' for k in ra
 
 # shape -> [(signature, body), ...]; names are placeholders.
 TABLE = {
+    'push {r4, r5, lr} ; sub sp, sp, #N ; mov r5, r0 ; mov r4, r1 ; mov r2, #N ; add r0, sp, #N ; mov r1, #N ; bl X ; add r0, sp, #N ; str r5, [sp, #N] ; movw r3, #:lower16:X ; str r4, [sp, #N] ; movt r3, #:upper16:X ; str r3, [sp, #N] ; bl X ; add sp, sp, #N ; pop {r4, r5, pc}': [
+        ('void f(int a, int b)', 'struct M {{ int w[{N1} / 4]; }}; M m; {F0}(&m, 0, sizeof m); m.w[({N5} - {N2}) / 4] = a; m.w[({N6} - {N2}) / 4] = b; m.w[({N7} - {N2}) / 4] = (int) {D1}; {F3}(&m);')],
+    'push {r4, lr} ; sub sp, sp, #N ; mov r4, r0 ; mov r1, #N ; mov r2, #N ; add r0, sp, #N ; bl X ; add r0, sp, #N ; str r4, [sp, #N] ; movw r3, #:lower16:X ; movt r3, #:upper16:X ; str r3, [sp, #N] ; bl X ; add sp, sp, #N ; pop {r4, pc}': [
+        ('void f(int a)', 'struct M {{ int w[{N2} / 4]; }}; M m; {F0}(&m, 0, sizeof m); m.w[({N5} - {N3}) / 4] = a; m.w[({N6} - {N3}) / 4] = (int) {D1}; {F3}(&m);')],
+    'push {r4, lr} ; mov r4, r0 ; bl X ; movw r3, #:lower16:X ; movt r3, #:upper16:X ; str r3, [r4] ; mov r3, #N ; strb r3, [r4, #N] ; pop {r4, pc}': [
+        (f'void f({P})', '{F0}(p); *(void**) p = (void*) {D1}; p[{N1}] = {N0};')],
+    'push {r4, lr} ; mov r0, #N ; bl X ; subs r4, r0, #N ; beq #N ; mov r1, #N ; mov r2, #N ; bl X ; mov r0, r4 ; bl X ; mov r3, #N ; strb r3, [r4, #N] ; ldr r3, =X ; str r3, [r4] ; mov r0, r4 ; pop {r4, pc}': [
+        ('char* f(void)', 'char* p = (char*) {F0}({N0}); if (p) {{ {F1}(p, {N3}, {N4}); {F2}(p); p[{N6}] = {N5}; *(void**) p = (void*) {D3}; }} return p;')],
+    'push {r3, lr} ; bl X ; cmp r0, #N ; popeq {r3, pc} ; ldr r3, =X ; mov r2, #N ; mov r0, #N ; ldr r1, =X ; str r2, [r3] ; bl X ; mov r0, #N ; pop {r3, pc}': [
+        ('int f(void)', 'int r = {F0}(); if (r == {N0}) return r; {D1}[0] = {N1}; {F3}({N2}, {D2}); return {N3};')],
     'ldr r0, [r0, #N] ; movw r3, #:lower16:X ; movt r3, #:upper16:X ; cmp r0, #N ; moveq r0, r3 ; bx lr': [
         (f'char* f({P})', 'char* q = *(char**) (p + {N0}); return q ? q : (char*) {D0};')],
     'ldr r3, [r0, #N] ; ldr r0, [r3] ; b X': [

@@ -101,7 +101,7 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   this-adjusting thunks, static initialisers and small leaf functions (getters, setters, constant
   returns, forwarding wrappers, `throw` helpers, C wrappers that call through a global object,
   bounds-checked array lookups); since they also cover the JUCE range, they pick up thunks and
-  leaves too short for the signature scan. With JUCE that makes about 6,130 functions built from
+  leaves too short for the signature scan. With JUCE that makes about 6,160 functions built from
   source, over a third of rbp's ~14,100 by count. By size it is far less: the generators take the
   small functions, and most of Pioneer's 2.9 MB is in large ones that need reconstructing by
   hand (about 4% of that code by bytes so far). Pioneer's code needs `-mfpu=neon -mfloat-abi=softfp`; a few
