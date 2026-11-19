@@ -74,7 +74,10 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   (`dsp::LagrangeSRC`, the IIR filters, time-stretch base classes) and much of `mixerengine::`:
   output devices and channels, the input channels (mic, deck, USB), the master channel, the WAV
   recorder, the compressor buffer, the beat/colour effect bases, the equalizers, the delay line
-  and parts of the flanger, pitch and spiral effects. In the UI layer they cover
+  and parts of the flanger, pitch, spiral and reverb effects. The test mode's display layer
+  (DirectFB drawing, panels, text, the test patterns) and the cue cache's file-system wrappers are
+  rebuilt as whole files: their error reports carry `__FILE__`/`__LINE__`, which gives the
+  file boundaries and, through `#line`, the exact line numbers. In the UI layer they cover
   `uif::UiObject`/`UiTimer`, the `uif::IDataSet` interface and several list/info/test-mode data
   sets, the panel TX path (`ui::PanelComController`), `ui::KeyInput` (the key table in
   [key-codes.md](key-codes.md)), `ui::JogSpeedGuesser`, the engine and database callbacks of
@@ -97,7 +100,7 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   this-adjusting thunks, static initialisers and small leaf functions (getters, setters, constant
   returns, forwarding wrappers, `throw` helpers, C wrappers that call through a global object,
   bounds-checked array lookups); since they also cover the JUCE range, they pick up thunks and
-  leaves too short for the signature scan. With JUCE that makes about 5,300 functions built from
+  leaves too short for the signature scan. With JUCE that makes about 5,350 functions built from
   source, over a third of rbp's ~14,100 by count. By size it is far less: the generators take the
   small functions, and most of Pioneer's 2.9 MB is in large ones that need reconstructing by
   hand (about 4% of that code by bytes so far). Pioneer's code needs `-mfpu=neon -mfloat-abi=softfp`; a few
