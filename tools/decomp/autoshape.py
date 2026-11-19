@@ -28,6 +28,7 @@ VT = ('struct VO { ' + ' '.join(f'virtual long long v{k}(int, int);' for k in ra
       'struct VN { ' + ' '.join(f'virtual long long v{k}();' for k in range(64)) + ' };\n'
       'struct P2 { int a, b; };\n'
       'struct VV { ' + ' '.join(f'virtual void v{k}();' for k in range(64)) + ' };\n'
+      'struct VP { ' + ' '.join(f'virtual VP* v{k}(int);' for k in range(64)) + ' };\n'
       'struct V3 { ' + ' '.join(f'virtual long long v{k}(int, int, int);' for k in range(64)) + ' };\n'
       'typedef long long (*FnL)();\n'
       'typedef long long (*FnL3)(void*, int, int);\n'
@@ -35,6 +36,16 @@ VT = ('struct VO { ' + ' '.join(f'virtual long long v{k}(int, int);' for k in ra
 
 # shape -> [(signature, body), ...]; names are placeholders.
 TABLE = {
+    'ldr r3, [r1] ; cmp r3, #N ; addne r3, r0, r3, lsl #N ; moveq r0, #N ; ldrne r3, [r3, #N] ; ldrne r0, [r3, #N] ; bx lr': [
+        (f'int f({P}, int* i)', 'int k = *i; if (k == {N0}) return {N2}; struct S {{ char pad[{N3}]; int* e[1]; }}; return ((S*) p)->e[k][{V4}];')],
+    'ldr r3, [r1] ; cmp r3, #N ; addne r3, r0, r3, lsl #N ; moveq r0, #N ; ldrne r3, [r3, #N] ; ldrbne r0, [r3, #N] ; bx lr': [
+        (f'unsigned char f({P}, int* i)', 'int k = *i; if (k == {N0}) return {N2}; struct S {{ char pad[{N3}]; unsigned char* e[1]; }}; return ((S*) p)->e[k][{N4}];')],
+    'push {r3, lr} ; bl X ; eor r0, r0, #N ; uxtb r0, r0 ; pop {r3, pc}': [
+        (f'bool f({A4})', 'return !{B0}(a, b, c, d);')],
+    'push {r4, lr} ; subs r4, r1, #N ; popeq {r4, pc} ; ldr r3, [r0] ; ldr r3, [r3, #N] ; blx r3 ; mov r1, r4 ; ldr r3, [r0] ; ldr r3, [r3, #N] ; blx r3 ; pop {r4, pc}': [
+        ('void f(VP* o, int b)', 'if (b) o->v{V1}(b)->v{V2}(b);')],
+    'ldr r3, =X ; sub r0, r0, #N ; ldr r3, [r3, #N] ; ldr r2, [r3, #N] ; cmp r0, r2 ; ldrlo r3, [r3, #N] ; movhs r0, #N ; ldrlo r0, [r3, r0, lsl #N] ; bx lr': [
+        ('int f(int a)', 'char* g = *(char**) ((char*) {D0} + {N1}); unsigned i = a - {N0}; if (i < *(unsigned*) (g + {N2})) return (*(int**) (g + {N3}))[i]; return 0;')],
     'push {r4, lr} ; mov r4, r0 ; ldr r0, [r0, #N] ; bl X ; mov r3, #N ; str r3, [r4, #N] ; str r3, [r4, #N] ; pop {r4, pc}': [
         (f'void f({P})', '{F0}(*(void**) (p + {N0})); *(int*) (p + {N2}) = {N1}; *(int*) (p + {N3}) = {N1};')],
     'ldr ip, =X ; push {r3, lr} ; ldr ip, [ip, #N] ; cmp ip, #N ; popeq {r3, pc} ; blx ip ; pop {r3, pc}': [
