@@ -80,8 +80,12 @@ pushed or published. Releases keep shipping the stock image plus our add-on libr
   `ui::Reception` (which route each event to the deck it belongs to), small parts of
   `ui::PlayerInnards` and `ui::Mixer`, about 35 of the UI's message handlers, and the
   destructors of the viewer and wizard class hierarchies (`uif::IViewer` → list/tree viewers,
-  wizards and their pages, the utility-menu items, timer classes, test modes, singletons), and
-  in C the GUI widget setters. In `common::` they cover the file input
+  wizards and their pages, the utility-menu items, timer classes, test modes, singletons, effects
+  and input devices), and in C the GUI widget setters. Many destructors only need the class
+  layout: declaring the class with its members and inline destructor plus a placeholder
+  out-of-line constructor makes GCC emit the vtable as COMDAT and the destructors with it, which
+  reproduces rbp's code (a key function in the file would make GCC address the vtable through a
+  section anchor instead). In `common::` they cover the file input
   streams (local files, another player's media, and the page-buffered stream that reads ahead on a
   thread), the file-reader base, part of the PCM reader, the sample-rate converter, the message queue and small helpers
   (debug print, thread priority, the i.MX6 timer used as a clock); in `network::` the
