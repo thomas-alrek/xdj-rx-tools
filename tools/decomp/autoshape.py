@@ -206,7 +206,7 @@ grafted = {int(l.split()[0], 16) for l in open('grafts.txt') if l.strip() and l[
 
 # instructions per function from one listing of the whole range
 listing = subprocess.run(['.venv/bin/python', os.path.join(os.path.dirname(__file__), 'listing.py'),
-                          '0xeda0', '0x2d0000'], capture_output=True, text=True).stdout
+                          '0xeda0', '0x360000'], capture_output=True, text=True).stdout
 insns = {}
 for line in listing.split('\n'):
     m = re.match(r'^  ([0-9a-f]+): (.*)$', line)
@@ -270,7 +270,7 @@ if '--survey' in sys.argv:   # the most common shapes without a table entry
     from collections import Counter
     count, example = Counter(), {}
     for a in starts:
-        if a not in grafted and 0xeda0 <= a < 0x2d0000 and size[a] <= 64:
+        if a not in grafted and a in size and 0xeda0 <= a < 0x360000 and size[a] <= 64:
             norm = shape(a)[0]
             if norm not in TABLE and norm:
                 count[norm] += 1
@@ -281,7 +281,7 @@ if '--survey' in sys.argv:   # the most common shapes without a table entry
 
 cands = {}
 for a in starts:
-    if a in grafted or not 0xeda0 <= a < 0x2d0000 or size[a] > 64:
+    if a in grafted or a not in size or not 0xeda0 <= a < 0x360000 or size[a] > 64:
         continue
     norm, nums, syms = shape(a)
     if norm in TABLE:
