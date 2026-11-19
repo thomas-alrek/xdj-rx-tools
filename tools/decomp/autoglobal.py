@@ -18,8 +18,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from elfinfo import Elf
 
-FLAGS = '-O2 -mcpu=cortex-a8 -marm -mfpu=neon -mfloat-abi=softfp'.split()
-OUT = 'src/auto/auto_global.cpp'
+FLAGS = ('-O2 -mcpu=cortex-a8 -marm -mfpu=neon -mfloat-abi=softfp ' + __import__('os').environ.get('EXTRA_FLAGS', '')).split()
+OUT = __import__('os').environ.get('AUTOGLOBAL_OUT', 'src/auto/auto_global.cpp')
 e = Elf('rbp.orig')
 starts = sorted(int(l.split()[0], 16) for l in open('split/functions.txt') if l.startswith('0x'))
 size = {a: b - a for a, b in zip(starts, starts[1:])}
@@ -185,5 +185,5 @@ for a in sorted(found):
     globs.add(glob)
     chunks.append(source(f'glob_{a:x}', glob, off, target, found[a], f'callee_{a:x}'))
 build(OUT, chunks, globs)
-open('obj/auto_global.pairs', 'w').write(''.join(f'glob_{a:x}={a:#x}\n' for a in sorted(found)))
+open(OUT.replace('src/auto/', 'obj/').replace('.cpp', '.pairs'), 'w').write(''.join(f'glob_{a:x}={a:#x}\n' for a in sorted(found)))
 print(len(found), 'wrappers')

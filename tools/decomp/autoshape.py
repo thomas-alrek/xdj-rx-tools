@@ -19,8 +19,8 @@ import re
 import subprocess
 import sys
 
-FLAGS = '-O2 -mcpu=cortex-a8 -marm -mfpu=neon -mfloat-abi=softfp'.split()
-OUT = 'src/auto/auto_shape.cpp'
+FLAGS = ('-O2 -mcpu=cortex-a8 -marm -mfpu=neon -mfloat-abi=softfp ' + __import__('os').environ.get('EXTRA_FLAGS', '')).split()
+OUT = __import__('os').environ.get('AUTOSHAPE_OUT', 'src/auto/auto_shape.cpp')
 P = 'char* p'
 A4 = 'int a, int b, int c, int d'
 VT = ('struct VO { ' + ' '.join(f'virtual long long v{k}(int, int);' for k in range(64)) + ' };\n'
@@ -371,7 +371,7 @@ for a in sorted(found):
     sig, body = cands[a][0][found[a]]
     items.append((decls, render(a, sig, body, cands[a][1], cands[a][2], decls)))
 build(OUT, items)
-open('obj/auto_shape.pairs', 'w').write(''.join(f'shape_{a:x}={a:#x}\n' for a in sorted(found)))
+open(OUT.replace('src/auto/', 'obj/').replace('.cpp', '.pairs'), 'w').write(''.join(f'shape_{a:x}={a:#x}\n' for a in sorted(found)))
 for norm in TABLE:   # report shapes that never match, to improve their templates
     tried = [a for a in cands if cands[a][0][0] is TABLE[norm][0]]
     miss = [a for a in tried if a not in found]
