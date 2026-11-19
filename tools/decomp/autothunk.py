@@ -26,7 +26,7 @@ def rot_imm(w):
 
 by_target = {}
 for a, s in sorted(size.items()):
-    if a in grafted or s not in (8, 12) or a >= 0x2d0000:
+    if a in grafted or s not in (8, 12):
         continue
     w = struct.unpack(f'<{s // 4}I', e.read_va(a, s))
     if any(x & 0xfffff000 != 0xe2400000 for x in w[:-1]) or w[-1] & 0xff000000 != 0xea000000:

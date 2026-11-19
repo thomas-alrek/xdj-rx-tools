@@ -52,11 +52,19 @@ NAME = re.compile(r'^[A-Za-z_][\w:]*$')
 targets, calls_base, out_of_line = [], set(), set()
 
 
+ZDL = {int(l.split()[0], 16) for l in open('split/labels.txt') if l.split()[1:] == ['p__ZdlPv']}
+
+
+def calls_delete(w, at):
+    """a bl to the global operator delete (classes with their own operator delete don't fit)"""
+    return w & 0x0f000000 == 0x0b000000 and bl_target(w, at) in ZDL
+
+
 def d0_calls(d0, d1):
     """the out-of-line form: push {r4,lr}; mov r4,r0; bl D1; mov r0,r4; bl delete; mov r0,r4; pop"""
     w = words(d0, 7)
     return w[0] == 0xe92d4010 and w[1] == 0xe1a04000 and bl_target(w[2], d0 + 8) == d1 and \
-        w[3] == 0xe1a00004 and w[5] == 0xe1a00004 and w[6] == 0xe8bd8010
+        w[3] == 0xe1a00004 and calls_delete(w[4], d0 + 16) and w[5] == 0xe1a00004 and w[6] == 0xe8bd8010
 
 
 for c, fs, va, kind in classes:
@@ -76,7 +84,8 @@ for c, fs, va, kind in classes:
                 base = vt_owner[v]                           # restores an ancestor's vtable
             if not ool:
                 d = words(d0, 8)
-                if own or any(x is not None and x != y for x, y in zip(D0_INLINE, d[:7])) or d[7] != v:
+                if own or any(x is not None and x != y for x, y in zip(D0_INLINE, d[:7])) or d[7] != v \
+                        or not calls_delete(d[4], d0 + 16):
                     continue
         elif w8[:4] == (0xe59f3014, 0xe92d4010, 0xe1a04000, 0xe5803000) and \
                 w8[5:] == (0xe1a00004, 0xe8bd8010, va + 8) and bl_target(w8[4], d1 + 16) in slot0:
@@ -114,12 +123,12 @@ prev = None
 for l in open('split/sec_rodata.s'):
     t = l.strip().split()
     cur = label_addr.get(t[1]) if len(t) >= 2 and t[0] == '.word' else None
-    cur = cur if cur is not None and 0xeda0 <= cur < 0x2d0000 else None
+    cur = cur if cur is not None and 0xeda0 <= cur < 0x360000 else None
     if prev is not None and cur is not None:
         next_word[prev] = cur
     prev = cur
 for d1 in sorted(next_word):
-    if d1 in grafted or d1 in seen or d1 >= 0x2d0000:
+    if d1 in grafted or d1 in seen or d1 >= 0x360000:
         continue
     w4 = words(d1, 4)
     if w4[:3] != (0xe59f3004, 0xe5803000, 0xe12fff1e) or w4[3] not in vt_owner:
@@ -128,7 +137,8 @@ for d1 in sorted(next_word):
     if d0 in grafted:
         continue
     d = words(d0, 8)
-    if any(x is not None and x != y for x, y in zip(D0_INLINE, d[:7])) or d[7] != w4[3]:
+    if any(x is not None and x != y for x, y in zip(D0_INLINE, d[:7])) or d[7] != w4[3] or \
+            not calls_delete(d[4], d0 + 16):
         continue
     base = vt_owner[w4[3]]
     if not NAME.match(base):
@@ -139,11 +149,11 @@ for d1 in sorted(next_word):
 # resolved to rbp's D1 by address)
 d0_only = []
 for a, sz in sorted(sizes_all.items()):
-    if a in grafted or a >= 0x2d0000 or a < 0xeda0 or sz != 28:
+    if a in grafted or a >= 0x360000 or a < 0xeda0 or sz != 28:
         continue
     w = words(a, 7)
     if w[0] == 0xe92d4010 and w[1] == 0xe1a04000 and w[2] & 0xff000000 == 0xeb000000 and \
-            w[3] == 0xe1a00004 and w[5] == 0xe1a00004 and w[6] == 0xe8bd8010 and \
+            w[3] == 0xe1a00004 and calls_delete(w[4], a + 16) and w[5] == 0xe1a00004 and w[6] == 0xe8bd8010 and \
             a not in {d0 for _, _, _, d0 in targets}:
         d0_only.append(a)
 deleting_only = set()

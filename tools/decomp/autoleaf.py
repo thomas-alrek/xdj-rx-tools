@@ -53,7 +53,7 @@ def callee(target, extra=''):
     return fn
 
 for a, s in sorted(size.items()):
-    if a in grafted or a < 0xeda0 or a >= 0x2d0000 or s not in (4, 8, 12, 16, 20, 24, 28, 40):
+    if a in grafted or a < 0xeda0 or a >= 0x360000 or s not in (4, 8, 12, 16, 20, 24, 28, 40):
         continue
     w = struct.unpack(f'<{s // 4}I', e.read_va(a, s))
     n = f'leaf_{a:x}'
