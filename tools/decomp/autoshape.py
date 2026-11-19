@@ -35,6 +35,11 @@ VT = ('struct VO { ' + ' '.join(f'virtual long long v{k}(int, int);' for k in ra
 
 # shape -> [(signature, body), ...]; names are placeholders.
 TABLE = {
+    'push {r4, lr} ; mov r4, r0 ; ldr r0, [r0, #N] ; bl X ; mov r3, #N ; str r3, [r4, #N] ; str r3, [r4, #N] ; pop {r4, pc}': [
+        (f'void f({P})', '{F0}(*(void**) (p + {N0})); *(int*) (p + {N2}) = {N1}; *(int*) (p + {N3}) = {N1};')],
+    'ldr ip, =X ; push {r3, lr} ; ldr ip, [ip, #N] ; cmp ip, #N ; popeq {r3, pc} ; blx ip ; pop {r3, pc}': [
+        ('void f(int a, int b, int c, int d)', 'typedef void (*FnA) (int, int, int, int); FnA fn = *(FnA*) ((char*) {D0} + {N0}); if (fn) fn (a, b, c, d);'),
+        ('int f(int a, int b, int c, int d)', 'typedef int (*FnA) (int, int, int, int); FnA fn = *(FnA*) ((char*) {D0} + {N0}); if (!fn) return 0; return fn (a, b, c, d);')],
     'movw r0, #:lower16:X ; movw r1, #:lower16:X ; movt r0, #:upper16:X ; movt r1, #:upper16:X ; b X': [
         ('int f(void)', 'return {F4}({D0}, {D1});')],
     'sub sp, sp, #N ; add r3, sp, #N ; stmdb r3, {r0, r1} ; mov r0, #N ; add sp, sp, #N ; bx lr': [
