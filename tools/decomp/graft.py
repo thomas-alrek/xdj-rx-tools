@@ -105,6 +105,11 @@ def extract(asm, sym, addr):
             return m.group(0)
         return f'__g{addr:x}_{t[1:]}' + (f'_{"m" if int(off) < 0 else ""}{abs(int(off))}' if off else '')
     body = [re.sub(r'(\.L\w+)(?:([+-]\d+))?', ext, ln) for ln in body]
+    # the compiler names every file's static-array cleanup functions __tcf_0, __tcf_1, ...; a
+    # graft's reference to one (a static initialiser's atexit registration) is to its own file's
+    # function, so it gets a per-graft name that the rebuild resolves like the .L references
+    body = [re.sub(r'\b(__tcf_\d+)\b', lambda m: m.group(1) if m.group(1) == sym else f'__g{addr:x}_{m.group(1)}', ln)
+            for ln in body]
     # static functions too: the rest of the tree refers to them by name. A function at 4 mod 8
     # gets 4 bytes of filler first, so 8-byte pool alignment inside it is computed for its real
     # address; normalize() removes the filler (and gas's end-of-section padding) before linking.
